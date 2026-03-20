@@ -6,8 +6,20 @@ plugins {
     kotlin("plugin.serialization") version "1.9.0"
 }
 
-val localProps = Properties().apply {
-    load(rootProject.file("local.properties").inputStream())
+// SAFE loader (won’t crash if file missing)
+fun getLocalProperty(key: String): String {
+    val props = Properties()
+    val file = rootProject.file("local.properties")
+    return if (file.exists()) {
+        props.load(file.inputStream())
+        props.getProperty(key) ?: ""
+    } else ""
+}
+
+fun getEnvOrLocal(key: String): String {
+    return System.getenv(key)
+        ?: getLocalProperty(key)
+        ?: ""
 }
 
 android {
@@ -20,10 +32,16 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
-        buildConfigField("String", "SARVAM_API_KEY", "\"${localProps["SARVAM_API_KEY"]}\"")
-        buildConfigField("String", "PORCUPINE_ACCESS_KEY", "\"${localProps["PORCUPINE_ACCESS_KEY"]}\"")
-        buildConfigField("String", "ELEVENLABS_API_KEY", "\"${localProps["ELEVENLABS_API_KEY"]}\"")
-        buildConfigField("String", "ELEVENLABS_VOICE_ID", "\"${localProps["ELEVENLABS_VOICE_ID"]}\"")
+
+        // 🔐 SAFE KEYS (WORKS LOCAL + CI)
+        buildConfigField("String", "SARVAM_API_KEY", "\"${getEnvOrLocal("SARVAM_API_KEY")}\"")
+        buildConfigField("String", "PORCUPINE_ACCESS_KEY", "\"${getEnvOrLocal("PORCUPINE_ACCESS_KEY")}\"")
+        buildConfigField("String", "ELEVENLABS_API_KEY", "\"${getEnvOrLocal("ELEVENLABS_API_KEY")}\"")
+        buildConfigField("String", "ELEVENLABS_VOICE_ID", "\"${getEnvOrLocal("ELEVENLABS_VOICE_ID")}\"")
+
+        // 🔥 ADD THIS (SUPABASE)
+        buildConfigField("String", "SUPABASE_URL", "\"${getEnvOrLocal("SUPABASE_URL")}\"")
+        buildConfigField("String", "SUPABASE_KEY", "\"${getEnvOrLocal("SUPABASE_KEY")}\"")
     }
 
     buildFeatures {
@@ -44,6 +62,7 @@ android {
         jvmTarget = "17"
         freeCompilerArgs += listOf("-Xjvm-default=all")
     }
+
     packaging {
         jniLibs {
             useLegacyPackaging = true
@@ -68,7 +87,6 @@ dependencies {
 
     implementation(platform("androidx.compose:compose-bom:2024.05.00"))
 
-
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.ui:ui-tooling-preview")
@@ -79,14 +97,10 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
-
     implementation("io.github.jan-tennert.supabase:postgrest-kt:1.4.0")
     implementation("io.github.jan-tennert.supabase:gotrue-kt:1.4.0")
 
-    // REQUIRED (very important)
     implementation("io.ktor:ktor-client-android:2.3.7")
 
-    // REQUIRED for serialization
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.0")
-
 }
