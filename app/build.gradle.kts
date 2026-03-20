@@ -1,9 +1,18 @@
 import java.util.Properties
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
-    kotlin("plugin.serialization") version "1.9.0"
+    id("org.jetbrains.kotlin.plugin.compose")
+    id("org.jetbrains.kotlin.plugin.serialization")
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget.set(JvmTarget.JVM_17)
+        freeCompilerArgs.add("-Xjvm-default=all")
+    }
 }
 
 // SAFE loader (won’t crash if file missing)
@@ -17,14 +26,12 @@ fun getLocalProperty(key: String): String {
 }
 
 fun getEnvOrLocal(key: String): String {
-    return System.getenv(key)
-        ?: getLocalProperty(key)
-        ?: ""
+    return System.getenv(key) ?: getLocalProperty(key)
 }
 
 android {
     namespace = "com.demo.butler_voice_app"
-    compileSdk = 34
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.demo.butler_voice_app"
@@ -49,18 +56,9 @@ android {
         buildConfig = true
     }
 
-    composeOptions {
-        kotlinCompilerExtensionVersion = "1.5.14"
-    }
-
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
-    }
-
-    kotlinOptions {
-        jvmTarget = "17"
-        freeCompilerArgs += listOf("-Xjvm-default=all")
     }
 
     packaging {
@@ -94,13 +92,13 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("ai.picovoice:porcupine-android:4.0.0")
 
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
-    implementation("io.github.jan-tennert.supabase:postgrest-kt:1.4.0")
-    implementation("io.github.jan-tennert.supabase:gotrue-kt:1.4.0")
+    implementation("io.github.jan-tennert.supabase:postgrest-kt:3.4.1")
+    implementation("io.github.jan-tennert.supabase:auth-kt:3.4.1")
 
-    implementation("io.ktor:ktor-client-android:2.3.7")
+    implementation("io.ktor:ktor-client-android:3.0.3")
 
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
 }

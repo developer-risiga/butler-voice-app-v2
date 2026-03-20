@@ -1,32 +1,37 @@
 package com.demo.butler_voice_app.api
 
-
 import io.github.jan.supabase.postgrest.from
-import io.github.jan.supabase.postgrest.rpc
-import io.github.jan.supabase.postgrest.query.Columns
-import io.github.jan.supabase.postgrest.query.filter
-import io.github.jan.supabase.postgrest.decodeList
-import io.github.jan.supabase.postgrest.decodeSingle
+import io.github.jan.supabase.postgrest.postgrest
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.encodeToJsonElement
+import kotlinx.serialization.json.jsonObject
 
 class ApiClient {
 
-    // -----------------------------
-    // ✅ PRODUCT DATA MODEL
-    // -----------------------------
     @Serializable
     data class Product(
         val id: Int,
-        val name: String,   // Make sure DB column is "name"
+        val name: String,
         val price: Double
     )
 
-    // -----------------------------
-    // 🔍 SEARCH PRODUCT
-    // -----------------------------
+    @Serializable
+    data class OrderItem(
+        val product_id: Int,
+        val product_name: String,
+        val quantity: Int,
+        val price: Double
+    )
+
+    @Serializable
+    data class CreateOrderParams(
+        val items: List<OrderItem>
+    )
+
     suspend fun searchProduct(query: String): Product? {
         return try {
-
             val result = SupabaseClient.client
                 .from("products")
                 .select {
@@ -45,22 +50,24 @@ class ApiClient {
         }
     }
 
-    // -----------------------------
-    // 📦 CREATE ORDER (RPC)
-    // -----------------------------
     suspend fun createOrder(items: List<Map<String, Any>>): String {
         return try {
-
-            val response = SupabaseClient.client
-                .rpc(
-                    "create_order",
-                    mapOf(
-                        "items" to items
-                    )
+            val orderItems = items.map { item ->
+                OrderItem(
+                    product_id = (item["product_id"] as Number).toInt(),
+                    product_name = item["product_name"] as String,
+                    quantity = (item["quantity"] as Number).toInt(),
+                    price = (item["price"] as Number).toDouble()
                 )
-                .decodeSingle<Map<String, Any>>()
+            }
+            val params = CreateOrderParams(items = orderItems)
+            val jsonParams = Json.encodeToJsonElement(params).jsonObject
 
-            response["order_id"].toString()
+            val response = SupabaseClient.client.postgrest
+                .rpc("create_order", jsonParams)
+                .decodeList<Map<String, String>>()
+
+            response.first()["order_id"].toString()
 
         } catch (e: Exception) {
             e.printStackTrace()

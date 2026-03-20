@@ -56,7 +56,7 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             try {
                 // Only login (signup should be done once manually)
-                AuthManager.login("testuser@gmail.com", "123456")
+                AuthManager.login("butler@risig.com", "Risiga")
                 Log.d("Butler", "✅ LOGIN SUCCESS")
 
             } catch (e: Exception) {
