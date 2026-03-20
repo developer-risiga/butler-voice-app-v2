@@ -1,0 +1,142 @@
+package com.demo.butler_voice_app.voice
+
+import android.media.AudioFormat
+import android.media.AudioRecord
+import android.media.MediaRecorder
+import android.util.Log
+import kotlinx.coroutines.*
+import okhttp3.*
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONObject
+import java.io.ByteArrayOutputStream
+import java.io.IOException
+
+class SarvamSTTManager(private val apiKey: String) {
+
+    private val client = OkHttpClient()
+    private var recordingJob: Job? = null
+
+    private val sampleRate = 16000
+    private val bufferSize = AudioRecord.getMinBufferSize(
+        sampleRate,
+        AudioFormat.CHANNEL_IN_MONO,
+        AudioFormat.ENCODING_PCM_16BIT
+    )
+
+    private val silenceThreshold = 600
+    private val silenceFramesNeeded = 25  // ~1.5s silence to stop
+    private val maxPreSpeechMs = 4000L   // restart if no speech in 4s
+    private val maxTotalMs = 8000L       // hard cap on total recording
+
+    fun startListening(onResult: (String) -> Unit, onError: () -> Unit) {
+        recordingJob?.cancel()
+        recordingJob = CoroutineScope(Dispatchers.IO).launch {
+            val recorder = AudioRecord(
+                MediaRecorder.AudioSource.MIC,
+                sampleRate,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                bufferSize
+            )
+
+            val output = ByteArrayOutputStream()
+            val buffer = ShortArray(bufferSize)
+            var silenceCount = 0
+            var hasSpoken = false
+            var localRecording = true
+            val startTime = System.currentTimeMillis()
+
+            recorder.startRecording()
+            Log.d("SarvamSTT", "Recording started")
+
+            while (isActive && localRecording) {
+                val elapsed = System.currentTimeMillis() - startTime
+                if (!hasSpoken && elapsed > maxPreSpeechMs) {
+                    Log.d("SarvamSTT", "No speech detected, restarting")
+                    localRecording = false
+                    recorder.stop()
+                    recorder.release()
+                    if (isActive) onResult("")
+                    return@launch
+                }
+                if (elapsed > maxTotalMs) localRecording = false
+
+                val read = recorder.read(buffer, 0, buffer.size)
+                if (read > 0) {
+                    for (i in 0 until read) {
+                        output.write(buffer[i].toInt() and 0xFF)
+                        output.write((buffer[i].toInt() shr 8) and 0xFF)
+                    }
+                    val peak = buffer.take(read).maxOf { Math.abs(it.toInt()) }
+                    if (peak >= silenceThreshold) {
+                        hasSpoken = true
+                        silenceCount = 0
+                    } else if (hasSpoken) {
+                        if (++silenceCount >= silenceFramesNeeded) localRecording = false
+                    }
+                }
+            }
+
+            recorder.stop()
+            recorder.release()
+
+            if (isActive) {
+                Log.d("SarvamSTT", "Recording done, sending to Sarvam")
+                sendToSarvam(buildWav(output.toByteArray()), onResult, onError)
+            }
+        }
+    }
+
+    fun stop() {
+        recordingJob?.cancel()
+        recordingJob = null
+    }
+
+    private fun buildWav(pcm: ByteArray): ByteArray {
+        val wav = ByteArray(44 + pcm.size)
+        fun i32(o: Int, v: Int) { wav[o]=(v and 0xFF).toByte(); wav[o+1]=((v shr 8) and 0xFF).toByte(); wav[o+2]=((v shr 16) and 0xFF).toByte(); wav[o+3]=((v shr 24) and 0xFF).toByte() }
+        fun i16(o: Int, v: Int) { wav[o]=(v and 0xFF).toByte(); wav[o+1]=((v shr 8) and 0xFF).toByte() }
+        "RIFF".toByteArray().copyInto(wav, 0); i32(4, 36 + pcm.size)
+        "WAVE".toByteArray().copyInto(wav, 8)
+        "fmt ".toByteArray().copyInto(wav, 12); i32(16, 16); i16(20, 1); i16(22, 1)
+        i32(24, sampleRate); i32(28, sampleRate * 2); i16(32, 2); i16(34, 16)
+        "data".toByteArray().copyInto(wav, 36); i32(40, pcm.size)
+        pcm.copyInto(wav, 44)
+        return wav
+    }
+
+    private fun sendToSarvam(wav: ByteArray, onResult: (String) -> Unit, onError: () -> Unit) {
+        val body = MultipartBody.Builder()
+            .setType(MultipartBody.FORM)
+            .addFormDataPart("file", "audio.wav", wav.toRequestBody("audio/wav".toMediaType()))
+            .addFormDataPart("model", "saarika:v2.5")
+            .addFormDataPart("language_code", "en-IN")
+            .build()
+
+        val request = Request.Builder()
+            .url("https://api.sarvam.ai/speech-to-text")
+            .addHeader("api-subscription-key", apiKey)
+            .post(body)
+            .build()
+
+        client.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                Log.e("SarvamSTT", "Failed", e)
+                onError()
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                val raw = response.body?.string() ?: ""
+                Log.d("SarvamSTT", "Response: $raw")
+                try {
+                    val text = JSONObject(raw).getString("transcript")
+                    onResult(text)
+                } catch (e: Exception) {
+                    Log.e("SarvamSTT", "Parse error", e)
+                    onError()
+                }
+            }
+        })
+    }
+}
