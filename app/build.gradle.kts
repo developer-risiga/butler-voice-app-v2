@@ -80,25 +80,36 @@ android {
 
 dependencies {
 
+    // ✅ ANDROID CORE
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.activity:activity-compose:1.9.0")
 
+    // ✅ COMPOSE
     implementation(platform("androidx.compose:compose-bom:2024.05.00"))
-
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.ui:ui-tooling-preview")
 
+    // ✅ NETWORK
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
+    // ✅ VOICE (PORCUPINE)
     implementation("ai.picovoice:porcupine-android:4.0.0")
 
+    // ✅ COROUTINES
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
-    implementation("io.github.jan-tennert.supabase:postgrest-kt:3.4.1")
-    implementation("io.github.jan-tennert.supabase:auth-kt:3.4.1")
+    // ✅ SUPABASE (🔥 CORRECT WAY USING BOM)
+    implementation(platform("io.github.jan-tennert.supabase:bom:2.4.0"))
 
-    implementation("io.ktor:ktor-client-android:3.0.3")
+    implementation("io.github.jan-tennert.supabase:postgrest-kt")
+    implementation("io.github.jan-tennert.supabase:gotrue-kt")
+    implementation("io.github.jan-tennert.supabase:realtime-kt")
 
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+    // ✅ KTOR (ONLY ONE VERSION)
+    implementation("io.ktor:ktor-client-android:2.3.7")
+
+    // ✅ SERIALIZATION (ONLY ONE VERSION)
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.0")
 }
