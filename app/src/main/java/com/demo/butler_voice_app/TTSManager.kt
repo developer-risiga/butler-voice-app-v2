@@ -37,16 +37,10 @@ class TTSManager(
     }
 
     fun speak(text: String, onDone: (() -> Unit)? = null) {
-
-        // ✅ STOP PREVIOUS AUDIO (ADD HERE)
-        mediaPlayer?.stop()
-        mediaPlayer?.release()
-        mediaPlayer = null
-
         Log.d("TTS", "ElevenLabs → \"$text\"")
 
         val body = JSONObject().apply {
-            put("text", text.replace(",", ".").replace("  ", " ")) // ✅ natural speech
+            put("text", text)
             put("model_id", "eleven_turbo_v2_5")
         }.toString().toRequestBody("application/json".toMediaType())
 
@@ -57,24 +51,26 @@ class TTSManager(
             .post(body)
             .build()
 
-        client.newCall(request).enqueue(object : Callback {
+        client.newCall(request).enqueue(object : Callback {F
             override fun onFailure(call: Call, e: IOException) {
-                Log.e("TTS", "ElevenLabs failed → fallback")
+                Log.e("TTS", "ElevenLabs failed: ${e.message} → fallback to eSpeak")
                 speakFallback(text, onDone)
             }
 
             override fun onResponse(call: Call, response: Response) {
                 if (!response.isSuccessful) {
+                    val errorBody = response.body?.string() ?: "no body"
+                    Log.e("TTS", "ElevenLabs error ${response.code}: $errorBody → fallback to eSpeak")
                     speakFallback(text, onDone)
                     return
                 }
-
                 val bytes = response.body?.bytes()
                 if (bytes == null) {
+                    Log.e("TTS", "ElevenLabs empty response → fallback to eSpeak")
                     speakFallback(text, onDone)
                     return
                 }
-
+                Log.d("TTS", "ElevenLabs success, playing audio")
                 playAudio(text, bytes, onDone)
             }
         })
