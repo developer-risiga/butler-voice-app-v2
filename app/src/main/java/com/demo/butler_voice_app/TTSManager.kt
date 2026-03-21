@@ -40,7 +40,7 @@ class TTSManager(
         Log.d("TTS", "ElevenLabs → \"$text\"")
 
         val body = JSONObject().apply {
-            put("text", text)
+            put("text", text.replace(",", ". ").replace("  ", " "))
             put("model_id", "eleven_turbo_v2_5")
         }.toString().toRequestBody("application/json".toMediaType())
 
