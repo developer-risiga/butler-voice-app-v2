@@ -7,6 +7,7 @@ import android.os.*
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.OnBackPressedCallback
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.Text
 import androidx.compose.ui.Alignment
@@ -15,10 +16,11 @@ import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
-import com.demo.butler_voice_app.api.*
-import com.demo.butler_voice_app.ai.OrderParser
-import com.demo.butler_voice_app.voice.SarvamSTTManager
 import kotlinx.coroutines.launch
+
+import com.demo.butler_voice_app.api.*
+import com.demo.butler_voice_app.voice.SarvamSTTManager
+import com.demo.butler_voice_app.ai.AIOrderParser
 
 // ---------------- STATE ----------------
 enum class AssistantState {
@@ -42,7 +44,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var porcupine: WakeWordManager
 
     private val apiClient = ApiClient()
-    private val parser = OrderParser()
+    private val aiParser = AIOrderParser()
 
     private val cart = mutableListOf<CartItem>()
     private var tempProduct: ApiClient.Product? = null
@@ -53,6 +55,12 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // Disable back button
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {}
+        })
+
+        // UI
         setContent {
             Box(
                 modifier = Modifier.fillMaxSize(),
@@ -62,6 +70,7 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        // Login
         lifecycleScope.launch {
             try {
                 AuthManager.login("testuser@gmail.com", "123456")
@@ -71,26 +80,32 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        // Audio setup
         val audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
         audioManager.mode = AudioManager.MODE_NORMAL
         audioManager.isSpeakerphoneOn = true
 
-        sarvamSTT = SarvamSTTManager(BuildConfig.SARVAM_API_KEY)
+        // ✅ FIX: pass context to Sarvam
+        sarvamSTT = SarvamSTTManager(
+            context = this,
+            apiKey = BuildConfig.SARVAM_API_KEY
+        )
 
+        // Wake word
         porcupine = WakeWordManager(this, BuildConfig.PORCUPINE_ACCESS_KEY) {
             runOnUiThread { onWakeWordDetected() }
         }
 
+        // TTS
         ttsManager = TTSManager(
             context = this,
-            elevenLabsApiKey = BuildConfig.ELEVENLABS_API_KEY,
-            voiceId = BuildConfig.ELEVENLABS_VOICE_ID
+            elevenLabsApiKey = "YOUR_API_KEY",
+            voiceId = "Rachel" // safer free voice
         )
 
         ttsManager.init {
             checkMicPermission()
         }
-
     }
 
     // ---------------- PERMISSION ----------------
@@ -108,14 +123,20 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // ---------------- WAKE ----------------
     private fun startWakeWordListening() {
         currentState = AssistantState.IDLE
         cart.clear()
+
         Log.d("Butler", "🎧 Waiting for wake word...")
+
+        try {
+            porcupine.stop()
+        } catch (_: Exception) {}
+
         porcupine.start()
     }
 
-    // ---------------- WAKE ----------------
     private fun onWakeWordDetected() {
         currentState = AssistantState.LISTENING
 
@@ -126,20 +147,29 @@ class MainActivity : ComponentActivity() {
 
     // ---------------- LISTEN ----------------
     private fun startListening() {
+
+        Log.d("Butler", "🎙️ Starting STT...")
+
         sarvamSTT.startListening(
             onResult = { text ->
                 runOnUiThread {
+
+                    Log.d("Butler", "🧠 Transcript: $text")
+
                     if (text.isBlank()) {
-                        speak("Sorry, I missed that") { startWakeWordListening() }
+                        speak("Sorry, I didn't catch that") {
+                            startWakeWordListening()
+                        }
                     } else {
-                        Log.d("Butler", "🎤 $text")
                         handleCommand(text.lowercase())
                     }
                 }
             },
             onError = {
                 runOnUiThread {
-                    speak("Something went wrong") { startWakeWordListening() }
+                    speak("Something went wrong") {
+                        startWakeWordListening()
+                    }
                 }
             }
         )
@@ -152,31 +182,47 @@ class MainActivity : ComponentActivity() {
 
             AssistantState.LISTENING -> {
 
-                val order = parser.parse(text)
+                aiParser.parse(text) { order ->
 
-                if (order != null) {
-                    lifecycleScope.launch {
+                    runOnUiThread {
 
-                        val product = apiClient.searchProduct(order.product)
+                        // ✅ If AI fails → fallback manual parsing
+                        val fallbackItem = when {
+                            text.contains("rice") -> "rice"
+                            text.contains("oil") -> "oil"
+                            text.contains("sugar") -> "sugar"
+                            else -> null
+                        }
 
-                        if (product != null) {
-                            tempProduct = product
-                            currentState = AssistantState.ASKING_QUANTITY
+                        val itemName = order?.items?.firstOrNull()?.name ?: fallbackItem
 
-                            speak("Nice choice. How much ${product.name} should I add?") {
-                                startListening()
+                        if (itemName != null) {
+
+                            lifecycleScope.launch {
+
+                                val product = apiClient.searchProduct(itemName)
+
+                                if (product != null) {
+
+                                    tempProduct = product
+                                    currentState = AssistantState.ASKING_QUANTITY
+
+                                    speak("How much ${product.name}?") {
+                                        startListening()
+                                    }
+
+                                } else {
+                                    speak("I couldn't find $itemName") {
+                                        startListening()
+                                    }
+                                }
                             }
 
                         } else {
-                            speak("I couldn't find ${order.product}. Try something else.") {
+                            speak("Tell me what you want to order") {
                                 startListening()
                             }
                         }
-                    }
-
-                } else {
-                    speak("Tell me the item you want to order") {
-                        startListening()
                     }
                 }
             }
@@ -189,13 +235,13 @@ class MainActivity : ComponentActivity() {
 
                     cart.add(CartItem(tempProduct!!, qty))
 
-                    speak("Alright, I've added $qty ${tempProduct!!.name}. Would you like anything else?") {
+                    speak("Added $qty ${tempProduct!!.name}. Anything else?") {
                         currentState = AssistantState.ASKING_MORE
                         startListening()
                     }
 
                 } else {
-                    speak("Let's try again. What item?") {
+                    speak("Let's try again") {
                         currentState = AssistantState.LISTENING
                         startListening()
                     }
@@ -207,15 +253,17 @@ class MainActivity : ComponentActivity() {
                 when {
                     text.contains("yes") || text.contains("add") -> {
                         currentState = AssistantState.LISTENING
-                        speak("Sure, what else would you like to add?") { startListening() }
+                        speak("What else would you like?") {
+                            startListening()
+                        }
                     }
 
-                    text.contains("no") || text.contains("done") || text.contains("that's all") -> {
+                    text.contains("no") || text.contains("done") -> {
                         readCartAndConfirm()
                     }
 
                     else -> {
-                        speak("Should I add more items or place the order?") {
+                        speak("Should I add more or place order?") {
                             startListening()
                         }
                     }
@@ -230,7 +278,7 @@ class MainActivity : ComponentActivity() {
                     }
 
                     text.contains("no") || text.contains("cancel") -> {
-                        speak("Alright, cancelled your order") {
+                        speak("Order cancelled") {
                             cart.clear()
                             startWakeWordListening()
                         }
@@ -261,7 +309,7 @@ class MainActivity : ComponentActivity() {
 
         currentState = AssistantState.CONFIRMING
 
-        speak("Here's what I have: $summary. Shall I place the order for you?") {
+        speak("You ordered $summary. Shall I place the order?") {
             startListening()
         }
     }
@@ -282,13 +330,13 @@ class MainActivity : ComponentActivity() {
 
                 val orderId = apiClient.createOrder(items)
 
-                speak("You're all set. I've placed your order successfully. Order ID is $orderId") {
+                speak("Order placed successfully. ID is $orderId") {
                     cart.clear()
                     startWakeWordListening()
                 }
 
             } catch (e: Exception) {
-                speak("Oops, something went wrong") {
+                speak("Something went wrong") {
                     startWakeWordListening()
                 }
             }
@@ -296,10 +344,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun speak(text: String, onDone: (() -> Unit)? = null) {
-
-
         sarvamSTT.stop()
-        ttsManager.speak(text) { onDone?.invoke() }
+        ttsManager.speak(text) {
+            onDone?.invoke()
+        }
     }
 
     // ---------------- LIFECYCLE ----------------
@@ -316,6 +364,13 @@ class MainActivity : ComponentActivity() {
         ttsManager.shutdown()
     }
 
+    override fun onResume() {
+        super.onResume()
+        try {
+            startLockTask()
+        } catch (_: Exception) {}
+    }
+
     override fun onRequestPermissionsResult(
         requestCode: Int,
         permissions: Array<String>,
@@ -328,6 +383,8 @@ class MainActivity : ComponentActivity() {
             grantResults[0] == PackageManager.PERMISSION_GRANTED
         ) {
             startWakeWordListening()
+        } else {
+            Log.e("Permission", "Mic denied")
         }
     }
 }

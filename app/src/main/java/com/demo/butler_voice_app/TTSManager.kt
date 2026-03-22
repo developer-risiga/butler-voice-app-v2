@@ -41,7 +41,7 @@ class TTSManager(
 
         val body = JSONObject().apply {
             put("text", text.replace(",", ". ").replace("  ", " "))
-            put("model_id", "eleven_turbo_v2_5")
+            put("model_id", "eleven_flash_v2")
         }.toString().toRequestBody("application/json".toMediaType())
 
         val request = Request.Builder()
@@ -51,7 +51,7 @@ class TTSManager(
             .post(body)
             .build()
 
-        client.newCall(request).enqueue(object : Callback {F
+        client.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
                 Log.e("TTS", "ElevenLabs failed: ${e.message} → fallback to eSpeak")
                 speakFallback(text, onDone)

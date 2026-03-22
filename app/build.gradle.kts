@@ -11,11 +11,11 @@ plugins {
 kotlin {
     compilerOptions {
         jvmTarget.set(JvmTarget.JVM_17)
-        freeCompilerArgs.add("-Xjvm-default=all")
+        freeCompilerArgs.add("-jvm-default=enable")
     }
 }
 
-// SAFE loader (won’t crash if file missing)
+// 🔐 SAFE loader
 fun getLocalProperty(key: String): String {
     val props = Properties()
     val file = rootProject.file("local.properties")
@@ -31,7 +31,7 @@ fun getEnvOrLocal(key: String): String {
 
 android {
     namespace = "com.demo.butler_voice_app"
-    compileSdk = 36
+    compileSdk = 34
 
     defaultConfig {
         applicationId = "com.demo.butler_voice_app"
@@ -40,13 +40,12 @@ android {
         versionCode = 1
         versionName = "1.0"
 
-        // 🔐 SAFE KEYS (WORKS LOCAL + CI)
+        // ✅ DEFINE EACH KEY ONLY ONCE
+        buildConfigField("String", "OPENAI_API_KEY", "\"${getEnvOrLocal("OPENAI_API_KEY")}\"")
         buildConfigField("String", "SARVAM_API_KEY", "\"${getEnvOrLocal("SARVAM_API_KEY")}\"")
         buildConfigField("String", "PORCUPINE_ACCESS_KEY", "\"${getEnvOrLocal("PORCUPINE_ACCESS_KEY")}\"")
         buildConfigField("String", "ELEVENLABS_API_KEY", "\"${getEnvOrLocal("ELEVENLABS_API_KEY")}\"")
         buildConfigField("String", "ELEVENLABS_VOICE_ID", "\"${getEnvOrLocal("ELEVENLABS_VOICE_ID")}\"")
-
-        // 🔥 ADD THIS (SUPABASE)
         buildConfigField("String", "SUPABASE_URL", "\"${getEnvOrLocal("SUPABASE_URL")}\"")
         buildConfigField("String", "SUPABASE_KEY", "\"${getEnvOrLocal("SUPABASE_KEY")}\"")
     }
@@ -54,6 +53,16 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    buildTypes {
+        debug {
+            isMinifyEnabled = false
+        }
+        release {
+            isMinifyEnabled = false
+            isShrinkResources = false
+        }
     }
 
     compileOptions {
@@ -66,50 +75,39 @@ android {
             useLegacyPackaging = true
         }
     }
-
-    buildTypes {
-        release {
-            isMinifyEnabled = false
-            isShrinkResources = false
-        }
-        debug {
-            isMinifyEnabled = false
-        }
-    }
 }
 
 dependencies {
 
-    // ✅ ANDROID CORE
+    // CORE
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.activity:activity-compose:1.9.0")
 
-    // ✅ COMPOSE
+    // COMPOSE
     implementation(platform("androidx.compose:compose-bom:2024.05.00"))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.ui:ui-tooling-preview")
 
-    // ✅ NETWORK
+    // NETWORK
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
-    // ✅ VOICE (PORCUPINE)
+    // VOICE
     implementation("ai.picovoice:porcupine-android:4.0.0")
 
-    // ✅ COROUTINES
+    // COROUTINES
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
-    // ✅ SUPABASE (🔥 CORRECT WAY USING BOM)
+    // SUPABASE
     implementation(platform("io.github.jan-tennert.supabase:bom:2.4.0"))
-
     implementation("io.github.jan-tennert.supabase:postgrest-kt")
     implementation("io.github.jan-tennert.supabase:gotrue-kt")
     implementation("io.github.jan-tennert.supabase:realtime-kt")
 
-    // ✅ KTOR (ONLY ONE VERSION)
+    // KTOR
     implementation("io.ktor:ktor-client-android:2.3.7")
 
-    // ✅ SERIALIZATION (ONLY ONE VERSION)
+    // SERIALIZATION
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.0")
 }

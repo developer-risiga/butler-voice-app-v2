@@ -4,6 +4,8 @@ build/
 
 # Local config
 local.properties
+CLAUDE.md
+.claude/
 
 # IDE
 .idea/
