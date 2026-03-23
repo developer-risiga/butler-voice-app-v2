@@ -38,4 +38,12 @@ object AuthManager {
             false
         }
     }
+    fun currentUserId(): String? {
+    return try {
+        SupabaseClient.client.auth.currentUserOrNull()?.id
+    } catch (e: Exception) {
+        Log.e("AuthManager", "Could not get user ID: ${e.message}")
+        null
+    }
+}
 }
