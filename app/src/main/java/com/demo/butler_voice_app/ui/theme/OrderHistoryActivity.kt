@@ -25,15 +25,16 @@ import kotlinx.coroutines.launch
 class OrderHistoryActivity : ComponentActivity() {
 
     private val apiClient = ApiClient()
-    private val orders = mutableStateOf<List<ApiClient.OrderHistory>>(emptyList())
-    private val isLoading = mutableStateOf(true)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        var orders = mutableStateOf<List<ApiClient.OrderHistory>>(emptyList())
+        var isLoading = mutableStateOf(true)
+
         setContent {
             OrderHistoryScreen(
-                orders    = orders.value,
+                orders = orders.value,
                 isLoading = isLoading.value,
                 apiClient = apiClient
             )
@@ -41,11 +42,13 @@ class OrderHistoryActivity : ComponentActivity() {
 
         lifecycleScope.launch {
             val userId = AuthManager.currentUserId() ?: return@launch
-            orders.value  = apiClient.getOrderHistory(userId)
+            orders.value = apiClient.getOrderHistory(userId)
             isLoading.value = false
         }
     }
 }
+
+// ─── SCREEN ────────────────────────────────────────────────────
 
 @Composable
 fun OrderHistoryScreen(
@@ -67,61 +70,60 @@ fun OrderHistoryScreen(
             modifier = Modifier.padding(bottom = 16.dp, top = 8.dp)
         )
 
-        if (isLoading) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = Color(0xFF1D9E75))
+        when {
+            isLoading -> {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = Color(0xFF1D9E75))
+                }
             }
-            return
-        }
-
-        if (orders.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("No orders yet", color = Color(0xFF888780), fontSize = 16.sp)
+            orders.isEmpty() -> {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("No orders yet", color = Color(0xFF888780), fontSize = 16.sp)
+                }
             }
-            return
-        }
-
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            items(orders) { order ->
-                OrderCard(order = order, apiClient = apiClient)
+            else -> {
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    items(orders) { order ->
+                        OrderHistoryCard(order = order, apiClient = apiClient)
+                    }
+                }
             }
         }
     }
 }
 
+// ─── ORDER CARD ────────────────────────────────────────────────
+
 @Composable
-fun OrderCard(order: ApiClient.OrderHistory, apiClient: ApiClient) {
+fun OrderHistoryCard(
+    order: ApiClient.OrderHistory,
+    apiClient: ApiClient
+) {
     var expanded by remember { mutableStateOf(false) }
-    var items by remember { mutableStateOf<List<ApiClient.OrderItemHistory>>(emptyList()) }
+    var orderItems by remember { mutableStateOf<List<ApiClient.OrderItemHistory>>(emptyList()) }
     var loadingItems by remember { mutableStateOf(false) }
 
     val statusColor = when (order.order_status.lowercase()) {
-        "placed"     -> Color(0xFF378ADD)
-        "confirmed"  -> Color(0xFF1D9E75)
-        "delivered"  -> Color(0xFF639922)
-        "cancelled"  -> Color(0xFFE24B4A)
-        else         -> Color(0xFF888780)
+        "placed"    -> Color(0xFF378ADD)
+        "confirmed" -> Color(0xFF1D9E75)
+        "delivered" -> Color(0xFF639922)
+        "cancelled" -> Color(0xFFE24B4A)
+        else        -> Color(0xFF888780)
     }
 
     val shortId = order.id.takeLast(6).uppercase()
-    val date = order.created_at?.take(10) ?: ""
+    val date = order.created_at?.take(10) ?: "—"
 
     Surface(
         shape = RoundedCornerShape(12.dp),
         color = Color(0xFF1A1A1A),
         modifier = Modifier
             .fillMaxWidth()
-            .clickable {
-                expanded = !expanded
-                if (expanded && items.isEmpty()) {
-                    loadingItems = true
-                    // Items load is triggered from outside via LaunchedEffect
-                }
-            }
+            .clickable { expanded = !expanded }
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
 
-            // Header row
+            // ── Header ──
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -147,6 +149,7 @@ fun OrderCard(order: ApiClient.OrderHistory, apiClient: ApiClient) {
                         fontWeight = FontWeight.Bold,
                         color = Color(0xFF1D9E75)
                     )
+                    Spacer(Modifier.height(4.dp))
                     Surface(
                         shape = RoundedCornerShape(20.dp),
                         color = statusColor.copy(alpha = 0.15f)
@@ -162,17 +165,18 @@ fun OrderCard(order: ApiClient.OrderHistory, apiClient: ApiClient) {
                 }
             }
 
-            // Expanded items
+            // ── Expanded items ──
             if (expanded) {
                 LaunchedEffect(order.id) {
-                    if (items.isEmpty()) {
-                        items = apiClient.getOrderItems(order.id)
+                    if (orderItems.isEmpty()) {
+                        loadingItems = true
+                        orderItems = apiClient.getOrderItems(order.id)
                         loadingItems = false
                     }
                 }
 
                 Spacer(Modifier.height(12.dp))
-                Divider(color = Color(0xFF2A2A2A))
+                HorizontalDivider(color = Color(0xFF2A2A2A))
                 Spacer(Modifier.height(10.dp))
 
                 if (loadingItems) {
@@ -182,7 +186,7 @@ fun OrderCard(order: ApiClient.OrderHistory, apiClient: ApiClient) {
                         strokeWidth = 2.dp
                     )
                 } else {
-                    items.forEach { item ->
+                    orderItems.forEach { item ->
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -190,9 +194,10 @@ fun OrderCard(order: ApiClient.OrderHistory, apiClient: ApiClient) {
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Text(
-                                text = "${item.quantity}× ${item.product_name}",
+                                text = "${item.quantity}x ${item.product_name}",
                                 fontSize = 13.sp,
-                                color = Color(0xFFCCCCCC)
+                                color = Color(0xFFCCCCCC),
+                                modifier = Modifier.weight(1f)
                             )
                             Text(
                                 text = "₹%.2f".format(item.price * item.quantity),
