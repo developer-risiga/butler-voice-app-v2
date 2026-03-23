@@ -9,13 +9,13 @@ import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
-import androidx.compose.runtime.mutableStateOf
 import com.demo.butler_voice_app.BuildConfig
 import com.demo.butler_voice_app.api.ApiClient
-import com.demo.butler_voice_app.api.AuthManager
+import com.demo.butler_voice_app.api.UserSessionManager
 import com.demo.butler_voice_app.ai.AIOrderParser
 import com.demo.butler_voice_app.voice.SarvamSTTManager
 import com.demo.butler_voice_app.ui.ButlerScreen
@@ -23,12 +23,24 @@ import com.demo.butler_voice_app.ui.ButlerUiState
 import kotlinx.coroutines.launch
 
 enum class AssistantState {
-    IDLE, LISTENING, ASKING_QUANTITY, ASKING_MORE, CONFIRMING
+    IDLE,
+    CHECKING_AUTH,
+    ASKING_IS_NEW_USER,
+    ASKING_NAME,
+    ASKING_EMAIL,
+    ASKING_PASSWORD,
+    LISTENING,
+    ASKING_QUANTITY,
+    ASKING_MORE,
+    CONFIRMING
 }
 
 class MainActivity : ComponentActivity() {
 
     private val uiState = mutableStateOf<ButlerUiState>(ButlerUiState.Idle)
+
+    private var tempName = ""
+    private var tempEmail = ""
 
     private lateinit var ttsManager: TTSManager
     private lateinit var sarvamSTT: SarvamSTTManager
@@ -53,15 +65,6 @@ class MainActivity : ComponentActivity() {
             ButlerScreen(state = state)
         }
 
-        lifecycleScope.launch {
-            try {
-                AuthManager.login("testuser@gmail.com", "123456")
-                Log.d("Butler", "Login Success")
-            } catch (e: Exception) {
-                Log.e("Butler", "Login Failed: ${e.message}")
-            }
-        }
-
         val audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
         audioManager.mode = AudioManager.MODE_NORMAL
         audioManager.isSpeakerphoneOn = true
@@ -84,7 +87,7 @@ class MainActivity : ComponentActivity() {
         ttsManager.init { checkMicPermission() }
     }
 
-    // ─── HELPERS ──────────────────────────────────────────────
+    // ─── UI HELPER ────────────────────────────────────────────
 
     private fun setUiState(s: ButlerUiState) {
         runOnUiThread { uiState.value = s }
@@ -106,11 +109,13 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // ─── WAKE ─────────────────────────────────────────────────
+    // ─── WAKE WORD ────────────────────────────────────────────
 
     private fun startWakeWordListening() {
         currentState = AssistantState.IDLE
         cart.clear()
+        tempName = ""
+        tempEmail = ""
         setUiState(ButlerUiState.Idle)
         Log.d("Butler", "Waiting for wake word...")
         try { porcupine.stop() } catch (_: Exception) {}
@@ -118,10 +123,25 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun onWakeWordDetected() {
-        currentState = AssistantState.LISTENING
-        val msg = "Hey! What would you like today?"
-        setUiState(ButlerUiState.Speaking(msg))
-        speak(msg) { startListening() }
+        currentState = AssistantState.CHECKING_AUTH
+        setUiState(ButlerUiState.Thinking("Checking..."))
+
+        if (UserSessionManager.isLoggedIn() &&
+            UserSessionManager.currentProfile != null) {
+            // Returning user in same session — greet by name
+            val name = UserSessionManager.currentProfile
+                ?.full_name?.split(" ")?.first() ?: "there"
+            currentState = AssistantState.LISTENING
+            val msg = "Welcome back $name! What would you like today?"
+            setUiState(ButlerUiState.Speaking(msg))
+            speak(msg) { startListening() }
+        } else {
+            // No active session — ask new or returning
+            currentState = AssistantState.ASKING_IS_NEW_USER
+            val msg = "Welcome! Are you a new customer, or have you ordered before?"
+            setUiState(ButlerUiState.Speaking(msg))
+            speak(msg) { startListening() }
+        }
     }
 
     // ─── LISTEN ───────────────────────────────────────────────
@@ -152,21 +172,137 @@ class MainActivity : ComponentActivity() {
         )
     }
 
-    // ─── CORE ─────────────────────────────────────────────────
+    // ─── COMMAND HANDLER ──────────────────────────────────────
 
     private fun handleCommand(text: String) {
         when (currentState) {
+
+            // ── Auth flow ──────────────────────────────────────
+
+            AssistantState.ASKING_IS_NEW_USER -> {
+                when {
+                    text.contains("new") || text.contains("first") ||
+                    text.contains("register") || text.contains("sign") -> {
+                        currentState = AssistantState.ASKING_NAME
+                        val msg = "Great! What's your name?"
+                        setUiState(ButlerUiState.Speaking(msg))
+                        speak(msg) { startListening() }
+                    }
+                    text.contains("returning") || text.contains("before") ||
+                    text.contains("old") || text.contains("yes") ||
+                    text.contains("have") -> {
+                        currentState = AssistantState.ASKING_EMAIL
+                        val msg = "Welcome back! Please say your email address."
+                        setUiState(ButlerUiState.Speaking(msg))
+                        speak(msg) { startListening() }
+                    }
+                    else -> {
+                        val msg = "Say 'new customer' if first time, or 'returning' if you've ordered before."
+                        setUiState(ButlerUiState.Speaking(msg))
+                        speak(msg) { startListening() }
+                    }
+                }
+            }
+
+            AssistantState.ASKING_NAME -> {
+                tempName = text.trim()
+                    .split(" ")
+                    .joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
+                currentState = AssistantState.ASKING_EMAIL
+                val msg = "Nice to meet you $tempName! What's your email address?"
+                setUiState(ButlerUiState.Speaking(msg))
+                speak(msg) { startListening() }
+            }
+
+            AssistantState.ASKING_EMAIL -> {
+                tempEmail = text.trim()
+                    .replace(" at ", "@")
+                    .replace(" dot ", ".")
+                    .replace(" ", "")
+                    .lowercase()
+                currentState = AssistantState.ASKING_PASSWORD
+                val msg = "Got it. Now say your password."
+                setUiState(ButlerUiState.Speaking(msg))
+                speak(msg) { startListening() }
+            }
+
+            AssistantState.ASKING_PASSWORD -> {
+                val password = text.trim().replace(" ", "")
+                lifecycleScope.launch {
+                    if (tempName.isNotBlank()) {
+                        // ── New user signup ──
+                        setUiState(ButlerUiState.Thinking("Creating account..."))
+                        val result = UserSessionManager.signup(
+                            email    = tempEmail,
+                            password = password,
+                            name     = tempName,
+                            phone    = ""
+                        )
+                        result.fold(
+                            onSuccess = { profile ->
+                                currentState = AssistantState.LISTENING
+                                val firstName = profile.full_name
+                                    ?.split(" ")?.first() ?: tempName
+                                val msg = "Account created! Welcome $firstName! What would you like to order?"
+                                setUiState(ButlerUiState.Speaking(msg))
+                                speak(msg) { startListening() }
+                            },
+                            onFailure = { e ->
+                                Log.e("Butler", "Signup failed: ${e.message}")
+                                val msg = "Sorry, I couldn't create your account. Please try again."
+                                setUiState(ButlerUiState.Error(msg))
+                                speak(msg) { startWakeWordListening() }
+                            }
+                        )
+                    } else {
+                        // ── Returning user login ──
+                        setUiState(ButlerUiState.Thinking("Logging in..."))
+                        val result = UserSessionManager.login(
+                            email    = tempEmail,
+                            password = password
+                        )
+                        result.fold(
+                            onSuccess = { profile ->
+                                currentState = AssistantState.LISTENING
+                                val firstName = profile.full_name
+                                    ?.split(" ")?.first() ?: "there"
+                                val greeting = if (UserSessionManager.purchaseHistory.isNotEmpty()) {
+                                    val lastItem = UserSessionManager
+                                        .purchaseHistory.first().product_name
+                                    "Welcome back $firstName! Last time you ordered $lastItem. What would you like today?"
+                                } else {
+                                    "Welcome back $firstName! What would you like today?"
+                                }
+                                setUiState(ButlerUiState.Speaking(greeting))
+                                speak(greeting) { startListening() }
+                            },
+                            onFailure = { e ->
+                                Log.e("Butler", "Login failed: ${e.message}")
+                                val msg = "Login failed. Please check your email and password."
+                                setUiState(ButlerUiState.Error(msg))
+                                speak(msg) { startWakeWordListening() }
+                            }
+                        )
+                    }
+                }
+            }
+
+            // ── Order flow ─────────────────────────────────────
 
             AssistantState.LISTENING -> {
                 aiParser.parse(text) { order ->
                     runOnUiThread {
                         val fallbackItem = when {
-                            text.contains("rice")  -> "rice"
-                            text.contains("oil")   -> "oil"
-                            text.contains("sugar") -> "sugar"
-                            text.contains("wheat") -> "wheat"
-                            text.contains("dal")   -> "dal"
-                            text.contains("salt")  -> "salt"
+                            text.contains("rice")   -> "rice"
+                            text.contains("oil")    -> "oil"
+                            text.contains("sugar")  -> "sugar"
+                            text.contains("wheat")  -> "wheat"
+                            text.contains("dal")    -> "dal"
+                            text.contains("salt")   -> "salt"
+                            text.contains("milk")   -> "milk"
+                            text.contains("flour")  -> "flour"
+                            text.contains("tea")    -> "tea"
+                            text.contains("coffee") -> "coffee"
                             else -> null
                         }
                         val itemName = order?.items?.firstOrNull()?.name ?: fallbackItem
@@ -180,7 +316,7 @@ class MainActivity : ComponentActivity() {
                                     setUiState(ButlerUiState.Speaking(msg))
                                     speak(msg) { startListening() }
                                 } else {
-                                    val msg = "I couldn't find $itemName. What else?"
+                                    val msg = "I couldn't find $itemName. What else would you like?"
                                     setUiState(ButlerUiState.Speaking(msg))
                                     speak(msg) { startListening() }
                                 }
@@ -205,7 +341,7 @@ class MainActivity : ComponentActivity() {
                         startListening()
                     }
                 } else {
-                    val msg = "Let's try again"
+                    val msg = "Let's try again. What would you like?"
                     setUiState(ButlerUiState.Speaking(msg))
                     speak(msg) {
                         currentState = AssistantState.LISTENING
@@ -216,17 +352,19 @@ class MainActivity : ComponentActivity() {
 
             AssistantState.ASKING_MORE -> {
                 when {
-                    text.contains("yes") || text.contains("add") || text.contains("more") -> {
+                    text.contains("yes") || text.contains("add") ||
+                    text.contains("more") || text.contains("also") -> {
                         currentState = AssistantState.LISTENING
                         val msg = "What else would you like?"
                         setUiState(ButlerUiState.Speaking(msg))
                         speak(msg) { startListening() }
                     }
-                    text.contains("no") || text.contains("done") || text.contains("that") -> {
+                    text.contains("no") || text.contains("done") ||
+                    text.contains("that") || text.contains("nothing") -> {
                         readCartAndConfirm()
                     }
                     else -> {
-                        val msg = "Should I add more or place the order?"
+                        val msg = "Should I add more items or place the order?"
                         setUiState(ButlerUiState.Speaking(msg))
                         speak(msg) { startListening() }
                     }
@@ -235,14 +373,16 @@ class MainActivity : ComponentActivity() {
 
             AssistantState.CONFIRMING -> {
                 when {
-                    text.contains("yes") || text.contains("place") || text.contains("confirm") -> {
+                    text.contains("yes") || text.contains("place") ||
+                    text.contains("confirm") || text.contains("ok") -> {
                         placeOrder()
                     }
                     text.contains("no") || text.contains("cancel") -> {
-                        val msg = "Order cancelled"
+                        val msg = "Order cancelled. Goodbye!"
                         setUiState(ButlerUiState.Speaking(msg))
                         speak(msg) {
                             cart.clear()
+                            lifecycleScope.launch { UserSessionManager.logout() }
                             startWakeWordListening()
                         }
                     }
@@ -258,7 +398,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // ─── HELPERS ──────────────────────────────────────────────
+    // ─── ORDER HELPERS ────────────────────────────────────────
 
     private fun extractQuantity(text: String): Int {
         val wordNumbers = mapOf(
@@ -281,9 +421,9 @@ class MainActivity : ComponentActivity() {
     private fun placeOrder() {
         lifecycleScope.launch {
             try {
-                val userId = AuthManager.currentUserId()
+                val userId = UserSessionManager.currentUserId()
                 if (userId == null) {
-                    val msg = "Please log in to place an order"
+                    val msg = "Session expired. Please say Hey Butler to start again."
                     setUiState(ButlerUiState.Speaking(msg))
                     speak(msg) { startWakeWordListening() }
                     return@launch
@@ -291,15 +431,26 @@ class MainActivity : ComponentActivity() {
 
                 val orderResult = apiClient.createOrder(cart, userId)
                 val shortId = orderResult.id.takeLast(6).uppercase()
-                Log.d("Butler", "Order placed: ${orderResult.id}")
+                val firstName = UserSessionManager.currentProfile
+                    ?.full_name?.split(" ")?.first() ?: ""
 
+                Log.d("Butler", "Order placed: ${orderResult.id}")
                 setUiState(ButlerUiState.OrderDone(shortId, orderResult.total_amount))
-                speak("Order placed! Your ID is $shortId") {
+
+                val farewell = if (firstName.isNotBlank()) {
+                    "Order placed $firstName! Your ID is $shortId. Thank you, goodbye!"
+                } else {
+                    "Order placed! Your ID is $shortId. Thank you!"
+                }
+
+                speak(farewell) {
                     cart.clear()
-                    // Show success for 3 seconds then return to idle
-                    Handler(Looper.getMainLooper()).postDelayed({
-                        startWakeWordListening()
-                    }, 3000)
+                    lifecycleScope.launch {
+                        UserSessionManager.logout()
+                        Handler(Looper.getMainLooper()).postDelayed({
+                            startWakeWordListening()
+                        }, 3000)
+                    }
                 }
 
             } catch (e: Exception) {
