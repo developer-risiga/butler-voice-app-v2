@@ -17,7 +17,10 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.demo.butler_voice_app.BuildConfig
-import com.demo.butler_voice_app.api.*
+import com.demo.butler_voice_app.api.ApiClient
+import com.demo.butler_voice_app.api.AuthManager
+import com.demo.butler_voice_app.api.TTSManager
+import com.demo.butler_voice_app.api.WakeWordManager
 import com.demo.butler_voice_app.ai.AIOrderParser
 import com.demo.butler_voice_app.voice.SarvamSTTManager
 import kotlinx.coroutines.launch
