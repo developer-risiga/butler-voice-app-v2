@@ -1,5 +1,10 @@
 package com.demo.butler_voice_app.api
 
+
+
+
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
 import android.util.Log
 import com.demo.butler_voice_app.CartItem
 import kotlinx.serialization.Serializable
@@ -60,54 +65,56 @@ class ApiClient {
     // ─── PRODUCT SEARCH ───────────────────────────────────────
 
     suspend fun searchProduct(query: String): Product? {
-        return try {
-            val lower = query.lowercase().trim()
+        return withContext(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                val lower = query.lowercase().trim()
     
-            val req = Request.Builder()
-                .url("$url/rest/v1/products?select=*")
-                .addHeader("apikey", key)
-                .addHeader("Authorization", "Bearer $key")  // use anon key as bearer for public tables
-                .addHeader("Accept", "application/json")
-                .get()
-                .build()
+                val req = Request.Builder()
+                    .url("$url/rest/v1/products?select=*")
+                    .addHeader("apikey", key)
+                    .addHeader("Authorization", "Bearer $key")
+                    .addHeader("Accept", "application/json")
+                    .get()
+                    .build()
     
-            val res  = http.newCall(req).execute()
-            val body = res.body?.string() ?: "[]"
+                val res  = http.newCall(req).execute()
+                val body = res.body?.string() ?: "[]"
     
-            Log.d("ApiClient", "Products response code: ${res.code}, body: ${body.take(200)}")
+                Log.d("ApiClient", "Products code: ${res.code}, sample: ${body.take(100)}")
     
-            if (!res.isSuccessful) {
-                Log.e("ApiClient", "Products fetch failed: $body")
-                return null
-            }
-    
-            val arr = json.parseToJsonElement(body).jsonArray
-    
-            val products = arr.mapNotNull {
-                try { json.decodeFromJsonElement(Product.serializer(), it) }
-                catch (e: Exception) { null }
-            }
-    
-            Log.d("ApiClient", "Total products fetched: ${products.size}")
-    
-            val scored = products.mapNotNull { product ->
-                var score = 0
-                if (product.name.lowercase() == lower) score += 100
-                if (product.name.lowercase().contains(lower)) score += 50
-                if (product.base_name?.lowercase()?.contains(lower) == true) score += 40
-                product.keywords?.forEach { kw ->
-                    if (kw.lowercase().contains(lower) ||
-                        lower.contains(kw.lowercase())) score += 30
+                if (!res.isSuccessful) {
+                    Log.e("ApiClient", "Products failed: $body")
+                    return@withContext null
                 }
-                if (score > 0) Pair(product, score) else null
-            }
     
-            val best = scored.maxByOrNull { it.second }?.first
-            Log.d("ApiClient", "searchProduct('$query') → ${best?.name}")
-            best
-        } catch (e: Exception) {
-            Log.e("ApiClient", "searchProduct exception: ${e.message}")
-            null
+                val arr = json.parseToJsonElement(body).jsonArray
+                Log.d("ApiClient", "Products count: ${arr.size}")
+    
+                val products = arr.mapNotNull {
+                    try { json.decodeFromJsonElement(Product.serializer(), it) }
+                    catch (e: Exception) { null }
+                }
+    
+                val scored = products.mapNotNull { product ->
+                    var score = 0
+                    if (product.name.lowercase() == lower) score += 100
+                    if (product.name.lowercase().contains(lower)) score += 50
+                    if (product.base_name?.lowercase()?.contains(lower) == true) score += 40
+                    product.keywords?.forEach { kw ->
+                        if (kw.lowercase().contains(lower) ||
+                            lower.contains(kw.lowercase())) score += 30
+                    }
+                    if (score > 0) Pair(product, score) else null
+                }
+    
+                val best = scored.maxByOrNull { it.second }?.first
+                Log.d("ApiClient", "searchProduct('$query') → ${best?.name}")
+                best
+    
+            } catch (e: Exception) {
+                Log.e("ApiClient", "searchProduct ${e.javaClass.simpleName}: ${e.message}")
+                null
+            }
         }
     }
 
