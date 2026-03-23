@@ -1,6 +1,6 @@
 package com.demo.butler_voice_app.api
 
-import com.demo.butler_voice_app.CartItem
+
 import android.util.Log
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.query.Columns
