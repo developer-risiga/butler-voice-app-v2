@@ -1,5 +1,6 @@
 package com.demo.butler_voice_app.api
 
+import android.util.Log
 import io.github.jan.supabase.gotrue.auth
 import io.github.jan.supabase.gotrue.providers.builtin.Email
 
