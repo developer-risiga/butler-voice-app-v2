@@ -1,11 +1,18 @@
 package com.demo.butler_voice_app.api
 
 import android.util.Log
-import io.github.jan.supabase.auth.auth
-import io.github.jan.supabase.auth.providers.builtin.Email
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.query.Columns
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 
 @Serializable
 data class UserProfile(
@@ -27,34 +34,47 @@ object UserSessionManager {
 
     var currentProfile: UserProfile? = null
     var purchaseHistory: List<PurchaseSummary> = emptyList()
+    private var currentToken: String? = null
+    private var currentUid: String? = null
 
-    fun isLoggedIn(): Boolean {
-        return try {
-            SupabaseClient.client.auth.currentUserOrNull() != null
-        } catch (e: Exception) {
-            false
-        }
-    }
+    private val httpClient = OkHttpClient()
+    private val json = Json { ignoreUnknownKeys = true }
 
-    fun currentUserId(): String? {
-        return try {
-            SupabaseClient.client.auth.currentUserOrNull()?.id
-        } catch (e: Exception) {
-            null
-        }
-    }
+    fun isLoggedIn(): Boolean = currentToken != null && currentUid != null
+
+    fun currentUserId(): String? = currentUid
 
     suspend fun login(email: String, password: String): Result<UserProfile> {
-        return try {
-            SupabaseClient.client.auth.signInWith(Email) {
-                this.email = email
-                this.password = password
+        return withContext(Dispatchers.IO) {
+            try {
+                val body = """{"email":"$email","password":"$password"}"""
+                    .toRequestBody("application/json".toMediaType())
+
+                val request = Request.Builder()
+                    .url("${SupabaseClient.SUPABASE_URL}/auth/v1/token?grant_type=password")
+                    .addHeader("apikey", SupabaseClient.SUPABASE_KEY)
+                    .addHeader("Content-Type", "application/json")
+                    .post(body)
+                    .build()
+
+                val response = httpClient.newCall(request).execute()
+                val responseBody = response.body?.string() ?: ""
+
+                if (!response.isSuccessful) {
+                    return@withContext Result.failure(Exception("Login failed: $responseBody"))
+                }
+
+                val jsonObj = json.parseToJsonElement(responseBody).jsonObject
+                currentToken = jsonObj["access_token"]?.jsonPrimitive?.content
+                currentUid = jsonObj["user"]?.jsonObject?.get("id")?.jsonPrimitive?.content
+
+                Log.d("Session", "Login success. UID: $currentUid")
+                val profile = loadProfile()
+                Result.success(profile)
+            } catch (e: Exception) {
+                Log.e("Session", "Login failed: ${e.message}")
+                Result.failure(e)
             }
-            val profile = loadProfile()
-            Result.success(profile)
-        } catch (e: Exception) {
-            Log.e("Session", "Login failed: ${e.message}")
-            Result.failure(e)
         }
     }
 
@@ -64,28 +84,56 @@ object UserSessionManager {
         name: String,
         phone: String
     ): Result<UserProfile> {
-        return try {
-            SupabaseClient.client.auth.signUpWith(Email) {
-                this.email = email
-                this.password = password
+        return withContext(Dispatchers.IO) {
+            try {
+                val body = """{"email":"$email","password":"$password"}"""
+                    .toRequestBody("application/json".toMediaType())
+
+                val request = Request.Builder()
+                    .url("${SupabaseClient.SUPABASE_URL}/auth/v1/signup")
+                    .addHeader("apikey", SupabaseClient.SUPABASE_KEY)
+                    .addHeader("Content-Type", "application/json")
+                    .post(body)
+                    .build()
+
+                val response = httpClient.newCall(request).execute()
+                val responseBody = response.body?.string() ?: ""
+
+                if (!response.isSuccessful) {
+                    return@withContext Result.failure(Exception("Signup failed: $responseBody"))
+                }
+
+                val jsonObj = json.parseToJsonElement(responseBody).jsonObject
+                currentToken = jsonObj["access_token"]?.jsonPrimitive?.content
+                currentUid = jsonObj["user"]?.jsonObject?.get("id")?.jsonPrimitive?.content
+                    ?: jsonObj["id"]?.jsonPrimitive?.content
+
+                Log.d("Session", "Signup success. UID: $currentUid")
+
+                val userId = currentUid ?: throw Exception("No user ID after signup")
+                val profile = UserProfile(
+                    id        = userId,
+                    full_name = name,
+                    phone     = phone
+                )
+
+                try {
+                    SupabaseClient.client.from("profiles").insert(profile)
+                } catch (e: Exception) {
+                    Log.w("Session", "Profile insert failed: ${e.message}")
+                }
+
+                currentProfile = profile
+                Result.success(profile)
+            } catch (e: Exception) {
+                Log.e("Session", "Signup failed: ${e.message}")
+                Result.failure(e)
             }
-            val userId = currentUserId() ?: throw Exception("No user ID after signup")
-            val profile = UserProfile(
-                id        = userId,
-                full_name = name,
-                phone     = phone
-            )
-            SupabaseClient.client.from("profiles").insert(profile)
-            currentProfile = profile
-            Result.success(profile)
-        } catch (e: Exception) {
-            Log.e("Session", "Signup failed: ${e.message}")
-            Result.failure(e)
         }
     }
 
     suspend fun loadProfile(): UserProfile {
-        val userId = currentUserId() ?: throw Exception("Not logged in")
+        val userId = currentUid ?: throw Exception("Not logged in")
         val profile = try {
             SupabaseClient.client
                 .from("profiles")
@@ -126,14 +174,11 @@ object UserSessionManager {
         }
     }
 
-    suspend fun logout() {
-        try {
-            SupabaseClient.client.auth.signOut()
-            currentProfile = null
-            purchaseHistory = emptyList()
-            Log.d("Session", "Logged out")
-        } catch (e: Exception) {
-            Log.e("Session", "Logout failed: ${e.message}")
-        }
+    fun logout() {
+        currentToken = null
+        currentUid = null
+        currentProfile = null
+        purchaseHistory = emptyList()
+        Log.d("Session", "Logged out")
     }
 }
