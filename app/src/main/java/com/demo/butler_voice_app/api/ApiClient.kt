@@ -93,18 +93,22 @@ class ApiClient {
         }
     }
 
-    suspend fun createOrder(cartItems: List<CartItem>, userId: String): OrderResult {
+   suspend fun createOrder(cartItems: List<CartItem>, userId: String): OrderResult {
+        val token = UserSessionManager.getToken()
         val totalAmount = cartItems.sumOf { it.product.price * it.quantity }
-
+    
         val order = SupabaseClient.client
             .from("orders")
             .insert(OrderInsert(user_id = userId, total_amount = totalAmount)) {
                 select()
+                if (token != null) {
+                    headers["Authorization"] = "Bearer $token"
+                }
             }
             .decodeSingle<OrderResult>()
-
+    
         Log.d("ApiClient", "Order created: ${order.id}")
-
+    
         val items = cartItems.map {
             OrderItemInsert(
                 order_id     = order.id,
@@ -114,7 +118,15 @@ class ApiClient {
                 price        = it.product.price
             )
         }
-        SupabaseClient.client.from("order_items").insert(items)
+    
+        SupabaseClient.client
+            .from("order_items")
+            .insert(items) {
+                if (token != null) {
+                    headers["Authorization"] = "Bearer $token"
+                }
+            }
+    
         Log.d("ApiClient", "${items.size} items inserted")
         return order
     }
