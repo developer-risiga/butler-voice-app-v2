@@ -205,15 +205,21 @@ class MainActivity : ComponentActivity() {
             }
 
             AssistantState.ASKING_NAME -> {
-                // Extract just the name
                 val cleaned = text.trim()
-                    .replace("my name is ", "", ignoreCase = true)
-                    .replace("i am ", "", ignoreCase = true)
-                    .replace("this is ", "", ignoreCase = true)
+                    .replace(Regex("my name is ", RegexOption.IGNORE_CASE), "")
+                    .replace(Regex("i am ", RegexOption.IGNORE_CASE), "")
+                    .replace(Regex("this is ", RegexOption.IGNORE_CASE), "")
+                    .replace(Regex("call me ", RegexOption.IGNORE_CASE), "")
                     .replace(".", "")
                     .trim()
-                tempName = cleaned.split(" ")
-                    .joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
+            
+                // Take only the first word as name if multiple words remain
+                val firstName = cleaned.split(" ")
+                    .firstOrNull { it.length > 1 }  // skip single chars
+                    ?.replaceFirstChar { it.uppercase() }
+                    ?: cleaned.replaceFirstChar { it.uppercase() }
+            
+                tempName = firstName
                 currentState = AssistantState.ASKING_EMAIL
                 val msg = "Nice to meet you $tempName! What's your email address?"
                 setUiState(ButlerUiState.Speaking(msg))
@@ -459,10 +465,10 @@ class MainActivity : ComponentActivity() {
                 }
     
             } catch (e: Exception) {
-                Log.e("Butler", "Order failed: ${e.message}")
-                val msg = "Sorry, couldn't place your order. Try again."
-                setUiState(ButlerUiState.Error(msg))
-                speak(msg) { startWakeWordListening() }
+                Log.e("ApiClient", "searchProduct exception TYPE: ${e.javaClass.simpleName}")
+                Log.e("ApiClient", "searchProduct exception MSG: ${e.message}")
+                Log.e("ApiClient", "searchProduct exception CAUSE: ${e.cause}")
+                null
             }
         }
     }
