@@ -39,8 +39,18 @@ enum class AssistantState {
 // ---------------- CART ----------------
 data class CartItem(
     val product: ApiClient.Product,
-    var quantity: Int
-)
+    var quantity: Int,
+    val unit: String? = null
+) {
+    // Human-readable quantity string for TTS
+    fun displayQty(): String {
+        val u = unit ?: product.unit ?: ""
+        return if (u.isNotBlank()) "$quantity $u" else "$quantity"
+    }
+
+    // Price for this line item
+    fun lineTotal(): Double = product.price * quantity
+}
 
 
 
@@ -326,30 +336,23 @@ class MainActivity : ComponentActivity() {
     private fun placeOrder() {
     lifecycleScope.launch {
         try {
-            val items = cart.map {
-                mapOf(
-                    "product_id"   to it.product.id,
-                    "product_name" to it.product.name,
-                    "quantity"     to it.quantity,
-                    "price"        to it.product.price
-                )
-            }
-
-            // Get real logged-in user ID
             val userId = AuthManager.currentUserId()
-
             if (userId == null) {
-                Log.e("Butler", "No user ID — not logged in")
                 speak("Please log in to place an order") {
                     startWakeWordListening()
                 }
                 return@launch
             }
 
-            Log.d("Butler", "Placing order for user: $userId")
-            val orderId = apiClient.createOrder(items, userId)
+            // Pass CartItem list directly — ApiClient handles the rest
+            val orderResult = apiClient.createOrder(cart, userId)
 
-            speak("Order placed successfully! Your order ID is $orderId") {
+            // Short readable ID — last 6 chars of UUID uppercased
+            val shortId = orderResult.id.takeLast(6).uppercase()
+
+            Log.d("Butler", "✅ Order placed: ${orderResult.id}")
+
+            speak("Order placed successfully! Your order ID is $shortId") {
                 cart.clear()
                 startWakeWordListening()
             }
