@@ -324,33 +324,44 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun placeOrder() {
+    lifecycleScope.launch {
+        try {
+            val items = cart.map {
+                mapOf(
+                    "product_id"   to it.product.id,
+                    "product_name" to it.product.name,
+                    "quantity"     to it.quantity,
+                    "price"        to it.product.price
+                )
+            }
 
-        lifecycleScope.launch {
-            try {
+            // Get real logged-in user ID
+            val userId = AuthManager.currentUserId()
 
-                val items = cart.map {
-                    mapOf(
-                        "product_id" to it.product.id,
-                        "product_name" to it.product.name,
-                        "quantity" to it.quantity,
-                        "price" to it.product.price
-                    )
-                }
-
-                val orderId = apiClient.createOrder(items)
-
-                speak("Order placed successfully. ID is $orderId") {
-                    cart.clear()
+            if (userId == null) {
+                Log.e("Butler", "No user ID — not logged in")
+                speak("Please log in to place an order") {
                     startWakeWordListening()
                 }
+                return@launch
+            }
 
-            } catch (e: Exception) {
-                speak("Something went wrong") {
-                    startWakeWordListening()
-                }
+            Log.d("Butler", "Placing order for user: $userId")
+            val orderId = apiClient.createOrder(items, userId)
+
+            speak("Order placed successfully! Your order ID is $orderId") {
+                cart.clear()
+                startWakeWordListening()
+            }
+
+        } catch (e: Exception) {
+            Log.e("Butler", "Order failed: ${e.message}")
+            speak("Sorry, I couldn't place your order. Please try again.") {
+                startWakeWordListening()
             }
         }
     }
+}
 
     private fun speak(text: String, onDone: (() -> Unit)? = null) {
         sarvamSTT.stop()
