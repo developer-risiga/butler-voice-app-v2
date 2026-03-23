@@ -37,11 +37,7 @@ enum class AssistantState {
 }
 
 // ---------------- CART ----------------
-data class CartItem(
-    val product: ApiClient.Product,
-    var quantity: Int,
-    val unit: String? = null
-) {
+{
     // Human-readable quantity string for TTS
     fun displayQty(): String {
         val u = unit ?: product.unit ?: ""
