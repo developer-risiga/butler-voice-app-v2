@@ -465,10 +465,10 @@ class MainActivity : ComponentActivity() {
                 }
     
             } catch (e: Exception) {
-                Log.e("ApiClient", "searchProduct exception TYPE: ${e.javaClass.simpleName}")
-                Log.e("ApiClient", "searchProduct exception MSG: ${e.message}")
-                Log.e("ApiClient", "searchProduct exception CAUSE: ${e.cause}")
-                null
+                Log.e("Butler", "Order failed: ${e.javaClass.simpleName} — ${e.message}")
+                val msg = "Sorry, couldn't place your order. Try again."
+                setUiState(ButlerUiState.Error(msg))
+                speak(msg) { startWakeWordListening() }
             }
         }
     }
