@@ -1,5 +1,7 @@
 package com.demo.butler_voice_app
 
+
+import com.demo.butler_voice_app.BuildConfig
 import android.Manifest
 import android.content.pm.PackageManager
 import android.media.AudioManager
@@ -37,6 +39,8 @@ data class CartItem(
     var quantity: Int
 )
 
+
+
 class MainActivity : ComponentActivity() {
 
     private lateinit var ttsManager: TTSManager
@@ -54,6 +58,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        Log.e("FINAL_KEY", BuildConfig.PORCUPINE_ACCESS_KEY)
 
         // Disable back button
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -99,7 +105,7 @@ class MainActivity : ComponentActivity() {
         // TTS
         ttsManager = TTSManager(
             context = this,
-            elevenLabsApiKey = "YOUR_API_KEY",
+            elevenLabsApiKey = BuildConfig.ELEVENLABS_API_KEY
             voiceId = "Rachel" // safer free voice
         )
 

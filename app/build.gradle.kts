@@ -26,14 +26,17 @@ fun getLocalProperty(key: String): String {
 }
 
 fun getEnvOrLocal(key: String): String {
-    return System.getenv(key)
-        ?: (project.findProperty(key) as String?)
-        ?: ""
+    val env = System.getenv(key)
+    if (!env.isNullOrEmpty()) return env
+
+    return getLocalProperty(key)
 }
 
 android {
     namespace = "com.demo.butler_voice_app"
     compileSdk = 34
+
+    buildToolsVersion = "34.0.0"
 
     defaultConfig {
         applicationId = "com.demo.butler_voice_app"
