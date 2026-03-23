@@ -1,6 +1,7 @@
 package com.demo.butler_voice_app
 
 
+
 import com.demo.butler_voice_app.BuildConfig
 import android.Manifest
 import android.content.pm.PackageManager
@@ -23,6 +24,8 @@ import kotlinx.coroutines.launch
 import com.demo.butler_voice_app.api.*
 import com.demo.butler_voice_app.voice.SarvamSTTManager
 import com.demo.butler_voice_app.ai.AIOrderParser
+
+
 
 // ---------------- STATE ----------------
 enum class AssistantState {
@@ -105,8 +108,8 @@ class MainActivity : ComponentActivity() {
         // TTS
         ttsManager = TTSManager(
             context = this,
-            elevenLabsApiKey = BuildConfig.ELEVENLABS_API_KEY
-            voiceId = "Rachel" // safer free voice
+            elevenLabsApiKey = BuildConfig.ELEVENLABS_API_KEY,
+            voiceId = "1Z7Y8o9cvUeWq8oLKgMY" // safer free voice
         )
 
         ttsManager.init {
@@ -394,3 +397,5 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
+
+
