@@ -382,7 +382,7 @@ class MainActivity : ComponentActivity() {
                         setUiState(ButlerUiState.Speaking(msg))
                         speak(msg) {
                             cart.clear()
-                            lifecycleScope.launch { UserSessionManager.logout() }
+                            UserSessionManager.logout()
                             startWakeWordListening()
                         }
                     }
@@ -445,11 +445,10 @@ class MainActivity : ComponentActivity() {
 
                 speak(farewell) {
                     cart.clear()
-                    lifecycleScope.launch {
-                        UserSessionManager.logout()
-                        Handler(Looper.getMainLooper()).postDelayed({
-                            startWakeWordListening()
-                        }, 3000)
+                    UserSessionManager.logout()
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        startWakeWordListening()
+                    }, 3000)
                     }
                 }
 
