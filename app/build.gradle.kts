@@ -26,7 +26,9 @@ fun getLocalProperty(key: String): String {
 }
 
 fun getEnvOrLocal(key: String): String {
-    return System.getenv(key) ?: getLocalProperty(key)
+    return System.getenv(key)
+        ?: (project.findProperty(key) as String?)
+        ?: ""
 }
 
 android {
