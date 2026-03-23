@@ -41,13 +41,46 @@ android {
         versionName = "1.0"
 
         // ✅ DEFINE EACH KEY ONLY ONCE
-        buildConfigField("String", "OPENAI_API_KEY", "\"${getEnvOrLocal("OPENAI_API_KEY")}\"")
-        buildConfigField("String", "SARVAM_API_KEY", "\"${getEnvOrLocal("SARVAM_API_KEY")}\"")
-        buildConfigField("String", "PORCUPINE_ACCESS_KEY", "\"${getEnvOrLocal("PORCUPINE_ACCESS_KEY")}\"")
-        buildConfigField("String", "ELEVENLABS_API_KEY", "\"${getEnvOrLocal("ELEVENLABS_API_KEY")}\"")
-        buildConfigField("String", "ELEVENLABS_VOICE_ID", "\"${getEnvOrLocal("ELEVENLABS_VOICE_ID")}\"")
-        buildConfigField("String", "SUPABASE_URL", "\"${getEnvOrLocal("SUPABASE_URL")}\"")
-        buildConfigField("String", "SUPABASE_KEY", "\"${getEnvOrLocal("SUPABASE_KEY")}\"")
+        buildConfigField(
+            "String",
+            "OPENAI_API_KEY",
+            "\"${getEnvOrLocal("OPENAI_API_KEY").ifEmpty { "DUMMY_KEY" }}\""
+        )
+        buildConfigField(
+            "String",
+            "SARVAM_API_KEY",
+            "\"${getEnvOrLocal("SARVAM_API_KEY").ifEmpty { "DUMMY_KEY" }}\""
+        )
+
+        buildConfigField(
+            "String",
+            "PORCUPINE_ACCESS_KEY",
+            "\"${getEnvOrLocal("PORCUPINE_ACCESS_KEY").ifEmpty { "DUMMY_KEY" }}\""
+        )
+
+        buildConfigField(
+            "String",
+            "ELEVENLABS_API_KEY",
+            "\"${getEnvOrLocal("ELEVENLABS_API_KEY").ifEmpty { "DUMMY_KEY" }}\""
+        )
+
+        buildConfigField(
+            "String",
+            "ELEVENLABS_VOICE_ID",
+            "\"${getEnvOrLocal("ELEVENLABS_VOICE_ID").ifEmpty { "DUMMY_VOICE" }}\""
+        )
+
+        buildConfigField(
+            "String",
+            "SUPABASE_URL",
+            "\"${getEnvOrLocal("SUPABASE_URL").ifEmpty { "https://dummy.url" }}\""
+        )
+
+        buildConfigField(
+            "String",
+            "SUPABASE_KEY",
+            "\"${getEnvOrLocal("SUPABASE_KEY").ifEmpty { "DUMMY_KEY" }}\""
+        )
     }
 
     buildFeatures {
