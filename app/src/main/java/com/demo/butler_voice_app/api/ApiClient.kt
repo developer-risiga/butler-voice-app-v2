@@ -1,5 +1,6 @@
 package com.demo.butler_voice_app.api
 
+import com.demo.butler_voice_app.CartItem
 import android.util.Log
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.query.Columns
@@ -174,8 +175,6 @@ class ApiClient {
                     filter {
                         eq("user_id", userId)
                     }
-                    order("created_at", Order.DESCENDING)
-                    limit(20)
                 }
                 .decodeList<OrderHistory>()
         } catch (e: Exception) {
@@ -193,7 +192,9 @@ class ApiClient {
                 .select(columns = Columns.list(
                     "id", "product_name", "quantity", "price"
                 )) {
-                    filter { eq("order_id", orderId) }
+                    filter {
+                        eq("order_id", orderId)
+                    }
                 }
                 .decodeList<OrderItemHistory>()
         } catch (e: Exception) {
