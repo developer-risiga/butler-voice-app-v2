@@ -428,30 +428,29 @@ class MainActivity : ComponentActivity() {
                     speak(msg) { startWakeWordListening() }
                     return@launch
                 }
-
+    
                 val orderResult = apiClient.createOrder(cart, userId)
                 val shortId = orderResult.id.takeLast(6).uppercase()
                 val firstName = UserSessionManager.currentProfile
                     ?.full_name?.split(" ")?.first() ?: ""
-
+    
                 Log.d("Butler", "Order placed: ${orderResult.id}")
                 setUiState(ButlerUiState.OrderDone(shortId, orderResult.total_amount))
-
+    
                 val farewell = if (firstName.isNotBlank()) {
                     "Order placed $firstName! Your ID is $shortId. Thank you, goodbye!"
                 } else {
                     "Order placed! Your ID is $shortId. Thank you!"
                 }
-
+    
                 speak(farewell) {
                     cart.clear()
                     UserSessionManager.logout()
                     Handler(Looper.getMainLooper()).postDelayed({
                         startWakeWordListening()
                     }, 3000)
-                    }
                 }
-
+    
             } catch (e: Exception) {
                 Log.e("Butler", "Order failed: ${e.message}")
                 val msg = "Sorry, couldn't place your order. Try again."
