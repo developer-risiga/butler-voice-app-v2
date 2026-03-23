@@ -62,23 +62,34 @@ class ApiClient {
     suspend fun searchProduct(query: String): Product? {
         return try {
             val lower = query.lowercase().trim()
-
+    
             val req = Request.Builder()
                 .url("$url/rest/v1/products?select=*")
                 .addHeader("apikey", key)
+                .addHeader("Authorization", "Bearer $key")  // use anon key as bearer for public tables
                 .addHeader("Accept", "application/json")
                 .get()
                 .build()
-
+    
             val res  = http.newCall(req).execute()
             val body = res.body?.string() ?: "[]"
-            val arr  = json.parseToJsonElement(body).jsonArray
-
+    
+            Log.d("ApiClient", "Products response code: ${res.code}, body: ${body.take(200)}")
+    
+            if (!res.isSuccessful) {
+                Log.e("ApiClient", "Products fetch failed: $body")
+                return null
+            }
+    
+            val arr = json.parseToJsonElement(body).jsonArray
+    
             val products = arr.mapNotNull {
                 try { json.decodeFromJsonElement(Product.serializer(), it) }
                 catch (e: Exception) { null }
             }
-
+    
+            Log.d("ApiClient", "Total products fetched: ${products.size}")
+    
             val scored = products.mapNotNull { product ->
                 var score = 0
                 if (product.name.lowercase() == lower) score += 100
@@ -90,12 +101,12 @@ class ApiClient {
                 }
                 if (score > 0) Pair(product, score) else null
             }
-
+    
             val best = scored.maxByOrNull { it.second }?.first
             Log.d("ApiClient", "searchProduct('$query') → ${best?.name}")
             best
         } catch (e: Exception) {
-            Log.e("ApiClient", "searchProduct failed: ${e.message}")
+            Log.e("ApiClient", "searchProduct exception: ${e.message}")
             null
         }
     }
