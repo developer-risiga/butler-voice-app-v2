@@ -1,12 +1,11 @@
 package com.demo.butler_voice_app.api
 
 import android.util.Log
-import io.github.jan.supabase.postgrest.from
-import io.github.jan.supabase.postgrest.query.Columns
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.MediaType.Companion.toMediaType
@@ -37,8 +36,11 @@ object UserSessionManager {
     private var currentToken: String? = null
     private var currentUid: String? = null
 
-    private val httpClient = OkHttpClient()
+    private val http = OkHttpClient()
     private val json = Json { ignoreUnknownKeys = true }
+
+    private val url get() = SupabaseClient.SUPABASE_URL
+    private val key get() = SupabaseClient.SUPABASE_KEY
 
     fun isLoggedIn(): Boolean = currentToken != null && currentUid != null
     fun currentUserId(): String? = currentUid
@@ -52,29 +54,29 @@ object UserSessionManager {
                 val body = """{"email":"$email","password":"$password"}"""
                     .toRequestBody("application/json".toMediaType())
 
-                val request = Request.Builder()
-                    .url("${SupabaseClient.SUPABASE_URL}/auth/v1/token?grant_type=password")
-                    .addHeader("apikey", SupabaseClient.SUPABASE_KEY)
+                val req = Request.Builder()
+                    .url("$url/auth/v1/token?grant_type=password")
+                    .addHeader("apikey", key)
                     .addHeader("Content-Type", "application/json")
                     .post(body)
                     .build()
 
-                val response = httpClient.newCall(request).execute()
-                val responseBody = response.body?.string() ?: ""
+                val res = http.newCall(req).execute()
+                val resBody = res.body?.string() ?: ""
 
-                if (!response.isSuccessful) {
-                    return@withContext Result.failure(Exception("Login failed: $responseBody"))
+                if (!res.isSuccessful) {
+                    return@withContext Result.failure(Exception("Login failed: $resBody"))
                 }
 
-                val jsonObj = json.parseToJsonElement(responseBody).jsonObject
-                currentToken = jsonObj["access_token"]?.jsonPrimitive?.content
-                currentUid = jsonObj["user"]?.jsonObject?.get("id")?.jsonPrimitive?.content
+                val obj = json.parseToJsonElement(resBody).jsonObject
+                currentToken = obj["access_token"]?.jsonPrimitive?.content
+                currentUid   = obj["user"]?.jsonObject?.get("id")?.jsonPrimitive?.content
 
                 Log.d("Session", "Login success. UID: $currentUid")
                 val profile = loadProfile()
                 Result.success(profile)
             } catch (e: Exception) {
-                Log.e("Session", "Login failed: ${e.message}")
+                Log.e("Session", "Login error: ${e.message}")
                 Result.failure(e)
             }
         }
@@ -93,53 +95,50 @@ object UserSessionManager {
                 val body = """{"email":"$email","password":"$password"}"""
                     .toRequestBody("application/json".toMediaType())
 
-                val request = Request.Builder()
-                    .url("${SupabaseClient.SUPABASE_URL}/auth/v1/signup")
-                    .addHeader("apikey", SupabaseClient.SUPABASE_KEY)
+                val req = Request.Builder()
+                    .url("$url/auth/v1/signup")
+                    .addHeader("apikey", key)
                     .addHeader("Content-Type", "application/json")
                     .post(body)
                     .build()
 
-                val response = httpClient.newCall(request).execute()
-                val responseBody = response.body?.string() ?: ""
+                val res = http.newCall(req).execute()
+                val resBody = res.body?.string() ?: ""
 
-                if (!response.isSuccessful) {
-                    return@withContext Result.failure(Exception("Signup failed: $responseBody"))
+                if (!res.isSuccessful) {
+                    return@withContext Result.failure(Exception("Signup failed: $resBody"))
                 }
 
-                val jsonObj = json.parseToJsonElement(responseBody).jsonObject
-                currentToken = jsonObj["access_token"]?.jsonPrimitive?.content
-                currentUid = jsonObj["user"]?.jsonObject?.get("id")?.jsonPrimitive?.content
-                    ?: jsonObj["id"]?.jsonPrimitive?.content
+                val obj = json.parseToJsonElement(resBody).jsonObject
+                currentToken = obj["access_token"]?.jsonPrimitive?.content
+                currentUid   = obj["user"]?.jsonObject?.get("id")?.jsonPrimitive?.content
+                    ?: obj["id"]?.jsonPrimitive?.content
 
                 Log.d("Session", "Signup success. UID: $currentUid")
 
                 val userId = currentUid ?: throw Exception("No user ID after signup")
-                val profile = UserProfile(
-                    id        = userId,
-                    full_name = name,
-                    phone     = phone
-                )
+                val token  = currentToken ?: throw Exception("No token after signup")
 
-                // Insert profile with user JWT token
-                try {
-                    val token = currentToken
-                    if (token != null) {
-                        SupabaseClient.client
-                            .from("profiles")
-                            .insert(profile) {
-                                headers["Authorization"] = "Bearer $token"
-                            }
-                        Log.d("Session", "Profile inserted successfully")
-                    }
-                } catch (e: Exception) {
-                    Log.w("Session", "Profile insert failed: ${e.message}")
-                }
+                // Insert profile via direct HTTP with JWT
+                val profileJson = """{"id":"$userId","full_name":"$name","phone":"$phone"}"""
+                val profileReq = Request.Builder()
+                    .url("$url/rest/v1/profiles")
+                    .addHeader("apikey", key)
+                    .addHeader("Authorization", "Bearer $token")
+                    .addHeader("Content-Type", "application/json")
+                    .addHeader("Prefer", "return=minimal")
+                    .post(profileJson.toRequestBody("application/json".toMediaType()))
+                    .build()
 
+                val profileRes = http.newCall(profileReq).execute()
+                Log.d("Session", "Profile insert code: ${profileRes.code}")
+
+                val profile = UserProfile(id = userId, full_name = name, phone = phone)
                 currentProfile = profile
                 Result.success(profile)
+
             } catch (e: Exception) {
-                Log.e("Session", "Signup failed: ${e.message}")
+                Log.e("Session", "Signup error: ${e.message}")
                 Result.failure(e)
             }
         }
@@ -148,70 +147,85 @@ object UserSessionManager {
     // ─── LOAD PROFILE ─────────────────────────────────────────
 
     suspend fun loadProfile(): UserProfile {
-        val userId = currentUid ?: throw Exception("Not logged in")
-        val token = currentToken
+        return withContext(Dispatchers.IO) {
+            val userId = currentUid ?: return@withContext UserProfile(id = "")
+            val token  = currentToken ?: return@withContext UserProfile(id = userId)
 
-        val profile = try {
-            if (token != null) {
-                SupabaseClient.client
-                    .from("profiles")
-                    .select() {
-                        headers["Authorization"] = "Bearer $token"
-                    }
-                    .decodeList<UserProfile>()
-                    .firstOrNull { it.id == userId }
-                    ?: UserProfile(id = userId)
-            } else {
+            // Fetch profile
+            val profile = try {
+                val req = Request.Builder()
+                    .url("$url/rest/v1/profiles?id=eq.$userId&select=*")
+                    .addHeader("apikey", key)
+                    .addHeader("Authorization", "Bearer $token")
+                    .addHeader("Accept", "application/json")
+                    .get()
+                    .build()
+
+                val res  = http.newCall(req).execute()
+                val body = res.body?.string() ?: "[]"
+                Log.d("Session", "Profile fetch: $body")
+
+                val arr   = json.parseToJsonElement(body).jsonArray
+                val first = arr.firstOrNull()
+                if (first != null) {
+                    json.decodeFromJsonElement(UserProfile.serializer(), first)
+                } else {
+                    UserProfile(id = userId)
+                }
+            } catch (e: Exception) {
+                Log.e("Session", "Profile load error: ${e.message}")
                 UserProfile(id = userId)
             }
-        } catch (e: Exception) {
-            Log.e("Session", "Profile load failed: ${e.message}")
-            UserProfile(id = userId)
-        }
 
-        currentProfile = profile
+            currentProfile = profile
 
-        // Load purchase history with token
-        purchaseHistory = try {
-            if (token != null) {
-                SupabaseClient.client
-                    .from("order_items")
-                    .select(columns = Columns.list("product_name")) {
-                        headers["Authorization"] = "Bearer $token"
-                    }
-                    .decodeList<PurchaseSummary>()
-                    .take(5)
-            } else {
+            // Fetch purchase history
+            purchaseHistory = try {
+                val req = Request.Builder()
+                    .url("$url/rest/v1/order_items?select=product_name&limit=5")
+                    .addHeader("apikey", key)
+                    .addHeader("Authorization", "Bearer $token")
+                    .addHeader("Accept", "application/json")
+                    .get()
+                    .build()
+
+                val res  = http.newCall(req).execute()
+                val body = res.body?.string() ?: "[]"
+                val arr  = json.parseToJsonElement(body).jsonArray
+
+                arr.mapNotNull {
+                    val name = it.jsonObject["product_name"]?.jsonPrimitive?.content
+                    if (!name.isNullOrBlank()) PurchaseSummary(product_name = name) else null
+                }
+            } catch (e: Exception) {
+                Log.e("Session", "History load error: ${e.message}")
                 emptyList()
             }
-        } catch (e: Exception) {
-            Log.e("Session", "History load failed: ${e.message}")
-            emptyList()
-        }
 
-        Log.d("Session", "Profile: ${profile.full_name}, history: ${purchaseHistory.size}")
-        return profile
+            Log.d("Session", "Loaded: ${profile.full_name}, history: ${purchaseHistory.size}")
+            profile
+        }
     }
 
     // ─── PERSONALIZATION ──────────────────────────────────────
 
     fun buildPersonalizationContext(): String {
         val profile = currentProfile ?: return ""
-        val name = profile.full_name ?: "the customer"
+        val name    = profile.full_name ?: "the customer"
         val history = purchaseHistory.take(5)
         return if (history.isEmpty()) {
             "Customer name: $name. First time buyer."
         } else {
-            val historyText = history.joinToString(", ") { it.product_name }
-            "Customer name: $name. Previously ordered: $historyText. Suggest these if relevant."
+            val items = history.joinToString(", ") { it.product_name }
+            "Customer name: $name. Previously ordered: $items. Suggest these if relevant."
         }
     }
 
     // ─── LOGOUT ───────────────────────────────────────────────
 
     fun logout() {
-        currentToken = null
-        currentUid = null
+        currentToken   = null
+        currentUid     = null
         currentProfile = null
         purchaseHistory = emptyList()
         Log.d("Session", "Logged out")
