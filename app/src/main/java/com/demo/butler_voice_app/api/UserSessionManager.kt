@@ -41,8 +41,10 @@ object UserSessionManager {
     private val json = Json { ignoreUnknownKeys = true }
 
     fun isLoggedIn(): Boolean = currentToken != null && currentUid != null
-
     fun currentUserId(): String? = currentUid
+    fun getToken(): String? = currentToken
+
+    // ─── LOGIN ────────────────────────────────────────────────
 
     suspend fun login(email: String, password: String): Result<UserProfile> {
         return withContext(Dispatchers.IO) {
@@ -77,6 +79,8 @@ object UserSessionManager {
             }
         }
     }
+
+    // ─── SIGNUP ───────────────────────────────────────────────
 
     suspend fun signup(
         email: String,
@@ -117,8 +121,17 @@ object UserSessionManager {
                     phone     = phone
                 )
 
+                // Insert profile with user JWT token
                 try {
-                    SupabaseClient.client.from("profiles").insert(profile)
+                    val token = currentToken
+                    if (token != null) {
+                        SupabaseClient.client
+                            .from("profiles")
+                            .insert(profile) {
+                                headers["Authorization"] = "Bearer $token"
+                            }
+                        Log.d("Session", "Profile inserted successfully")
+                    }
                 } catch (e: Exception) {
                     Log.w("Session", "Profile insert failed: ${e.message}")
                 }
@@ -132,27 +145,45 @@ object UserSessionManager {
         }
     }
 
+    // ─── LOAD PROFILE ─────────────────────────────────────────
+
     suspend fun loadProfile(): UserProfile {
         val userId = currentUid ?: throw Exception("Not logged in")
+        val token = currentToken
+
         val profile = try {
-            SupabaseClient.client
-                .from("profiles")
-                .select()
-                .decodeList<UserProfile>()
-                .firstOrNull { it.id == userId }
-                ?: UserProfile(id = userId)
+            if (token != null) {
+                SupabaseClient.client
+                    .from("profiles")
+                    .select() {
+                        headers["Authorization"] = "Bearer $token"
+                    }
+                    .decodeList<UserProfile>()
+                    .firstOrNull { it.id == userId }
+                    ?: UserProfile(id = userId)
+            } else {
+                UserProfile(id = userId)
+            }
         } catch (e: Exception) {
             Log.e("Session", "Profile load failed: ${e.message}")
             UserProfile(id = userId)
         }
+
         currentProfile = profile
 
+        // Load purchase history with token
         purchaseHistory = try {
-            SupabaseClient.client
-                .from("order_items")
-                .select(columns = Columns.list("product_name"))
-                .decodeList<PurchaseSummary>()
-                .take(5)
+            if (token != null) {
+                SupabaseClient.client
+                    .from("order_items")
+                    .select(columns = Columns.list("product_name")) {
+                        headers["Authorization"] = "Bearer $token"
+                    }
+                    .decodeList<PurchaseSummary>()
+                    .take(5)
+            } else {
+                emptyList()
+            }
         } catch (e: Exception) {
             Log.e("Session", "History load failed: ${e.message}")
             emptyList()
@@ -161,6 +192,8 @@ object UserSessionManager {
         Log.d("Session", "Profile: ${profile.full_name}, history: ${purchaseHistory.size}")
         return profile
     }
+
+    // ─── PERSONALIZATION ──────────────────────────────────────
 
     fun buildPersonalizationContext(): String {
         val profile = currentProfile ?: return ""
@@ -173,6 +206,8 @@ object UserSessionManager {
             "Customer name: $name. Previously ordered: $historyText. Suggest these if relevant."
         }
     }
+
+    // ─── LOGOUT ───────────────────────────────────────────────
 
     fun logout() {
         currentToken = null
