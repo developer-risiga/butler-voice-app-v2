@@ -205,21 +205,28 @@ class MainActivity : ComponentActivity() {
             }
 
             AssistantState.ASKING_NAME -> {
-                tempName = text.trim()
-                    .split(" ")
+                // Extract just the name
+                val cleaned = text.trim()
+                    .replace("my name is ", "", ignoreCase = true)
+                    .replace("i am ", "", ignoreCase = true)
+                    .replace("this is ", "", ignoreCase = true)
+                    .replace(".", "")
+                    .trim()
+                tempName = cleaned.split(" ")
                     .joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
                 currentState = AssistantState.ASKING_EMAIL
                 val msg = "Nice to meet you $tempName! What's your email address?"
                 setUiState(ButlerUiState.Speaking(msg))
                 speak(msg) { startListening() }
             }
-
+            
             AssistantState.ASKING_EMAIL -> {
                 tempEmail = text.trim()
                     .replace(" at ", "@")
                     .replace(" dot ", ".")
                     .replace(" ", "")
                     .lowercase()
+                    .trimEnd('.')          // ← removes trailing dot Sarvam adds
                 currentState = AssistantState.ASKING_PASSWORD
                 val msg = "Got it. Now say your password."
                 setUiState(ButlerUiState.Speaking(msg))
