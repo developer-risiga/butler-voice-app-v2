@@ -137,11 +137,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
-    // SUPABASE
-    implementation(platform("io.github.jan-tennert.supabase:bom:2.4.0"))
-    implementation("io.github.jan-tennert.supabase:postgrest-kt")
-    implementation("io.github.jan-tennert.supabase:gotrue-kt")
-    implementation("io.github.jan-tennert.supabase:realtime-kt")
+   
 
     // KTOR
     implementation("io.ktor:ktor-client-android:2.3.7")
