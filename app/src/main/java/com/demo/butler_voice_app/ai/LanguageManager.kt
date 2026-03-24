@@ -5,9 +5,8 @@ object LanguageManager {
     private var sessionLanguage: String = "en"
 
     fun setLanguage(lang: String) {
-        if (sessionLanguage == "en") {
-            sessionLanguage = lang
-        }
+        // Always update (no restriction)
+        sessionLanguage = lang
     }
 
     fun getLanguage(): String {
