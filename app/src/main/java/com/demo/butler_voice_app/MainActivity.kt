@@ -207,15 +207,21 @@ class MainActivity : ComponentActivity() {
                 speak("Nice to meet you $tempName! What's your email?") { startListening() }
             }
 
-            AssistantState.ASKING_EMAIL -> {
-                tempEmail = text.trim()
+           AssistantState.ASKING_EMAIL -> {
+                val cleaned = text.trim()
                     .replace(Regex("at the rate", RegexOption.IGNORE_CASE), "@")
                     .replace(Regex("\\bat\\b", RegexOption.IGNORE_CASE), "@")
                     .replace(Regex("dot", RegexOption.IGNORE_CASE), ".")
                     .replace(" ", "")
                     .lowercase()
                     .trimEnd('.', ',', '!')
-
+            
+                if (!cleaned.contains("@") || !cleaned.contains(".") || cleaned.length < 6) {
+                    speak("I didn't catch a valid email. Please say it again clearly, like john at gmail dot com.") { startListening() }
+                    return
+                }
+            
+                tempEmail = cleaned
                 Log.d("Butler", "Email captured: $tempEmail")
                 currentState = AssistantState.ASKING_PASSWORD
                 speak("Got it. Now say your password.") { startListening() }
