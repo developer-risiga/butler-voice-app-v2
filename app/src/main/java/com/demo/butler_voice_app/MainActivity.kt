@@ -21,6 +21,11 @@ import com.demo.butler_voice_app.ui.ButlerScreen
 import com.demo.butler_voice_app.ui.ButlerUiState
 import com.demo.butler_voice_app.voice.SarvamSTTManager
 import kotlinx.coroutines.launch
+import com.demo.butler_voice_app.ai.TranslationManager
+
+
+
+
 
 enum class AssistantState {
     IDLE, CHECKING_AUTH, ASKING_IS_NEW_USER, ASKING_NAME,
@@ -560,11 +565,17 @@ class MainActivity : ComponentActivity() {
     private fun speak(text: String, onDone: (() -> Unit)? = null) {
         sarvamSTT.stop()
     
-        ttsManager.speak(
-            text = text,
-            language = detectedLanguage,
-            onDone = { onDone?.invoke() }
-        )
+        lifecycleScope.launch {
+            val finalText = TranslationManager.translate(text, detectedLanguage)
+    
+            runOnUiThread {
+                ttsManager.speak(
+                    text = finalText,
+                    language = detectedLanguage,
+                    onDone = { onDone?.invoke() }
+                )
+            }
+        }
     }
 
     override fun onPause()   { super.onPause();   porcupine.stop(); sarvamSTT.stop() }
