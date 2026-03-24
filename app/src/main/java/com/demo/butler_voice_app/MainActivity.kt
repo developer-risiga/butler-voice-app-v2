@@ -150,6 +150,12 @@ class MainActivity : ComponentActivity() {
             onResult = { text ->
                 runOnUiThread {
                     Log.d("Butler", "Transcript: $text")
+                    // 🔥 FIX: detect language EARLY
+                    detectedLanguage = when {
+                        Regex("[\u0900-\u097F]").containsMatchIn(text) -> "hi"
+                        Regex("[\u0C00-\u0C7F]").containsMatchIn(text) -> "te"
+                        else -> "en"
+                    }
                     if (text.isBlank()) {
                         val msg = "Sorry, I didn't catch that"
                         setUiState(ButlerUiState.Speaking(msg))
@@ -567,6 +573,9 @@ class MainActivity : ComponentActivity() {
     
         lifecycleScope.launch {
             val finalText = TranslationManager.translate(text, detectedLanguage)
+    
+            Log.d("Butler", "Original: $text")
+            Log.d("Butler", "Translated ($detectedLanguage): $finalText")
     
             runOnUiThread {
                 ttsManager.speak(
