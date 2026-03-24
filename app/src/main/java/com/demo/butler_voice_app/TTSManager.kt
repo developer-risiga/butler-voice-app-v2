@@ -1,6 +1,7 @@
 package com.demo.butler_voice_app
 
 import android.content.Context
+import android.media.AudioManager
 import android.media.MediaPlayer
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
@@ -30,25 +31,33 @@ class TTSManager(
     private var fallbackReady = false
     private var mediaPlayer: MediaPlayer? = null
 
-    // ✅ INIT
+    private val audioManager =
+        context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+
     fun init(onReady: () -> Unit) {
-        fallbackTts = TextToSpeech(
-            context,
-            { status ->
-                fallbackReady = status == TextToSpeech.SUCCESS
-                if (fallbackReady) fallbackTts?.language = Locale.US
-                onReady()
-            }
-        )
+        fallbackTts = TextToSpeech(context) { status ->
+            fallbackReady = status == TextToSpeech.SUCCESS
+            if (fallbackReady) fallbackTts?.language = Locale.US
+            onReady()
+        }
     }
 
-    // ✅ MAIN SPEAK FUNCTION
     fun speak(
         text: String,
         language: String = "en",
         onDone: (() -> Unit)? = null
     ) {
+        if (text.isBlank()) {
+            Log.w("TTS", "Empty text, skipping")
+            onDone?.invoke()
+            return
+        }
+
         Log.d("TTS", "ElevenLabs [$language] → \"$text\"")
+
+        // 🔥 Stop any existing playback
+        mediaPlayer?.release()
+        mediaPlayer = null
 
         val body = JSONObject().apply {
             put("text", text)
@@ -71,8 +80,7 @@ class TTSManager(
 
             override fun onResponse(call: Call, response: Response) {
                 if (!response.isSuccessful) {
-                    val error = response.body?.string()
-                    Log.e("TTS", "Error ${response.code}: $error")
+                    Log.e("TTS", "Error ${response.code}")
                     speakFallback(text, language, onDone)
                     return
                 }
@@ -88,13 +96,11 @@ class TTSManager(
         })
     }
 
-    // ✅ PLAY AUDIO
     private fun playAudio(bytes: ByteArray, onDone: (() -> Unit)?) {
         try {
             val file = File.createTempFile("tts_", ".mp3", context.cacheDir)
             file.writeBytes(bytes)
 
-            mediaPlayer?.release()
             mediaPlayer = MediaPlayer().apply {
                 setDataSource(file.absolutePath)
                 prepare()
@@ -113,14 +119,11 @@ class TTSManager(
         }
     }
 
-    // ✅ FALLBACK TTS
     private fun speakFallback(
         text: String,
         language: String,
         onDone: (() -> Unit)?
     ) {
-        Log.d("TTS", "Fallback [$language] → \"$text\"")
-
         if (!fallbackReady) {
             onDone?.invoke()
             return
@@ -130,23 +133,19 @@ class TTSManager(
 
         val id = "FALLBACK_TTS"
 
-        if (onDone != null) {
-            fallbackTts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                override fun onStart(utteranceId: String?) {}
-                override fun onDone(utteranceId: String?) {
-                    if (utteranceId == id) onDone()
-                }
-                override fun onError(utteranceId: String?) {
-                    if (utteranceId == id) onDone()
-                }
-            })
-            fallbackTts?.speak(text, TextToSpeech.QUEUE_FLUSH, Bundle(), id)
-        } else {
-            fallbackTts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, null)
-        }
+        fallbackTts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+            override fun onStart(utteranceId: String?) {}
+            override fun onDone(utteranceId: String?) {
+                if (utteranceId == id) onDone?.invoke()
+            }
+            override fun onError(utteranceId: String?) {
+                if (utteranceId == id) onDone?.invoke()
+            }
+        })
+
+        fallbackTts?.speak(text, TextToSpeech.QUEUE_FLUSH, Bundle(), id)
     }
 
-    // ✅ LANGUAGE LOCALE
     private fun getLocale(language: String): Locale {
         return when (language) {
             "hi" -> Locale("hi", "IN")
