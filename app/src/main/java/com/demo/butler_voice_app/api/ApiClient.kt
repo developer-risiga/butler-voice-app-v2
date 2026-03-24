@@ -59,88 +59,90 @@ class ApiClient {
 
     // ─── PRODUCT SEARCH ───────────────────────────────────────
 
+    // Cache products in memory — fetch once per session
+private var cachedProducts: List<Product>? = null
+
     suspend fun searchProduct(query: String): Product? {
         return withContext(Dispatchers.IO) {
             try {
                 val lower = query.lowercase().trim()
-
-                val req = Request.Builder()
-                    .url("$url/rest/v1/products?select=*")
-                    .addHeader("apikey", key)
-                    .addHeader("Authorization", "Bearer $key")
-                    .addHeader("Accept", "application/json")
-                    .get()
-                    .build()
-
-                val res  = http.newCall(req).execute()
-                val body = res.body?.string() ?: "[]"
-
-                Log.d("ApiClient", "Products code: ${res.code}")
-
-                if (!res.isSuccessful) {
-                    Log.e("ApiClient", "Products failed: $body")
-                    return@withContext null
+    
+                // Use cache if available
+                val products = cachedProducts ?: run {
+                    val client = OkHttpClient.Builder()
+                        .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                        .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                        .build()
+    
+                    val req = Request.Builder()
+                        .url("$url/rest/v1/products?select=id,name,base_name,unit,price,keywords&limit=3000")
+                        .addHeader("apikey", key)
+                        .addHeader("Authorization", "Bearer $key")
+                        .addHeader("Accept", "application/json")
+                        .get()
+                        .build()
+    
+                    val res  = client.newCall(req).execute()
+                    val body = res.body?.string() ?: "[]"
+    
+                    Log.d("ApiClient", "Products fetched: ${res.code}, size: ${body.length}")
+    
+                    if (!res.isSuccessful) {
+                        Log.e("ApiClient", "Products failed: $body")
+                        return@withContext null
+                    }
+    
+                    val arr = json.parseToJsonElement(body).jsonArray
+                    val list = arr.mapNotNull {
+                        try { json.decodeFromJsonElement(Product.serializer(), it) }
+                        catch (e: Exception) { null }
+                    }
+                    Log.d("ApiClient", "Products cached: ${list.size}")
+                    cachedProducts = list
+                    list
                 }
-
-                val arr = json.parseToJsonElement(body).jsonArray
-                Log.d("ApiClient", "Products count: ${arr.size}")
-
-                val products = arr.mapNotNull {
-                    try { json.decodeFromJsonElement(Product.serializer(), it) }
-                    catch (e: Exception) { null }
-                }
-
+    
                 val scored = products.mapNotNull { product ->
                     var score = 0
                     val nameLower = product.name.lowercase()
                     val baseLower = product.base_name?.lowercase() ?: ""
-
-                    // Exact full name match
+    
                     if (nameLower == lower) score += 200
-
-                    // Name ends with query word — e.g. "INDIA GATE SUPER RICE" ends with "rice"
                     if (nameLower.endsWith(lower)) score += 150
-
-                    // Name contains query as whole word
                     if (nameLower.contains(" $lower ") ||
                         nameLower.contains(" $lower") ||
                         nameLower.startsWith("$lower ")) score += 120
-
-                    // Name contains query anywhere
                     if (nameLower.contains(lower)) score += 80
-
-                    // Base name ends with query
                     if (baseLower.endsWith(lower)) score += 60
-
-                    // Base name contains query
                     if (baseLower.contains(lower)) score += 40
-
-                    // Keyword exact match
+    
                     product.keywords?.forEach { kw ->
                         val kwLower = kw.lowercase()
                         if (kwLower == lower) score += 30
                         else if (kwLower.contains(lower) || lower.contains(kwLower)) score += 10
                     }
-
-                    // Penalty: product is actually a different category that happens to contain word
-                    // e.g. "RICE BRAN OIL" when searching "rice" — it's oil, not rice
+    
+                    // Penalties for wrong category matches
                     if (lower == "rice" && (nameLower.contains("oil") || nameLower.contains("bran"))) score -= 100
-                    if (lower == "oil" && nameLower.contains("rice bran")) score += 20
                     if (lower == "dal" && nameLower.contains("dalda")) score -= 50
                     if (lower == "milk" && nameLower.contains("milkmaid")) score -= 50
-
+    
                     if (score > 0) Pair(product, score) else null
                 }
-
+    
                 val best = scored.maxByOrNull { it.second }?.first
-                Log.d("ApiClient", "searchProduct('$query') → ${best?.name} (score: ${scored.maxByOrNull { it.second }?.second})")
+                Log.d("ApiClient", "searchProduct('$query') → ${best?.name}")
                 best
-
+    
             } catch (e: Exception) {
                 Log.e("ApiClient", "searchProduct ${e.javaClass.simpleName}: ${e.message}")
                 null
             }
         }
+    }
+    
+    fun clearProductCache() {
+        cachedProducts = null
     }
 
     // ─── CREATE ORDER ─────────────────────────────────────────
