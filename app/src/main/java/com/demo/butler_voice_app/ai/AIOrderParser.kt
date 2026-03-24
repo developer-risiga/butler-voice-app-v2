@@ -46,9 +46,15 @@ object AIOrderParser {
                 val context = UserSessionManager.buildPersonalizationContext()
                 val prompt  = "Extract grocery items from: \"$text\". Context: $context. Return ONLY JSON: {\"language\":\"en\",\"items\":[{\"name\":\"rice\",\"quantity\":2,\"unit\":\"kg\"}]}"
 
+                val messagesArray = org.json.JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("role", "user")
+                        put("content", prompt)
+                    })
+                }
                 val reqBody = JSONObject().apply {
                     put("model", "gpt-4o-mini")
-                    put("messages", listOf(mapOf("role" to "user", "content" to prompt)))
+                    put("messages", messagesArray)
                     put("max_tokens", 200)
                 }.toString().toRequestBody("application/json".toMediaType())
 
