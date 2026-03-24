@@ -1,8 +1,5 @@
 package com.demo.butler_voice_app.api
 
-
-
-
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
 import android.util.Log
@@ -23,8 +20,6 @@ class ApiClient {
     private val json = Json { ignoreUnknownKeys = true }
     private val url get() = SupabaseClient.SUPABASE_URL
     private val key get() = SupabaseClient.SUPABASE_KEY
-
-    // ─── DATA MODELS ──────────────────────────────────────────
 
     @Serializable
     data class Product(
@@ -65,10 +60,10 @@ class ApiClient {
     // ─── PRODUCT SEARCH ───────────────────────────────────────
 
     suspend fun searchProduct(query: String): Product? {
-        return withContext(kotlinx.coroutines.Dispatchers.IO) {
+        return withContext(Dispatchers.IO) {
             try {
                 val lower = query.lowercase().trim()
-    
+
                 val req = Request.Builder()
                     .url("$url/rest/v1/products?select=*")
                     .addHeader("apikey", key)
@@ -76,41 +71,71 @@ class ApiClient {
                     .addHeader("Accept", "application/json")
                     .get()
                     .build()
-    
+
                 val res  = http.newCall(req).execute()
                 val body = res.body?.string() ?: "[]"
-    
-                Log.d("ApiClient", "Products code: ${res.code}, sample: ${body.take(100)}")
-    
+
+                Log.d("ApiClient", "Products code: ${res.code}")
+
                 if (!res.isSuccessful) {
                     Log.e("ApiClient", "Products failed: $body")
                     return@withContext null
                 }
-    
+
                 val arr = json.parseToJsonElement(body).jsonArray
                 Log.d("ApiClient", "Products count: ${arr.size}")
-    
+
                 val products = arr.mapNotNull {
                     try { json.decodeFromJsonElement(Product.serializer(), it) }
                     catch (e: Exception) { null }
                 }
-    
+
                 val scored = products.mapNotNull { product ->
                     var score = 0
-                    if (product.name.lowercase() == lower) score += 100
-                    if (product.name.lowercase().contains(lower)) score += 50
-                    if (product.base_name?.lowercase()?.contains(lower) == true) score += 40
+                    val nameLower = product.name.lowercase()
+                    val baseLower = product.base_name?.lowercase() ?: ""
+
+                    // Exact full name match
+                    if (nameLower == lower) score += 200
+
+                    // Name ends with query word — e.g. "INDIA GATE SUPER RICE" ends with "rice"
+                    if (nameLower.endsWith(lower)) score += 150
+
+                    // Name contains query as whole word
+                    if (nameLower.contains(" $lower ") ||
+                        nameLower.contains(" $lower") ||
+                        nameLower.startsWith("$lower ")) score += 120
+
+                    // Name contains query anywhere
+                    if (nameLower.contains(lower)) score += 80
+
+                    // Base name ends with query
+                    if (baseLower.endsWith(lower)) score += 60
+
+                    // Base name contains query
+                    if (baseLower.contains(lower)) score += 40
+
+                    // Keyword exact match
                     product.keywords?.forEach { kw ->
-                        if (kw.lowercase().contains(lower) ||
-                            lower.contains(kw.lowercase())) score += 30
+                        val kwLower = kw.lowercase()
+                        if (kwLower == lower) score += 30
+                        else if (kwLower.contains(lower) || lower.contains(kwLower)) score += 10
                     }
+
+                    // Penalty: product is actually a different category that happens to contain word
+                    // e.g. "RICE BRAN OIL" when searching "rice" — it's oil, not rice
+                    if (lower == "rice" && (nameLower.contains("oil") || nameLower.contains("bran"))) score -= 100
+                    if (lower == "oil" && nameLower.contains("rice bran")) score += 20
+                    if (lower == "dal" && nameLower.contains("dalda")) score -= 50
+                    if (lower == "milk" && nameLower.contains("milkmaid")) score -= 50
+
                     if (score > 0) Pair(product, score) else null
                 }
-    
+
                 val best = scored.maxByOrNull { it.second }?.first
-                Log.d("ApiClient", "searchProduct('$query') → ${best?.name}")
+                Log.d("ApiClient", "searchProduct('$query') → ${best?.name} (score: ${scored.maxByOrNull { it.second }?.second})")
                 best
-    
+
             } catch (e: Exception) {
                 Log.e("ApiClient", "searchProduct ${e.javaClass.simpleName}: ${e.message}")
                 null
@@ -121,63 +146,68 @@ class ApiClient {
     // ─── CREATE ORDER ─────────────────────────────────────────
 
     suspend fun createOrder(cartItems: List<CartItem>, userId: String): OrderResult {
-    return withContext(Dispatchers.IO) {
-        Log.d("ApiClient", "createOrder called. Cart size: ${cartItems.size}, userId: $userId")
-        
-        val token = UserSessionManager.getToken()
-            ?: throw Exception("Not authenticated — no token")
+        return withContext(Dispatchers.IO) {
+            Log.d("ApiClient", "createOrder called. Cart size: ${cartItems.size}, userId: $userId")
 
-        if (cartItems.isEmpty()) throw Exception("Cart is empty")
+            val token = UserSessionManager.getToken()
+                ?: throw Exception("Not authenticated — no token")
 
-        val totalAmount = cartItems.sumOf { it.product.price * it.quantity }
-        Log.d("ApiClient", "Total amount: $totalAmount")
+            if (cartItems.isEmpty()) throw Exception("Cart is empty")
 
-        val orderJson = """{"user_id":"$userId","status":"confirmed","order_status":"placed","payment_status":"pending","total_amount":$totalAmount}"""
+            val totalAmount = cartItems.sumOf { it.product.price * it.quantity }
+            Log.d("ApiClient", "Total amount: $totalAmount")
 
-        val orderReq = Request.Builder()
-            .url("$url/rest/v1/orders?select=*")
-            .addHeader("apikey", key)
-            .addHeader("Authorization", "Bearer $token")
-            .addHeader("Content-Type", "application/json")
-            .addHeader("Prefer", "return=representation")
-            .post(orderJson.toRequestBody("application/json".toMediaType()))
-            .build()
+            val orderJson = """{"user_id":"$userId","status":"confirmed","order_status":"placed","payment_status":"pending","total_amount":$totalAmount}"""
 
-        val orderRes  = http.newCall(orderReq).execute()
-        val orderBody = orderRes.body?.string() ?: throw Exception("Empty response")
+            val orderReq = Request.Builder()
+                .url("$url/rest/v1/orders?select=*")
+                .addHeader("apikey", key)
+                .addHeader("Authorization", "Bearer $token")
+                .addHeader("Content-Type", "application/json")
+                .addHeader("Prefer", "return=representation")
+                .post(orderJson.toRequestBody("application/json".toMediaType()))
+                .build()
 
-        Log.d("ApiClient", "Order response ${orderRes.code}: $orderBody")
+            val orderRes  = http.newCall(orderReq).execute()
+            val orderBody = orderRes.body?.string() ?: throw Exception("Empty response")
 
-        if (!orderRes.isSuccessful) throw Exception("Order failed ${orderRes.code}: $orderBody")
+            Log.d("ApiClient", "Order response ${orderRes.code}: $orderBody")
 
-        val orderArr    = json.parseToJsonElement(orderBody).jsonArray
-        val orderObj    = orderArr.first().jsonObject
-        val orderId     = orderObj["id"]?.jsonPrimitive?.content ?: throw Exception("No order ID")
-        val orderStatus = orderObj["order_status"]?.jsonPrimitive?.content ?: "placed"
-        val orderTotal  = orderObj["total_amount"]?.jsonPrimitive?.content?.toDoubleOrNull() ?: totalAmount
+            if (!orderRes.isSuccessful) throw Exception("Order failed ${orderRes.code}: $orderBody")
 
-        Log.d("ApiClient", "Order created: $orderId")
+            val orderArr    = json.parseToJsonElement(orderBody).jsonArray
+            val orderObj    = orderArr.first().jsonObject
+            val orderId     = orderObj["id"]?.jsonPrimitive?.content ?: throw Exception("No order ID")
+            val orderStatus = orderObj["order_status"]?.jsonPrimitive?.content ?: "placed"
+            val orderTotal  = orderObj["total_amount"]?.jsonPrimitive?.content
+                ?.toDoubleOrNull() ?: totalAmount
 
-        val itemsJson = "[" + cartItems.joinToString(",") { item ->
-            """{"order_id":"$orderId","product_id":${item.product.id},"product_name":"${item.product.name}","quantity":${item.quantity},"price":${item.product.price}}"""
-        } + "]"
+            Log.d("ApiClient", "Order created: $orderId")
 
-        val itemsReq = Request.Builder()
-            .url("$url/rest/v1/order_items")
-            .addHeader("apikey", key)
-            .addHeader("Authorization", "Bearer $token")
-            .addHeader("Content-Type", "application/json")
-            .addHeader("Prefer", "return=minimal")
-            .post(itemsJson.toRequestBody("application/json".toMediaType()))
-            .build()
+            val itemsJson = "[" + cartItems.joinToString(",") { item ->
+                """{"order_id":"$orderId","product_id":${item.product.id},"product_name":"${item.product.name}","quantity":${item.quantity},"price":${item.product.price}}"""
+            } + "]"
 
-        val itemsRes  = http.newCall(itemsReq).execute()
-        val itemsBody = itemsRes.body?.string()
-        Log.d("ApiClient", "Items insert ${itemsRes.code}: $itemsBody")
+            val itemsReq = Request.Builder()
+                .url("$url/rest/v1/order_items")
+                .addHeader("apikey", key)
+                .addHeader("Authorization", "Bearer $token")
+                .addHeader("Content-Type", "application/json")
+                .addHeader("Prefer", "return=minimal")
+                .post(itemsJson.toRequestBody("application/json".toMediaType()))
+                .build()
 
-        OrderResult(id = orderId, total_amount = orderTotal, order_status = orderStatus)
+            val itemsRes  = http.newCall(itemsReq).execute()
+            val itemsBody = itemsRes.body?.string()
+            Log.d("ApiClient", "Items insert ${itemsRes.code}: $itemsBody")
+
+            OrderResult(
+                id           = orderId,
+                total_amount = orderTotal,
+                order_status = orderStatus
+            )
+        }
     }
-}
 
     // ─── ORDER HISTORY ────────────────────────────────────────
 
