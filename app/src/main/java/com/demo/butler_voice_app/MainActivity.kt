@@ -212,9 +212,19 @@ class MainActivity : ComponentActivity() {
                     return
                 }
                 val cleaned = text.trim()
+                    // English
                     .replace(Regex("my name is\\s*", RegexOption.IGNORE_CASE), "")
                     .replace(Regex("i am\\s*", RegexOption.IGNORE_CASE), "")
-                    .replace(".", "").trim()
+                
+                    // Hindi
+                    .replace("मेरा नाम", "")
+                    .replace("है", "")
+                
+                    // Telugu (optional future-safe)
+                    .replace("నా పేరు", "")
+                
+                    .replace(".", "")
+                    .trim()
 
                 if (cleaned.isBlank()) {
                     speak("Sorry, I didn't catch that. Please say your name.") { startListening() }
@@ -268,8 +278,20 @@ class MainActivity : ComponentActivity() {
                                     setUiState(ButlerUiState.Speaking(msg))
                                     speak(msg) { startListening() }
                                 },
-                                onFailure = {
-                                    speak("Sorry, couldn't create account. Try again.") { startWakeWordListening() }
+                               onFailure = { error ->
+                                    if (error.message?.contains("user_already_exists") == true) {
+                                
+                                        speak("Account already exists. Logging you in...")
+                                
+                                        lifecycleScope.launch {
+                                            UserSessionManager.login(tempEmail, password)
+                                        }
+                                
+                                    } else {
+                                        speak("Sorry, couldn't create account. Try again.") {
+                                            startWakeWordListening()
+                                        }
+                                    }
                                 }
                             )
                     } else {
@@ -312,6 +334,7 @@ class MainActivity : ComponentActivity() {
                 lifecycleScope.launch {
                     val parsed = AIOrderParser.parse(text)
                     LanguageManager.setLanguage(parsed.detectedLanguage)
+                   
 
                     runOnUiThread {
                         if (parsed.items.isEmpty()) {
@@ -585,7 +608,6 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
     
             val lang = LanguageManager.getLanguage()
-    
             val finalText = TranslationManager.translate(text, lang)
     
             Log.d("Butler", "Original: $text")
