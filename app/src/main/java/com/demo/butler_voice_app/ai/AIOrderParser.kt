@@ -33,7 +33,6 @@ object AIOrderParser {
     suspend fun parse(text: String): ParsedOrder {
         return withContext(Dispatchers.IO) {
             try {
-                // Log key info to diagnose the issue
                 val keyLength = BuildConfig.OPENAI_API_KEY.length
                 val keyStart  = BuildConfig.OPENAI_API_KEY.take(10)
                 Log.d("AIParser", "Key length: $keyLength, starts: $keyStart")
@@ -43,8 +42,40 @@ object AIOrderParser {
                     return@withContext ParsedOrder(emptyList())
                 }
 
+                // ✅ NEW: Detect language
+                val detectedLang = LanguageDetector.detect(text)
+
                 val context = UserSessionManager.buildPersonalizationContext()
-                val prompt  = "Extract grocery items from: \"$text\". Context: $context. Return ONLY JSON: {\"language\":\"en\",\"items\":[{\"name\":\"rice\",\"quantity\":2,\"unit\":\"kg\"}]}"
+
+                // ✅ UPDATED PROMPT (Multilingual)
+                val prompt = """
+You are a multilingual grocery assistant.
+
+User input: "$text"
+Detected language: $detectedLang
+
+Context: $context
+
+Tasks:
+1. Understand the input in any Indian language
+2. Translate internally to English
+3. Extract grocery items
+4. Normalize names into English (rice, oil, sugar, milk, dal, etc.)
+5. Extract quantity and unit
+
+Rules:
+- Always return JSON only
+- No markdown
+- If quantity missing → default 1
+
+Return:
+{
+  "language": "$detectedLang",
+  "items": [
+    {"name": "rice", "quantity": 2, "unit": "kg"}
+  ]
+}
+""".trimIndent()
 
                 val messagesArray = org.json.JSONArray().apply {
                     put(JSONObject().apply {
@@ -52,6 +83,7 @@ object AIOrderParser {
                         put("content", prompt)
                     })
                 }
+
                 val reqBody = JSONObject().apply {
                     put("model", "gpt-4o-mini")
                     put("messages", messagesArray)
@@ -76,28 +108,49 @@ object AIOrderParser {
                     return@withContext ParsedOrder(emptyList())
                 }
 
-                val content = JSONObject(resBody)
+                val rawContent = JSONObject(resBody)
                     .getJSONArray("choices")
                     .getJSONObject(0)
                     .getJSONObject("message")
                     .getString("content")
-                    .replace("```json", "").replace("```", "").trim()
 
-                Log.d("AIParser", "Content: $content")
+                // ✅ CLEAN RESPONSE
+                val cleanedContent = rawContent
+                    .replace("```json", "")
+                    .replace("```", "")
+                    .replace("\n", "")
+                    .trim()
 
-                val json     = JSONObject(content)
-                val language = json.optString("language", "en")
+                Log.d("AIParser", "Content: $cleanedContent")
+
+                // ✅ SAFE JSON PARSE
+                val json = try {
+                    JSONObject(cleanedContent)
+                } catch (e: Exception) {
+                    Log.e("AIParser", "Invalid JSON: $cleanedContent")
+                    return@withContext ParsedOrder(emptyList(), detectedLang)
+                }
+
+                val language = json.optString("language", detectedLang)
                 val arr      = json.getJSONArray("items")
                 val items    = mutableListOf<ParsedItem>()
 
                 for (i in 0 until arr.length()) {
                     val obj = arr.getJSONObject(i)
-                    items.add(ParsedItem(
-                        name     = obj.getString("name"),
-                        quantity = obj.optInt("quantity", 1),
-                        unit     = if (obj.has("unit") && !obj.isNull("unit") &&
-                            obj.getString("unit") != "null") obj.getString("unit") else null
-                    ))
+
+                    val rawName = obj.getString("name")
+
+                    items.add(
+                        ParsedItem(
+                            name = ItemNormalizer.normalize(rawName), // ✅ normalization
+                            quantity = obj.optInt("quantity", 1),
+                            unit = if (
+                                obj.has("unit") &&
+                                !obj.isNull("unit") &&
+                                obj.getString("unit") != "null"
+                            ) obj.getString("unit") else null
+                        )
+                    )
                 }
 
                 Log.d("AIParser", "Parsed: ${items.size} items, lang=$language")
@@ -109,4 +162,4 @@ object AIOrderParser {
             }
         }
     }
-}
+}    
