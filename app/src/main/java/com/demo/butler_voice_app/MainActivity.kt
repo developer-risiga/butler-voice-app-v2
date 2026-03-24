@@ -387,20 +387,51 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            AssistantState.ASKING_MORE -> {
+           AssistantState.ASKING_MORE -> {
+
+                val lower = text.lowercase()
+            
                 when {
-                    text.contains("yes") || text.contains("add") ||
-                    text.contains("more") || text.contains("also") ||
-                    text.contains("और") -> {
+            
+                    // ✅ YES / ADD MORE
+                    lower.contains("yes") ||
+                    lower.contains("add") ||
+                    lower.contains("more") ||
+                    lower.contains("also") ||
+                    lower.contains("और") -> {
+            
                         currentState = AssistantState.LISTENING
                         speak("What else would you like?") { startListening() }
                     }
-                    text.contains("no") || text.contains("done") ||
-                    text.contains("nothing") || text.contains("बस") ||
-                    text.contains("that's all") || text.contains("don't") -> {
+            
+                    // ✅ NO / FINISH (FIXED 🔥)
+                    lower.contains("no") ||
+                    lower.contains("done") ||
+                    lower.contains("nothing") ||
+                    lower.contains("that's all") ||
+            
+                    // Hindi
+                    lower.contains("नहीं") ||
+                    lower.contains("नही") ||
+                    lower.contains("मत") ||
+                    lower.contains("बस") ||
+                    lower.contains("और नहीं") ||
+                    lower.contains("कुछ नहीं") ||
+                    lower.contains("नहीं चाहिए") ||
+                    lower.contains("नहीं चाहिए कुछ और") ||
+                    lower.contains("nahi") ||
+            
+                    // Hinglish
+                    lower.contains("nahi chahiye") ||
+                    lower.contains("kuch nahi") ||
+                    lower.contains("aur nahi") -> {
+            
                         readCartAndConfirm()
                     }
-                    else -> speak("Should I add more or place the order?") { startListening() }
+            
+                    else -> {
+                        speak("Should I add more or place the order?") { startListening() }
+                    }
                 }
             }
 
