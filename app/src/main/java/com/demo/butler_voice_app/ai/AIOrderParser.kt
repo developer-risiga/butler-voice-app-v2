@@ -30,7 +30,7 @@ object AIOrderParser {
         return withContext(Dispatchers.IO) {
             try {
                 val context = UserSessionManager.buildPersonalizationContext()
-                val prompt = "You are a grocery assistant. Extract items from: \"$text\". Context: $context. Return ONLY JSON: {\"language\":\"en\",\"items\":[{\"name\":\"rice\",\"quantity\":2,\"unit\":\"kg\"}]}. Rules: extract all items, default quantity 1, null unit if not mentioned, English names only, language=en/hi/te"
+                val prompt = "Extract grocery items from: \"$text\". Context: $context. Return ONLY JSON: {\"language\":\"en\",\"items\":[{\"name\":\"rice\",\"quantity\":2,\"unit\":\"kg\"}]}"
 
                 val reqBody = JSONObject().apply {
                     put("model", "gpt-4o-mini")
@@ -79,10 +79,3 @@ object AIOrderParser {
         }
     }
 }
-```
-
----
-
-**Step 3 — Commit all deletions + updated `AIOrderParser.kt` together** with message:
-```
-fix: remove old AI files, clean AIOrderParser
