@@ -175,12 +175,22 @@ class MainActivity : ComponentActivity() {
 
             AssistantState.ASKING_NAME -> {
                 val cleaned = text.trim()
-                    .replace(Regex("my name is ", RegexOption.IGNORE_CASE), "")
-                    .replace(Regex("i am ", RegexOption.IGNORE_CASE), "")
-                    .replace(".", "").trim()
+                    .replace(Regex("my name is\\s*", RegexOption.IGNORE_CASE), "")
+                    .replace(Regex("i am\\s*", RegexOption.IGNORE_CASE), "")
+                    .replace(Regex("this is\\s*", RegexOption.IGNORE_CASE), "")
+                    .replace(Regex("call me\\s*", RegexOption.IGNORE_CASE), "")
+                    .replace(".", "")
+                    .trim()
+            
+                if (cleaned.isBlank()) {
+                    speak("Sorry, I didn't catch your name. Please say just your name.") { startListening() }
+                    return
+                }
+            
                 tempName = cleaned.split(" ")
                     .firstOrNull { it.length > 1 }
-                    ?.replaceFirstChar { it.uppercase() } ?: cleaned
+                    ?.replaceFirstChar { it.uppercase() } ?: cleaned.replaceFirstChar { it.uppercase() }
+            
                 currentState = AssistantState.ASKING_EMAIL
                 speak("Nice to meet you $tempName! What's your email?") { startListening() }
             }
