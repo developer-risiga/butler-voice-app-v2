@@ -14,30 +14,35 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.util.concurrent.TimeUnit
 
 class SarvamSTTManager(
     private val context: Context,
     private val apiKey: String
 ) {
 
-    private val client = OkHttpClient()
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(8, TimeUnit.SECONDS)
+        .readTimeout(8, TimeUnit.SECONDS)
+        .build()
+
     private var recordingJob: Job? = null
 
-    private val sampleRate = 16000
-    private val bufferSize = AudioRecord.getMinBufferSize(
+    private val sampleRate    = 16000
+    private val bufferSize    = AudioRecord.getMinBufferSize(
         sampleRate,
         AudioFormat.CHANNEL_IN_MONO,
         AudioFormat.ENCODING_PCM_16BIT
     )
 
-    private val silenceThreshold = 600
-    private val silenceFramesNeeded = 25
-    private val maxPreSpeechMs = 4000L
-    private val maxTotalMs = 8000L
+    // ─── TUNED FOR SPEED ──────────────────────────────────────
+    private val silenceThreshold   = 500   // slightly more sensitive
+    private val silenceFramesNeeded = 12   // was 25 → now ~0.8 seconds silence to stop
+    private val maxPreSpeechMs     = 2500L // was 4000 → give up faster if no speech
+    private val maxTotalMs         = 7000L // was 8000 → max recording time
 
     fun startListening(onResult: (String) -> Unit, onError: () -> Unit) {
 
-        // ✅ Permission check
         if (ContextCompat.checkSelfPermission(
                 context,
                 android.Manifest.permission.RECORD_AUDIO
@@ -57,37 +62,37 @@ class SarvamSTTManager(
                 sampleRate,
                 AudioFormat.CHANNEL_IN_MONO,
                 AudioFormat.ENCODING_PCM_16BIT,
-                bufferSize
+                bufferSize * 2
             )
 
             if (recorder.state != AudioRecord.STATE_INITIALIZED) {
                 Log.e("SarvamSTT", "AudioRecord init failed")
-                onError()
+                withContext(Dispatchers.Main) { onError() }
                 return@launch
             }
 
-            val output = ByteArrayOutputStream()
-            val buffer = ShortArray(bufferSize)
+            val output  = ByteArrayOutputStream()
+            val buffer  = ShortArray(bufferSize)
 
-            var silenceCount = 0
-            var hasSpoken = false
+            var silenceCount  = 0
+            var hasSpoken     = false
             var localRecording = true
-
-            val startTime = System.currentTimeMillis()
+            val startTime     = System.currentTimeMillis()
 
             recorder.startRecording()
             Log.d("SarvamSTT", "Recording started")
 
             while (isActive && localRecording) {
-
                 val elapsed = System.currentTimeMillis() - startTime
 
+                // Give up if no speech detected within maxPreSpeechMs
                 if (!hasSpoken && elapsed > maxPreSpeechMs) {
                     Log.d("SarvamSTT", "No speech detected")
                     localRecording = false
                     break
                 }
 
+                // Hard cap on total recording time
                 if (elapsed > maxTotalMs) {
                     localRecording = false
                 }
@@ -95,7 +100,7 @@ class SarvamSTTManager(
                 val read = recorder.read(buffer, 0, buffer.size)
 
                 if (read > 0) {
-
+                    // Write PCM bytes
                     for (i in 0 until read) {
                         output.write(buffer[i].toInt() and 0xFF)
                         output.write((buffer[i].toInt() shr 8) and 0xFF)
@@ -104,11 +109,13 @@ class SarvamSTTManager(
                     val peak = buffer.take(read).maxOf { kotlin.math.abs(it.toInt()) }
 
                     if (peak >= silenceThreshold) {
-                        hasSpoken = true
-                        silenceCount = 0
+                        hasSpoken     = true
+                        silenceCount  = 0
                     } else if (hasSpoken) {
                         silenceCount++
+                        // Stop quickly after speech ends
                         if (silenceCount >= silenceFramesNeeded) {
+                            Log.d("SarvamSTT", "Silence detected, stopping early")
                             localRecording = false
                         }
                     }
@@ -122,14 +129,13 @@ class SarvamSTTManager(
 
             val audioBytes = output.toByteArray()
 
-            if (audioBytes.isEmpty()) {
-                Log.e("SarvamSTT", "Empty audio")
-                onResult("")
+            if (audioBytes.size < 500) {
+                Log.e("SarvamSTT", "No transcript found")
+                withContext(Dispatchers.Main) { onResult("") }
                 return@launch
             }
 
-            Log.d("SarvamSTT", "Sending audio to Sarvam")
-
+            Log.d("SarvamSTT", "Sending audio to Sarvam (${audioBytes.size} bytes)")
             sendToSarvam(buildWav(audioBytes), onResult, onError)
         }
     }
@@ -143,35 +149,30 @@ class SarvamSTTManager(
         val wav = ByteArray(44 + pcm.size)
 
         fun i32(o: Int, v: Int) {
-            wav[o] = (v and 0xFF).toByte()
+            wav[o]     = (v and 0xFF).toByte()
             wav[o + 1] = ((v shr 8) and 0xFF).toByte()
             wav[o + 2] = ((v shr 16) and 0xFF).toByte()
             wav[o + 3] = ((v shr 24) and 0xFF).toByte()
         }
 
         fun i16(o: Int, v: Int) {
-            wav[o] = (v and 0xFF).toByte()
+            wav[o]     = (v and 0xFF).toByte()
             wav[o + 1] = ((v shr 8) and 0xFF).toByte()
         }
 
         "RIFF".toByteArray().copyInto(wav, 0)
         i32(4, 36 + pcm.size)
-
         "WAVE".toByteArray().copyInto(wav, 8)
-
         "fmt ".toByteArray().copyInto(wav, 12)
         i32(16, 16)
         i16(20, 1)
         i16(22, 1)
-
         i32(24, sampleRate)
         i32(28, sampleRate * 2)
         i16(32, 2)
         i16(34, 16)
-
         "data".toByteArray().copyInto(wav, 36)
         i32(40, pcm.size)
-
         pcm.copyInto(wav, 44)
 
         return wav
@@ -182,16 +183,14 @@ class SarvamSTTManager(
         onResult: (String) -> Unit,
         onError: () -> Unit
     ) {
-
         val body = MultipartBody.Builder()
             .setType(MultipartBody.FORM)
             .addFormDataPart(
-                "file",
-                "audio.wav",
+                "file", "audio.wav",
                 wav.toRequestBody("audio/wav".toMediaType())
             )
             .addFormDataPart("model", "saarika:v2.5")
-            .addFormDataPart("language_code", "en-IN")
+            .addFormDataPart("language_code", "unknown") // auto-detect language
             .build()
 
         val request = Request.Builder()
@@ -203,24 +202,22 @@ class SarvamSTTManager(
         client.newCall(request).enqueue(object : Callback {
 
             override fun onFailure(call: Call, e: IOException) {
-                Log.e("SarvamSTT", "API failed", e)
+                Log.e("SarvamSTT", "API failed: ${e.message}")
                 onError()
             }
 
             override fun onResponse(call: Call, response: Response) {
-
                 val raw = response.body?.string() ?: ""
                 Log.d("SarvamSTT", "Response: $raw")
 
                 if (!response.isSuccessful) {
-                    Log.e("SarvamSTT", "HTTP ${response.code}")
+                    Log.e("SarvamSTT", "HTTP ${response.code}: $raw")
                     onResult("")
                     return
                 }
 
                 try {
-                    val json = JSONObject(raw)
-
+                    val json       = JSONObject(raw)
                     val transcript = json.optString("transcript", "")
 
                     if (transcript.isNotEmpty()) {
@@ -230,9 +227,8 @@ class SarvamSTTManager(
                         Log.e("SarvamSTT", "No transcript found")
                         onResult("")
                     }
-
                 } catch (e: Exception) {
-                    Log.e("SarvamSTT", "Parse error", e)
+                    Log.e("SarvamSTT", "Parse error: ${e.message}")
                     onResult("")
                 }
             }
