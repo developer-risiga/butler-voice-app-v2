@@ -121,24 +121,18 @@ class ApiClient {
     // ─── CREATE ORDER ─────────────────────────────────────────
 
     suspend fun createOrder(cartItems: List<CartItem>, userId: String): OrderResult {
+    return withContext(Dispatchers.IO) {
+        Log.d("ApiClient", "createOrder called. Cart size: ${cartItems.size}, userId: $userId")
+        
         val token = UserSessionManager.getToken()
-            ?: throw Exception("Not authenticated")
+            ?: throw Exception("Not authenticated — no token")
+
+        if (cartItems.isEmpty()) throw Exception("Cart is empty")
 
         val totalAmount = cartItems.sumOf { it.product.price * it.quantity }
+        Log.d("ApiClient", "Total amount: $totalAmount")
 
-        // Step 1: Insert order
-        val orderJson = """
-            {
-              "user_id":"$userId",
-              "status":"confirmed",
-              "order_status":"placed",
-              "payment_status":"pending",
-              "total_amount":$totalAmount,
-              "address":"",
-              "latitude":0.0,
-              "longitude":0.0
-            }
-        """.trimIndent()
+        val orderJson = """{"user_id":"$userId","status":"confirmed","order_status":"placed","payment_status":"pending","total_amount":$totalAmount}"""
 
         val orderReq = Request.Builder()
             .url("$url/rest/v1/orders?select=*")
@@ -150,22 +144,20 @@ class ApiClient {
             .build()
 
         val orderRes  = http.newCall(orderReq).execute()
-        val orderBody = orderRes.body?.string() ?: throw Exception("No order response")
+        val orderBody = orderRes.body?.string() ?: throw Exception("Empty response")
 
-        if (!orderRes.isSuccessful) throw Exception("Order insert failed: $orderBody")
+        Log.d("ApiClient", "Order response ${orderRes.code}: $orderBody")
 
-        Log.d("ApiClient", "Order response: $orderBody")
+        if (!orderRes.isSuccessful) throw Exception("Order failed ${orderRes.code}: $orderBody")
 
-        val orderArr   = json.parseToJsonElement(orderBody).jsonArray
-        val orderObj   = orderArr.first().jsonObject
-        val orderId    = orderObj["id"]?.jsonPrimitive?.content ?: throw Exception("No order ID")
+        val orderArr    = json.parseToJsonElement(orderBody).jsonArray
+        val orderObj    = orderArr.first().jsonObject
+        val orderId     = orderObj["id"]?.jsonPrimitive?.content ?: throw Exception("No order ID")
         val orderStatus = orderObj["order_status"]?.jsonPrimitive?.content ?: "placed"
-        val orderTotal  = orderObj["total_amount"]?.jsonPrimitive?.content
-            ?.toDoubleOrNull() ?: totalAmount
+        val orderTotal  = orderObj["total_amount"]?.jsonPrimitive?.content?.toDoubleOrNull() ?: totalAmount
 
         Log.d("ApiClient", "Order created: $orderId")
 
-        // Step 2: Insert order items
         val itemsJson = "[" + cartItems.joinToString(",") { item ->
             """{"order_id":"$orderId","product_id":${item.product.id},"product_name":"${item.product.name}","quantity":${item.quantity},"price":${item.product.price}}"""
         } + "]"
@@ -179,15 +171,13 @@ class ApiClient {
             .post(itemsJson.toRequestBody("application/json".toMediaType()))
             .build()
 
-        val itemsRes = http.newCall(itemsReq).execute()
-        Log.d("ApiClient", "Items insert code: ${itemsRes.code}")
+        val itemsRes  = http.newCall(itemsReq).execute()
+        val itemsBody = itemsRes.body?.string()
+        Log.d("ApiClient", "Items insert ${itemsRes.code}: $itemsBody")
 
-        return OrderResult(
-            id           = orderId,
-            total_amount = orderTotal,
-            order_status = orderStatus
-        )
+        OrderResult(id = orderId, total_amount = orderTotal, order_status = orderStatus)
     }
+}
 
     // ─── ORDER HISTORY ────────────────────────────────────────
 
