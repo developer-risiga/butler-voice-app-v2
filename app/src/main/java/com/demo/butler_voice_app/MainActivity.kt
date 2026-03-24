@@ -187,14 +187,25 @@ class MainActivity : ComponentActivity() {
 
             AssistantState.ASKING_EMAIL -> {
                 tempEmail = text.trim()
-                    .replace(" at ", "@").replace(" dot ", ".")
-                    .replace(" ", "").lowercase().trimEnd('.')
+                    .replace(" at ", "@")
+                    .replace(" dot ", ".")
+                    .replace(" ", "")
+                    .lowercase()
+                    .trimEnd('.', ',', '!')
+                
+                Log.d("Butler", "Email captured: $tempEmail")
                 currentState = AssistantState.ASKING_PASSWORD
                 speak("Got it. Now say your password.") { startListening() }
             }
 
             AssistantState.ASKING_PASSWORD -> {
-                val password = text.trim().replace(" ", "")
+               // Clean password — remove spaces and trailing punctuation
+                val password = text.trim()
+                    .replace(" ", "")
+                    .trimEnd('.', ',', '!')
+                
+                Log.d("Butler", "Password length: ${password.length}")
+                
                 lifecycleScope.launch {
                     if (tempName.isNotBlank()) {
                         setUiState(ButlerUiState.Thinking("Creating account..."))
