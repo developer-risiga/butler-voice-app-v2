@@ -41,7 +41,7 @@ class TTSManager(
 
         val body = JSONObject().apply {
             put("text", text.replace(",", ". ").replace("  ", " "))
-            put("model_id", "eleven_flash_v2")
+            put("model_id", "eleven_flash_v2_5")
         }.toString().toRequestBody("application/json".toMediaType())
 
         val request = Request.Builder()
