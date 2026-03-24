@@ -7,37 +7,36 @@ import kotlinx.coroutines.withContext
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
 import org.json.JSONObject
 
 object TranslationManager {
 
     private val client = OkHttpClient()
 
-    suspend fun translate(
-        text: String,
-        targetLang: String
-    ): String {
+    suspend fun translate(text: String, targetLang: String): String {
         return withContext(Dispatchers.IO) {
             try {
                 if (targetLang == "en") return@withContext text
 
                 val prompt = """
-Translate the following text into $targetLang.
-
-Rules:
-- Keep it natural and conversational
-- Do not add explanations
-- Return ONLY translated text
+Translate this into $targetLang language. Only return translated sentence.
 
 Text:
-"$text"
+$text
 """.trimIndent()
+
+                // ✅ FIX: Proper JSON array (THIS WAS YOUR BUG)
+                val messages = JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("role", "user")
+                        put("content", prompt)
+                    })
+                }
 
                 val body = JSONObject().apply {
                     put("model", "gpt-4o-mini")
-                    put("messages", listOf(
-                        mapOf("role" to "user", "content" to prompt)
-                    ))
+                    put("messages", messages) // ✅ CORRECT FORMAT
                     put("max_tokens", 100)
                 }.toString().toRequestBody("application/json".toMediaType())
 
@@ -62,6 +61,8 @@ Text:
                     .getJSONObject("message")
                     .getString("content")
                     .trim()
+
+                Log.d("Translate", "SUCCESS → $translated")
 
                 translated
 
