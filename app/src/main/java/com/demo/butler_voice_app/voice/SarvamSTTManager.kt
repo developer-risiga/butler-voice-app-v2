@@ -37,9 +37,9 @@ class SarvamSTTManager(
 
     // ─── TUNED FOR SPEED ──────────────────────────────────────
     private val silenceThreshold   = 500   // slightly more sensitive
-    private val silenceFramesNeeded = 12   // was 25 → now ~0.8 seconds silence to stop
-    private val maxPreSpeechMs     = 2500L // was 4000 → give up faster if no speech
-    private val maxTotalMs         = 7000L // was 8000 → max recording time
+    private val silenceFramesNeeded = 20   // was 25 → now ~0.8 seconds silence to stop
+    private val maxPreSpeechMs     = 4000L // was 4000 → give up faster if no speech
+    private val maxTotalMs         = 9000L // was 8000 → max recording time
 
     fun startListening(onResult: (String) -> Unit, onError: () -> Unit) {
 
