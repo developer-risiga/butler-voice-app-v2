@@ -1,36 +1,43 @@
 name: Build Android APK
 
-on:
-  push:
-    branches: [ main ]
+  on:                                                                                                                                                     push:
+      branches: [ main ]                                                                                                                              
+  
+  jobs:
+    build:
+      name: Build APK
+      runs-on: ubuntu-latest
 
-jobs:
-  build:
-    name: Build APK
-    runs-on: ubuntu-latest
+      steps:
 
-    steps:
+        - name: Checkout repository
+          uses: actions/checkout@v4
 
-      - name: Checkout repository
-        uses: actions/checkout@v4
+        - name: Set up JDK
+          uses: actions/setup-java@v4
+          with:
+            distribution: temurin
+            java-version: 17
 
-      - name: Set up JDK
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 17
+        - name: Setup Android SDK
+          uses: android-actions/setup-android@v3
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        - name: Grant permission to gradlew
+          run: chmod +x gradlew
 
-      - name: Grant permission to gradlew
-        run: chmod +x gradlew
+        - name: Build Debug APK
+          env:
+            OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+            SARVAM_API_KEY: ${{ secrets.SARVAM_API_KEY }}
+            ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+            ELEVENLABS_VOICE_ID: ${{ secrets.ELEVENLABS_VOICE_ID }}
+            PORCUPINE_ACCESS_KEY: ${{ secrets.PORCUPINE_ACCESS_KEY }}
+            SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+            SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          run: ./gradlew assembleDebug
 
-      - name: Build Debug APK
-        run: ./gradlew assembleDebug
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: butler-voice-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+        - name: Upload APK
+          uses: actions/upload-artifact@v4
+          with:
+            name: butler-voice-apk
+            path: app/build/outputs/apk/debug/app-debug.apk
