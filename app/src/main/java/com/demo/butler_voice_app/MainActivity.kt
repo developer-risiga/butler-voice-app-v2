@@ -22,6 +22,8 @@ import com.demo.butler_voice_app.ui.ButlerUiState
 import com.demo.butler_voice_app.voice.SarvamSTTManager
 import kotlinx.coroutines.launch
 import com.demo.butler_voice_app.ai.TranslationManager
+import com.demo.butler_voice_app.ai.LanguageDetector
+import com.demo.butler_voice_app.ai.LanguageManager
 
 
 
@@ -38,7 +40,7 @@ class MainActivity : ComponentActivity() {
     private val uiState = mutableStateOf<ButlerUiState>(ButlerUiState.Idle)
     private var tempName = ""
     private var tempEmail = ""
-    private var detectedLanguage = "en"
+    
 
     private lateinit var ttsManager: TTSManager
     private lateinit var sarvamSTT: SarvamSTTManager
@@ -110,7 +112,7 @@ class MainActivity : ComponentActivity() {
         cart.clear()
         tempName = ""
         tempEmail = ""
-        detectedLanguage = "en"
+        LanguageManager.reset()
         apiClient.clearProductCache()
         setUiState(ButlerUiState.Idle)
         Log.d("Butler", "Waiting for wake word...")
@@ -309,7 +311,7 @@ class MainActivity : ComponentActivity() {
 
                 lifecycleScope.launch {
                     val parsed = AIOrderParser.parse(text)
-                    detectedLanguage = parsed.detectedLanguage
+                    LanguageManager.setLanguage(parsed.detectedLanguage)
 
                     runOnUiThread {
                         if (parsed.items.isEmpty()) {
@@ -581,15 +583,18 @@ class MainActivity : ComponentActivity() {
         sarvamSTT.stop()
     
         lifecycleScope.launch {
-            val finalText = TranslationManager.translate(text, detectedLanguage)
+    
+            val lang = LanguageManager.getLanguage()
+    
+            val finalText = TranslationManager.translate(text, lang)
     
             Log.d("Butler", "Original: $text")
-            Log.d("Butler", "Translated ($detectedLanguage): $finalText")
+            Log.d("Butler", "Translated ($lang): $finalText")
     
             runOnUiThread {
                 ttsManager.speak(
                     text = finalText,
-                    language = detectedLanguage,
+                    language = lang,
                     onDone = { onDone?.invoke() }
                 )
             }
