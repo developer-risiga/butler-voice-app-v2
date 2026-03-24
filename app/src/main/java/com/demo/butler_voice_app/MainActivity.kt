@@ -443,6 +443,7 @@ class MainActivity : ComponentActivity() {
 
     private fun repeatLastOrder() {
         lifecycleScope.launch {
+            Log.d("Butler", "Cart size at order time: ${cart.size}, items: ${cart.map { it.product.name }}")
             val userId = UserSessionManager.currentUserId() ?: return@launch
             val orders = apiClient.getOrderHistory(userId)
             if (orders.isEmpty()) {
@@ -532,9 +533,13 @@ class MainActivity : ComponentActivity() {
                 }
 
             } catch (e: Exception) {
-                Log.e("Butler", "Order failed: ${e.message}")
-                speak("Sorry, couldn't place your order. Try again.") {
-                    startWakeWordListening()
+                Log.e("Butler", "Order failed TYPE: ${e.javaClass.simpleName}")
+                Log.e("Butler", "Order failed MSG: ${e.message}")
+                Log.e("Butler", "Order failed CAUSE: ${e.cause?.message}")
+                runOnUiThread {
+                    val msg = "Sorry, couldn't place your order. Try again."
+                    setUiState(ButlerUiState.Error(msg))
+                    speak(msg) { startWakeWordListening() }
                 }
             }
         }
