@@ -146,26 +146,35 @@ class MainActivity : ComponentActivity() {
     private fun startListening() {
         setUiState(ButlerUiState.Listening)
         Log.d("Butler", "Starting STT...")
+    
         sarvamSTT.startListening(
+    
             onResult = { text ->
                 runOnUiThread {
-                    Log.d("Butler", "Transcript: $text")
-                    // 🔥 FIX: detect language EARLY
-                    detectedLanguage = when {
-                        Regex("[\u0900-\u097F]").containsMatchIn(text) -> "hi"
-                        Regex("[\u0C00-\u0C7F]").containsMatchIn(text) -> "te"
-                        else -> "en"
-                    }
-                    if (text.isBlank()) {
+    
+                    val transcript = text.trim()
+    
+                    Log.d("Butler", "Transcript: $transcript")
+    
+                    // ✅ CENTRAL LANGUAGE DETECTION (FIXED)
+                    val detectedLang = LanguageDetector.detect(transcript)
+                    LanguageManager.setLanguage(detectedLang)
+    
+                    Log.d("LANG_DEBUG", "Detected=$detectedLang | Session=${LanguageManager.getLanguage()}")
+    
+                    if (transcript.isBlank()) {
                         val msg = "Sorry, I didn't catch that"
                         setUiState(ButlerUiState.Speaking(msg))
                         speak(msg) { startListening() }
                     } else {
-                        setUiState(ButlerUiState.Thinking(text))
-                        handleCommand(text.lowercase())
+                        setUiState(ButlerUiState.Thinking(transcript))
+    
+                        // ✅ IMPORTANT: DO NOT LOWERCASE BEFORE LOGIC
+                        handleCommand(transcript)
                     }
                 }
             },
+    
             onError = {
                 runOnUiThread {
                     setUiState(ButlerUiState.Error("Couldn't hear you"))
