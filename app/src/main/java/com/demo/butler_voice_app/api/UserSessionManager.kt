@@ -85,64 +85,67 @@ object UserSessionManager {
     // ─── SIGNUP ───────────────────────────────────────────────
 
     suspend fun signup(
-        email: String,
-        password: String,
-        name: String,
-        phone: String
-    ): Result<UserProfile> {
-        return withContext(Dispatchers.IO) {
-            try {
-                val body = """{"email":"$email","password":"$password"}"""
-                    .toRequestBody("application/json".toMediaType())
+    email: String,
+    password: String,
+    name: String,
+    phone: String
+): Result<UserProfile> {
+    return withContext(Dispatchers.IO) {
+        try {
+            Log.d("Session", "Attempting signup: email=$email, password length=${password.length}")
+            
+            val body = """{"email":"$email","password":"$password"}"""
+                .toRequestBody("application/json".toMediaType())
 
-                val req = Request.Builder()
-                    .url("$url/auth/v1/signup")
-                    .addHeader("apikey", key)
-                    .addHeader("Content-Type", "application/json")
-                    .post(body)
-                    .build()
+            val req = Request.Builder()
+                .url("$url/auth/v1/signup")
+                .addHeader("apikey", key)
+                .addHeader("Content-Type", "application/json")
+                .post(body)
+                .build()
 
-                val res = http.newCall(req).execute()
-                val resBody = res.body?.string() ?: ""
+            val res = http.newCall(req).execute()
+            val resBody = res.body?.string() ?: ""
 
-                if (!res.isSuccessful) {
-                    return@withContext Result.failure(Exception("Signup failed: $resBody"))
-                }
+            Log.d("Session", "Signup response ${res.code}: $resBody")
 
-                val obj = json.parseToJsonElement(resBody).jsonObject
-                currentToken = obj["access_token"]?.jsonPrimitive?.content
-                currentUid   = obj["user"]?.jsonObject?.get("id")?.jsonPrimitive?.content
-                    ?: obj["id"]?.jsonPrimitive?.content
-
-                Log.d("Session", "Signup success. UID: $currentUid")
-
-                val userId = currentUid ?: throw Exception("No user ID after signup")
-                val token  = currentToken ?: throw Exception("No token after signup")
-
-                // Insert profile via direct HTTP with JWT
-                val profileJson = """{"id":"$userId","full_name":"$name","phone":"$phone"}"""
-                val profileReq = Request.Builder()
-                    .url("$url/rest/v1/profiles")
-                    .addHeader("apikey", key)
-                    .addHeader("Authorization", "Bearer $token")
-                    .addHeader("Content-Type", "application/json")
-                    .addHeader("Prefer", "return=minimal")
-                    .post(profileJson.toRequestBody("application/json".toMediaType()))
-                    .build()
-
-                val profileRes = http.newCall(profileReq).execute()
-                Log.d("Session", "Profile insert code: ${profileRes.code}")
-
-                val profile = UserProfile(id = userId, full_name = name, phone = phone)
-                currentProfile = profile
-                Result.success(profile)
-
-            } catch (e: Exception) {
-                Log.e("Session", "Signup error: ${e.message}")
-                Result.failure(e)
+            if (!res.isSuccessful) {
+                return@withContext Result.failure(Exception("Signup failed ${res.code}: $resBody"))
             }
+
+            val obj = json.parseToJsonElement(resBody).jsonObject
+            currentToken = obj["access_token"]?.jsonPrimitive?.content
+            currentUid   = obj["user"]?.jsonObject?.get("id")?.jsonPrimitive?.content
+                ?: obj["id"]?.jsonPrimitive?.content
+
+            Log.d("Session", "Signup success. UID: $currentUid, token: ${currentToken?.take(20)}")
+
+            val userId = currentUid ?: throw Exception("No user ID after signup")
+            val token  = currentToken ?: throw Exception("No token after signup")
+
+            val profileJson = """{"id":"$userId","full_name":"$name","phone":"$phone"}"""
+            val profileReq = Request.Builder()
+                .url("$url/rest/v1/profiles")
+                .addHeader("apikey", key)
+                .addHeader("Authorization", "Bearer $token")
+                .addHeader("Content-Type", "application/json")
+                .addHeader("Prefer", "return=minimal")
+                .post(profileJson.toRequestBody("application/json".toMediaType()))
+                .build()
+
+            val profileRes = http.newCall(profileReq).execute()
+            Log.d("Session", "Profile insert code: ${profileRes.code}")
+
+            val profile = UserProfile(id = userId, full_name = name, phone = phone)
+            currentProfile = profile
+            Result.success(profile)
+
+        } catch (e: Exception) {
+            Log.e("Session", "Signup exception ${e.javaClass.simpleName}: ${e.message}")
+            Result.failure(e)
         }
     }
+}
 
     // ─── LOAD PROFILE ─────────────────────────────────────────
 
