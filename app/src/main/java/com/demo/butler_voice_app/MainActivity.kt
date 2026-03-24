@@ -174,16 +174,18 @@ class MainActivity : ComponentActivity() {
             }
 
             AssistantState.ASKING_NAME -> {
+                // If transcript looks like an email, ask again
+                if (text.contains("@") || text.contains(".com") || text.contains(".in")) {
+                    speak("Please say just your first name, not your email.") { startListening() }
+                    return
+                }
                 val cleaned = text.trim()
                     .replace(Regex("my name is\\s*", RegexOption.IGNORE_CASE), "")
                     .replace(Regex("i am\\s*", RegexOption.IGNORE_CASE), "")
-                    .replace(Regex("this is\\s*", RegexOption.IGNORE_CASE), "")
-                    .replace(Regex("call me\\s*", RegexOption.IGNORE_CASE), "")
-                    .replace(".", "")
-                    .trim()
+                    .replace(".", "").trim()
             
                 if (cleaned.isBlank()) {
-                    speak("Sorry, I didn't catch your name. Please say just your name.") { startListening() }
+                    speak("Sorry, I didn't catch that. Please say your name.") { startListening() }
                     return
                 }
             
@@ -195,10 +197,11 @@ class MainActivity : ComponentActivity() {
                 speak("Nice to meet you $tempName! What's your email?") { startListening() }
             }
 
-            AssistantState.ASKING_EMAIL -> {
+           AssistantState.ASKING_EMAIL -> {
                 tempEmail = text.trim()
-                    .replace(" at ", "@")
-                    .replace(" dot ", ".")
+                    .replace(Regex("at the rate", RegexOption.IGNORE_CASE), "@")
+                    .replace(Regex("\\bat\\b", RegexOption.IGNORE_CASE), "@")
+                    .replace(Regex("dot", RegexOption.IGNORE_CASE), ".")
                     .replace(" ", "")
                     .lowercase()
                     .trimEnd('.', ',', '!')
