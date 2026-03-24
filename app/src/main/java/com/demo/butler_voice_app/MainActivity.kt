@@ -75,7 +75,7 @@ class MainActivity : ComponentActivity() {
         ttsManager = TTSManager(
             context = this,
             elevenLabsApiKey = BuildConfig.ELEVENLABS_API_KEY,
-            voiceId = "1Z7Y8o9cvUeWq8oLKgMY"
+            voiceId = "CpLFIATEbkaZdJr01erZ"
         )
 
         ttsManager.init {
