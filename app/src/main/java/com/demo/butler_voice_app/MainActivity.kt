@@ -559,9 +559,12 @@ class MainActivity : ComponentActivity() {
 
     private fun speak(text: String, onDone: (() -> Unit)? = null) {
         sarvamSTT.stop()
-        ttsManager.speak(text, detectedLanguage) {
-            onDone?.invoke()
-        }
+    
+        ttsManager.speak(
+            text = text,
+            language = detectedLanguage,
+            onDone = { onDone?.invoke() }
+        )
     }
 
     override fun onPause()   { super.onPause();   porcupine.stop(); sarvamSTT.stop() }
