@@ -13,17 +13,24 @@ import org.json.JSONObject
 import java.io.File
 import java.io.IOException
 import java.util.Locale
+import java.util.concurrent.TimeUnit
 
 class TTSManager(
     private val context: Context,
     private val elevenLabsApiKey: String,
     private val voiceId: String
 ) {
-    private val client = OkHttpClient()
+
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(5, TimeUnit.SECONDS)
+        .readTimeout(5, TimeUnit.SECONDS)
+        .build()
+
     private var fallbackTts: TextToSpeech? = null
     private var fallbackReady = false
     private var mediaPlayer: MediaPlayer? = null
 
+    // ✅ INIT
     fun init(onReady: () -> Unit) {
         fallbackTts = TextToSpeech(
             context,
@@ -31,17 +38,21 @@ class TTSManager(
                 fallbackReady = status == TextToSpeech.SUCCESS
                 if (fallbackReady) fallbackTts?.language = Locale.US
                 onReady()
-            },
-            "com.reecedunn.espeak"
+            }
         )
     }
 
-    fun speak(text: String, onDone: (() -> Unit)? = null) {
-        Log.d("TTS", "ElevenLabs → \"$text\"")
+    // ✅ MAIN SPEAK FUNCTION
+    fun speak(
+        text: String,
+        language: String = "en",
+        onDone: (() -> Unit)? = null
+    ) {
+        Log.d("TTS", "ElevenLabs [$language] → \"$text\"")
 
         val body = JSONObject().apply {
-            put("text", text.replace(",", ". ").replace("  ", " "))
-            put("model_id", "eleven_flash_v2_5")
+            put("text", text)
+            put("model_id", "eleven_multilingual_v2")
         }.toString().toRequestBody("application/json".toMediaType())
 
         val request = Request.Builder()
@@ -52,73 +63,96 @@ class TTSManager(
             .build()
 
         client.newCall(request).enqueue(object : Callback {
+
             override fun onFailure(call: Call, e: IOException) {
-                Log.e("TTS", "ElevenLabs failed: ${e.message} → fallback to eSpeak")
-                speakFallback(text, onDone)
+                Log.e("TTS", "ElevenLabs failed: ${e.message}")
+                speakFallback(text, language, onDone)
             }
 
             override fun onResponse(call: Call, response: Response) {
                 if (!response.isSuccessful) {
-                    val errorBody = response.body?.string() ?: "no body"
-                    Log.e("TTS", "ElevenLabs error ${response.code}: $errorBody → fallback to eSpeak")
-                    speakFallback(text, onDone)
+                    val error = response.body?.string()
+                    Log.e("TTS", "Error ${response.code}: $error")
+                    speakFallback(text, language, onDone)
                     return
                 }
+
                 val bytes = response.body?.bytes()
                 if (bytes == null) {
-                    Log.e("TTS", "ElevenLabs empty response → fallback to eSpeak")
-                    speakFallback(text, onDone)
+                    speakFallback(text, language, onDone)
                     return
                 }
-                Log.d("TTS", "ElevenLabs success, playing audio")
-                playAudio(text, bytes, onDone)
+
+                playAudio(bytes, onDone)
             }
         })
     }
 
-    private fun playAudio(text: String, bytes: ByteArray, onDone: (() -> Unit)?) {
+    // ✅ PLAY AUDIO
+    private fun playAudio(bytes: ByteArray, onDone: (() -> Unit)?) {
         try {
-            val tempFile = File.createTempFile("tts_", ".mp3", context.cacheDir)
-            tempFile.writeBytes(bytes)
+            val file = File.createTempFile("tts_", ".mp3", context.cacheDir)
+            file.writeBytes(bytes)
 
             mediaPlayer?.release()
             mediaPlayer = MediaPlayer().apply {
-                setDataSource(tempFile.absolutePath)
+                setDataSource(file.absolutePath)
                 prepare()
                 setOnCompletionListener {
                     it.release()
                     mediaPlayer = null
-                    tempFile.delete()
+                    file.delete()
                     onDone?.invoke()
                 }
                 start()
             }
+
         } catch (e: Exception) {
-            Log.e("TTS", "Playback error: ${e.message} → fallback to eSpeak")
-            speakFallback(text, onDone)
+            Log.e("TTS", "Playback error: ${e.message}")
+            onDone?.invoke()
         }
     }
 
-    private fun speakFallback(text: String, onDone: (() -> Unit)?) {
-        Log.d("TTS", "eSpeak → \"$text\"")
+    // ✅ FALLBACK TTS
+    private fun speakFallback(
+        text: String,
+        language: String,
+        onDone: (() -> Unit)?
+    ) {
+        Log.d("TTS", "Fallback [$language] → \"$text\"")
+
         if (!fallbackReady) {
             onDone?.invoke()
             return
         }
-        val id = "ESPEAK_TTS"
+
+        fallbackTts?.language = getLocale(language)
+
+        val id = "FALLBACK_TTS"
+
         if (onDone != null) {
             fallbackTts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                 override fun onStart(utteranceId: String?) {}
-                override fun onError(utteranceId: String?) {
+                override fun onDone(utteranceId: String?) {
                     if (utteranceId == id) onDone()
                 }
-                override fun onDone(utteranceId: String?) {
+                override fun onError(utteranceId: String?) {
                     if (utteranceId == id) onDone()
                 }
             })
             fallbackTts?.speak(text, TextToSpeech.QUEUE_FLUSH, Bundle(), id)
         } else {
             fallbackTts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, null)
+        }
+    }
+
+    // ✅ LANGUAGE LOCALE
+    private fun getLocale(language: String): Locale {
+        return when (language) {
+            "hi" -> Locale("hi", "IN")
+            "te" -> Locale("te", "IN")
+            "ta" -> Locale("ta", "IN")
+            else -> Locale.US
         }
     }
 
