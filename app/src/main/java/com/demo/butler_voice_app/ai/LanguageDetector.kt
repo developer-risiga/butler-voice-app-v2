@@ -3,12 +3,23 @@ package com.demo.butler_voice_app.ai
 object LanguageDetector {
 
     fun detect(text: String): String {
-        return when {
-            Regex("[\u0900-\u097F]").containsMatchIn(text) -> "hi" // Hindi
-            Regex("[\u0C00-\u0C7F]").containsMatchIn(text) -> "te" // Telugu
-            Regex("[\u0B80-\u0BFF]").containsMatchIn(text) -> "ta" // Tamil
-            Regex("[\u0D00-\u0D7F]").containsMatchIn(text) -> "ml" // Malayalam
-            else -> "en"
+        if (text.isBlank()) return "en"
+
+        val hindiCount   = Regex("[\u0900-\u097F]").findAll(text).count()
+        val teluguCount  = Regex("[\u0C00-\u0C7F]").findAll(text).count()
+        val tamilCount   = Regex("[\u0B80-\u0BFF]").findAll(text).count()
+        val malayCount   = Regex("[\u0D00-\u0D7F]").findAll(text).count()
+        val totalNonEn   = hindiCount + teluguCount + tamilCount + malayCount
+
+        // Only switch language if clearly non-English (>2 non-Latin chars)
+        if (totalNonEn < 3) return "en"
+
+        return when (maxOf(hindiCount, teluguCount, tamilCount, malayCount)) {
+            hindiCount  -> "hi"
+            teluguCount -> "te"
+            tamilCount  -> "ta"
+            malayCount  -> "ml"
+            else        -> "en"
         }
     }
 }
