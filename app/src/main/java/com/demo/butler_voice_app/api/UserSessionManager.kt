@@ -183,23 +183,23 @@ object UserSessionManager {
             currentProfile = profile
 
             // Fetch purchase history
-            purchaseHistory = try {
+           purchaseHistory = try {
                 val req = Request.Builder()
-                    .url("$url/rest/v1/order_items?select=product_name&limit=5")
+                    .url("$url/rest/v1/order_items?select=product_name,order_id,orders(user_id)&orders.user_id=eq.$userId&limit=10")
                     .addHeader("apikey", key)
                     .addHeader("Authorization", "Bearer $token")
                     .addHeader("Accept", "application/json")
                     .get()
                     .build()
-
+            
                 val res  = http.newCall(req).execute()
                 val body = res.body?.string() ?: "[]"
                 val arr  = json.parseToJsonElement(body).jsonArray
-
+            
                 arr.mapNotNull {
                     val name = it.jsonObject["product_name"]?.jsonPrimitive?.content
                     if (!name.isNullOrBlank()) PurchaseSummary(product_name = name) else null
-                }
+                }.distinctBy { it.product_name }
             } catch (e: Exception) {
                 Log.e("Session", "History load error: ${e.message}")
                 emptyList()
