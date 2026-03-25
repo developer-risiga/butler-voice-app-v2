@@ -21,16 +21,17 @@ object TranslationManager {
     private val cache = LinkedHashMap<String, String>(100, 0.75f, true)
 
     private val langNames = mapOf(
-        "hi" to "Hindi",
-        "te" to "Telugu",
-        "ta" to "Tamil",
-        "ml" to "Malayalam"
+        "hi" to "Hindi", "te" to "Telugu",
+        "ta" to "Tamil", "ml" to "Malayalam", "pa" to "Punjabi"
     )
 
-    // Regex to find proper nouns (capitalized words) and order IDs
-    private val properNounRegex = Regex("""(?<!\. )[A-Z][a-z]{1,20}""")
-    private val orderIdRegex    = Regex("""[A-Z0-9]{5,8}""")
-    private val productNameRegex = Regex("""[A-Z][A-Z ]{3,}""") // ALL CAPS product names
+    private val commonWords = setOf(
+        "Your", "You", "The", "What", "Would", "Like", "Order",
+        "Added", "Anything", "Welcome", "Back", "Last", "Time",
+        "Account", "Created", "Great", "Nice", "Meet", "Got",
+        "Now", "Say", "Please", "Sorry", "Could", "Find",
+        "Place", "Shall", "Thank", "Goodbye", "Tell", "Say"
+    )
 
     suspend fun translate(text: String, targetLang: String): String {
         if (targetLang == "en" || text.isBlank()) return text
@@ -42,52 +43,37 @@ object TranslationManager {
             try {
                 val langName = langNames[targetLang] ?: return@withContext text
 
-                // ── STEP 1: Extract tokens that must NOT be translated ──
-                val protectedTokens = mutableMapOf<String, String>()
-                var counter = 0
+                // Build placeholder map
+                val placeholderMap = mutableMapOf<String, String>()
                 var processedText = text
+                var counter = 0
 
-                // Protect ALL CAPS product names (e.g. "INDIA GATE SUPER RICE")
-                productNameRegex.findAll(text).forEach { match ->
-                    val token   = match.value.trim()
-                    if (token.length > 3) {
-                        val placeholder = "PROT${counter++}"
-                        protectedTokens[placeholder] = token
-                        processedText = processedText.replace(token, placeholder)
+                fun protect(token: String) {
+                    if (token.isNotBlank() && !placeholderMap.containsValue(token)) {
+                        val ph = "XX${counter}XX"
+                        counter++
+                        placeholderMap[ph] = token
+                        processedText = processedText.replace(token, ph)
                     }
                 }
 
-                // Protect order IDs (e.g. "3BDB79")
-                orderIdRegex.findAll(processedText).forEach { match ->
-                    val token = match.value
-                    if (!protectedTokens.containsValue(token)) {
-                        val placeholder = "PROT${counter++}"
-                        protectedTokens[placeholder] = token
-                        processedText = processedText.replace(token, placeholder)
-                    }
+                // 1. ALL CAPS product names e.g. "INDIA GATE SUPER RICE"
+                Regex("""\b[A-Z][A-Z ]{2,}\b""").findAll(text).forEach {
+                    protect(it.value.trim())
                 }
 
-                // Protect capitalized proper nouns (e.g. "Third", "Pushpak")
-                properNounRegex.findAll(processedText).forEach { match ->
-                    val token = match.value
-                    // Don't protect common English words
-                    val commonWords = setOf(
-                        "Your", "You", "The", "What", "Would", "Like", "Order",
-                        "Added", "Anything", "Welcome", "Back", "Last", "Time",
-                        "Account", "Created", "Great", "Nice", "Meet", "Got",
-                        "Now", "Say", "Please", "Sorry", "Could", "Find",
-                        "Place", "Shall", "Thank", "Goodbye", "Using", "Backup"
-                    )
-                    if (token !in commonWords && !protectedTokens.containsValue(token)) {
-                        val placeholder = "PROT${counter++}"
-                        protectedTokens[placeholder] = token
-                        processedText = processedText.replace(token, placeholder)
-                    }
+                // 2. Order IDs e.g. "BOR-100021"
+                Regex("""\b[A-Z]{2,}-\d+\b""").findAll(text).forEach {
+                    protect(it.value)
                 }
 
-                // ── STEP 2: Translate with placeholders ──
-                val prompt = """Translate ONLY the following text into $langName.
-Keep all placeholder tokens (PROT0, PROT1, etc.) exactly as-is — do NOT translate them.
+                // 3. Capitalized proper names e.g. "Pushp", "Messi"
+                Regex("""\b[A-Z][a-z]{1,19}\b""").findAll(text).forEach {
+                    if (it.value !in commonWords) protect(it.value)
+                }
+
+                val prompt = """Translate to $langName. Use informal friendly tone (like a voice assistant talking to a friend).
+IMPORTANT: Keep all XX0XX, XX1XX, XX2XX placeholders EXACTLY unchanged.
 Return ONLY the translated sentence. No quotes, no explanation.
 Text: $processedText"""
 
@@ -116,7 +102,7 @@ Text: $processedText"""
                 val responseBody = response.body?.string() ?: return@withContext text
 
                 if (!response.isSuccessful) {
-                    Log.e("Translate", "Error ${response.code}: $responseBody")
+                    Log.e("Translate", "Error ${response.code}")
                     return@withContext text
                 }
 
@@ -126,16 +112,20 @@ Text: $processedText"""
                     .getJSONObject("message")
                     .getString("content")
                     .trim()
-                    .removePrefix("\"")
-                    .removeSuffix("\"")
+                    .removePrefix("\"").removeSuffix("\"")
 
-                // ── STEP 3: Restore protected tokens ──
-                protectedTokens.forEach { (placeholder, original) ->
-                    translated = translated.replace(placeholder, original)
+                // Restore all placeholders
+                placeholderMap.forEach { (ph, original) ->
+                    translated = translated.replace(ph, original)
+                }
+
+                // Safety fallback — if any placeholder leaked through
+                if (Regex("XX\\d+XX").containsMatchIn(translated)) {
+                    Log.w("Translate", "Placeholder leak detected, using original")
+                    return@withContext text
                 }
 
                 Log.d("Translate", "SUCCESS → $translated")
-
                 if (cache.size >= 100) cache.remove(cache.keys.first())
                 cache[cacheKey] = translated
                 translated
