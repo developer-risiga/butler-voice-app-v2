@@ -37,7 +37,8 @@ class ApiClient {
     data class OrderResult(
         val id: String,
         val total_amount: Double,
-        val order_status: String
+        val order_status: String,
+        val public_id: String = ""
     )
 
     @Serializable
@@ -180,6 +181,7 @@ private var cachedProducts: List<Product>? = null
             val orderArr    = json.parseToJsonElement(orderBody).jsonArray
             val orderObj    = orderArr.first().jsonObject
             val orderId     = orderObj["id"]?.jsonPrimitive?.content ?: throw Exception("No order ID")
+            val publicId    = orderObj["public_id"]?.jsonPrimitive?.content ?: ""
             val orderStatus = orderObj["order_status"]?.jsonPrimitive?.content ?: "placed"
             val orderTotal  = orderObj["total_amount"]?.jsonPrimitive?.content
                 ?.toDoubleOrNull() ?: totalAmount
@@ -206,7 +208,8 @@ private var cachedProducts: List<Product>? = null
             OrderResult(
                 id           = orderId,
                 total_amount = orderTotal,
-                order_status = orderStatus
+                order_status = orderStatus,
+                 public_id    = publicId
             )
         }
     }
