@@ -76,7 +76,7 @@ class MainActivity : ComponentActivity() {
         ttsManager = TTSManager(
             context          = this,
             elevenLabsApiKey = BuildConfig.ELEVENLABS_API_KEY,
-            voiceId          = "CpLFIATEbkaZdJr01erZ"
+            voiceId          = "RwXLkVKnRloV1UPh3Ccx"
         )
 
         ttsManager.init { checkMicPermission() }
@@ -662,7 +662,11 @@ class MainActivity : ComponentActivity() {
                 }
 
                 val orderResult = apiClient.createOrder(cart, userId)
-                val shortId     = orderResult.id.takeLast(6).uppercase()
+                val shortId     = if (orderResult.public_id.isNotBlank()) {
+                    orderResult.public_id
+                } else {
+                    orderResult.id.takeLast(6).uppercase()
+                }
                 val firstName   = UserSessionManager.currentProfile?.full_name
                     ?.split(" ")?.first() ?: ""
 
@@ -678,9 +682,11 @@ class MainActivity : ComponentActivity() {
                 speak(farewell) {
                     cart.clear()
                     UserSessionManager.logout()
+                    // Stop porcupine FIRST, then restart after delay
+                    porcupine.stop()
                     Handler(Looper.getMainLooper()).postDelayed({
                         startWakeWordListening()
-                    }, 3000)
+                    }, 2000)
                 }
 
             } catch (e: Exception) {
@@ -710,14 +716,14 @@ class MainActivity : ComponentActivity() {
 
     private fun speak(text: String, onDone: (() -> Unit)? = null) {
         sarvamSTT.stop()
-
+    
         lifecycleScope.launch {
             val lang      = LanguageManager.getLanguage()
             val finalText = TranslationManager.translate(text, lang)
-
+    
             Log.d("Butler", "Original: $text")
             Log.d("Butler", "Translated ($lang): $finalText")
-
+    
             runOnUiThread {
                 setUiState(ButlerUiState.Speaking(finalText))
                 ttsManager.speak(
