@@ -6,6 +6,7 @@ import ai.picovoice.porcupine.PorcupineManager
 import ai.picovoice.porcupine.PorcupineManagerCallback
 import ai.picovoice.porcupine.PorcupineException
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 
 class WakeWordManager(
     context: Context,
@@ -14,21 +15,22 @@ class WakeWordManager(
 ) {
     private val appContext = context.applicationContext
     private var porcupineManager: PorcupineManager? = null
-    private var isRunning = false
+    private val isRunning = AtomicBoolean(false)
+    private val isStopped = AtomicBoolean(true)
 
     @Synchronized
     fun start() {
-        if (isRunning) {
+        if (isRunning.get()) {
             Log.d("Porcupine", "⚠️ Already running")
             return
         }
         if (accessKey.isBlank()) {
-            Log.e("Porcupine", "❌ AccessKey is missing!")
+            Log.e("Porcupine", "❌ AccessKey missing")
             return
         }
         try {
-            // Always clean up before creating new instance
             safeDelete()
+            isStopped.set(false)
 
             val keywordPath = copyAssetToFile("Hey-Butler_en_android_v4_0_0.ppn")
 
@@ -37,48 +39,48 @@ class WakeWordManager(
                 .setKeywordPath(keywordPath)
                 .setSensitivity(0.7f)
                 .build(appContext, PorcupineManagerCallback {
-                    Log.d("Porcupine", "✅ Hey Butler detected!")
-                    onWakeWordDetected()
+                    if (!isStopped.get()) {
+                        Log.d("Porcupine", "✅ Hey Butler detected!")
+                        onWakeWordDetected()
+                    }
                 })
 
             porcupineManager!!.start()
-            isRunning = true
+            isRunning.set(true)
             Log.d("Porcupine", "🚀 Wake word engine started")
 
         } catch (e: PorcupineException) {
-            Log.e("Porcupine", "❌ Failed to start: ${e.message}")
+            Log.e("Porcupine", "❌ Start failed: ${e.message}")
             safeDelete()
         } catch (e: Exception) {
-            Log.e("Porcupine", "❌ Unexpected error: ${e.message}")
+            Log.e("Porcupine", "❌ Unexpected: ${e.message}")
             safeDelete()
         }
     }
 
     @Synchronized
     fun stop() {
-        if (!isRunning && porcupineManager == null) {
+        if (!isRunning.get() && porcupineManager == null) {
             Log.d("Porcupine", "⚠️ Already stopped")
             return
         }
+        // Set flag FIRST — prevents any in-flight callbacks from firing
+        isStopped.set(true)
         try {
             porcupineManager?.stop()
             Log.d("Porcupine", "🛑 Wake word engine stopped")
         } catch (e: Exception) {
-            Log.e("Porcupine", "❌ Error stopping: ${e.message}")
+            Log.w("Porcupine", "stop() warning: ${e.message}")
         } finally {
             safeDelete()
-            isRunning = false
+            isRunning.set(false)
         }
     }
 
     private fun safeDelete() {
-        try {
-            porcupineManager?.delete()
-        } catch (e: Exception) {
-            Log.w("Porcupine", "delete() warning: ${e.message}")
-        } finally {
-            porcupineManager = null
-        }
+        try { porcupineManager?.delete() }
+        catch (e: Exception) { Log.w("Porcupine", "delete() warning: ${e.message}") }
+        finally { porcupineManager = null }
     }
 
     private fun copyAssetToFile(assetName: String): String {
