@@ -1,7 +1,5 @@
 package com.demo.butler_voice_app
 
-
-
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import android.Manifest
@@ -42,13 +40,13 @@ class MainActivity : ComponentActivity() {
     private var tempName  = ""
     private var tempEmail = ""
 
-    private lateinit var ttsManager  : TTSManager
-    private lateinit var sarvamSTT   : SarvamSTTManager
-    private lateinit var porcupine   : WakeWordManager
+    private lateinit var ttsManager : TTSManager
+    private lateinit var sarvamSTT  : SarvamSTTManager
+    private lateinit var porcupine  : WakeWordManager
 
-    private val apiClient    = ApiClient()
-    private val cart         = mutableListOf<CartItem>()
-    private var tempProduct  : ApiClient.Product? = null
+    private val apiClient   = ApiClient()
+    private val cart        = mutableListOf<CartItem>()
+    private var tempProduct : ApiClient.Product? = null
     private var currentState = AssistantState.IDLE
 
     private val recordRequestCode = 101
@@ -68,7 +66,7 @@ class MainActivity : ComponentActivity() {
         }
 
         val audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
-        audioManager.mode          = AudioManager.MODE_NORMAL
+        audioManager.mode             = AudioManager.MODE_NORMAL
         audioManager.isSpeakerphoneOn = true
 
         sarvamSTT = SarvamSTTManager(this, BuildConfig.SARVAM_API_KEY)
@@ -85,7 +83,6 @@ class MainActivity : ComponentActivity() {
 
         ttsManager.init { checkMicPermission() }
 
-        // Pre-warm cache
         lifecycleScope.launch {
             try { apiClient.searchProduct("rice"); Log.d("Butler", "Cache warmed") }
             catch (_: Exception) {}
@@ -150,11 +147,9 @@ class MainActivity : ComponentActivity() {
                 "Welcome back $name! What would you like to order?"
             }
             speak(greeting) { startListening() }
-
         } else {
             currentState = AssistantState.ASKING_IS_NEW_USER
-            val msg = "Welcome! Are you a new customer or have you ordered before?"
-            speak(msg) { startListening() }
+            speak("Welcome! Are you a new customer or have you ordered before?") { startListening() }
         }
     }
 
@@ -170,7 +165,6 @@ class MainActivity : ComponentActivity() {
                     val transcript = text.trim()
                     Log.d("Butler", "Transcript: $transcript")
 
-                    // Detect language — only update if clearly non-English script
                     val detectedLang = LanguageDetector.detect(transcript)
                     LanguageManager.setLanguage(detectedLang)
                     Log.d("LANG_DEBUG", "Detected=$detectedLang | Session=${LanguageManager.getLanguage()}")
@@ -195,21 +189,22 @@ class MainActivity : ComponentActivity() {
     // ─── COMMAND HANDLER ──────────────────────────────────────
 
     private fun handleCommand(text: String) {
-        val lower = text.lowercase().trim()
+        val lower   = text.lowercase().trim()
+        val cleaned = lower.replace(Regex("[,।.!?]"), "").trim()
 
         when (currentState) {
 
             AssistantState.ASKING_IS_NEW_USER -> {
                 when {
-                    lower.contains("new")      || lower.contains("first") ||
-                    lower.contains("register") || lower.contains("नया")   ||
-                    lower.contains("नई") -> {
+                    cleaned.contains("new")      || cleaned.contains("first")    ||
+                    cleaned.contains("register") || cleaned.contains("नया")      ||
+                    cleaned.contains("नई") -> {
                         currentState = AssistantState.ASKING_NAME
                         speak("Great! What's your name?") { startListening() }
                     }
-                    lower.contains("returning") || lower.contains("before") ||
-                    lower.contains("yes")       || lower.contains("have")   ||
-                    lower.contains("पहले")      || lower.contains("login")  -> {
+                    cleaned.contains("returning") || cleaned.contains("before")  ||
+                    cleaned.contains("yes")       || cleaned.contains("have")    ||
+                    cleaned.contains("पहले")      || cleaned.contains("login")   -> {
                         currentState = AssistantState.ASKING_EMAIL
                         speak("Welcome back! Please say your email.") { startListening() }
                     }
@@ -218,34 +213,33 @@ class MainActivity : ComponentActivity() {
             }
 
             AssistantState.ASKING_NAME -> {
-                // If transcript is non-Latin script, translate it to English first
                 lifecycleScope.launch {
                     val translatedForParsing = if (LanguageDetector.detect(text) != "en") {
                         translateToEnglish(text)
                     } else {
                         text
                     }
-            
-                    val cleaned = translatedForParsing.trim()
-                        .replace(Regex("my name is\\s*",   RegexOption.IGNORE_CASE), "")
-                        .replace(Regex("i am\\s*",         RegexOption.IGNORE_CASE), "")
-                        .replace(Regex("mera naam\\s*",    RegexOption.IGNORE_CASE), "")
-                        .replace(Regex("my name's\\s*",    RegexOption.IGNORE_CASE), "")
+
+                    val nameText = translatedForParsing.trim()
+                        .replace(Regex("my name is\\s*",  RegexOption.IGNORE_CASE), "")
+                        .replace(Regex("i am\\s*",        RegexOption.IGNORE_CASE), "")
+                        .replace(Regex("mera naam\\s*",   RegexOption.IGNORE_CASE), "")
+                        .replace(Regex("my name's\\s*",   RegexOption.IGNORE_CASE), "")
                         .replace(".", "")
                         .trim()
-            
-                    if (cleaned.isBlank() || cleaned.contains("@")) {
+
+                    if (nameText.isBlank() || nameText.contains("@")) {
                         runOnUiThread {
                             speak("Please say just your first name.") { startListening() }
                         }
                         return@launch
                     }
-            
-                    tempName = cleaned.split(" ")
+
+                    tempName = nameText.split(" ")
                         .firstOrNull { it.length > 1 }
                         ?.replaceFirstChar { it.uppercase() }
-                        ?: cleaned.replaceFirstChar { it.uppercase() }
-            
+                        ?: nameText.replaceFirstChar { it.uppercase() }
+
                     runOnUiThread {
                         currentState = AssistantState.ASKING_EMAIL
                         speak("Nice to meet you $tempName! What's your email?") { startListening() }
@@ -254,7 +248,7 @@ class MainActivity : ComponentActivity() {
             }
 
             AssistantState.ASKING_EMAIL -> {
-                val cleaned = text.trim()
+                val emailText = text.trim()
                     .replace(Regex("at the rate", RegexOption.IGNORE_CASE), "@")
                     .replace(Regex("\\bat\\b",    RegexOption.IGNORE_CASE), "@")
                     .replace(Regex("dot com",     RegexOption.IGNORE_CASE), ".com")
@@ -265,14 +259,14 @@ class MainActivity : ComponentActivity() {
                     .lowercase()
                     .trimEnd('.', ',', '!')
 
-                if (!cleaned.contains("@") || !cleaned.contains(".") || cleaned.length < 6) {
+                if (!emailText.contains("@") || !emailText.contains(".") || emailText.length < 6) {
                     speak("I didn't catch a valid email. Please say it again, like john at gmail dot com.") {
                         startListening()
                     }
                     return
                 }
 
-                tempEmail = cleaned
+                tempEmail = emailText
                 Log.d("Butler", "Email captured: $tempEmail")
                 currentState = AssistantState.ASKING_PASSWORD
                 speak("Got it. Now say your password.") { startListening() }
@@ -287,7 +281,6 @@ class MainActivity : ComponentActivity() {
 
                 lifecycleScope.launch {
                     if (tempName.isNotBlank()) {
-                        // SIGNUP
                         setUiState(ButlerUiState.Thinking("Creating account..."))
                         UserSessionManager.signup(tempEmail, password, tempName, "")
                             .fold(
@@ -302,9 +295,7 @@ class MainActivity : ComponentActivity() {
                                     if (error.message?.contains("user_already_exists") == true ||
                                         error.message?.contains("already registered") == true) {
                                         speak("Account already exists. Logging you in.") {
-                                            lifecycleScope.launch {
-                                                doLogin(tempEmail, password)
-                                            }
+                                            lifecycleScope.launch { doLogin(tempEmail, password) }
                                         }
                                     } else {
                                         speak("Sorry, couldn't create account. Try again.") {
@@ -314,7 +305,6 @@ class MainActivity : ComponentActivity() {
                                 }
                             )
                     } else {
-                        // LOGIN
                         setUiState(ButlerUiState.Thinking("Logging in..."))
                         doLogin(tempEmail, password)
                     }
@@ -328,8 +318,7 @@ class MainActivity : ComponentActivity() {
                 val product = tempProduct
                 if (product != null) {
                     cart.add(CartItem(product, qty))
-                    val msg = "Added $qty ${product.name}. Anything else?"
-                    speak(msg) {
+                    speak("Added $qty ${product.name}. Anything else?") {
                         currentState = AssistantState.ASKING_MORE
                         startListening()
                     }
@@ -341,26 +330,25 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            AssistantState.ASKING_MORE -> handleAskingMore(lower, text)
+            AssistantState.ASKING_MORE -> handleAskingMore(cleaned, text)
 
             AssistantState.CONFIRMING -> {
-                val s = lower.replace(Regex("[,।.!?]"), "").trim()
                 when {
-                    s.contains("yes")        || s.contains("place")       ||
-                    s.contains("confirm")    || s.contains("ok")          ||
-                    s.contains("haan")       || s.contains("हाँ")         ||
-                    s.contains("हां")        || s.contains("theek")       ||
-                    s.contains("kar do")     || s.contains("karo")        ||
-                    s.contains("order kar")  || s.contains("ऑर्डर कर")   ||
-                    s.contains("bilkul")     || s.contains("zaroor")      ||
-                    s.contains("done")       || s.contains("proceed")     ||
-                    s.contains("हा")         || s.contains("चलो")         -> {
+                    cleaned.contains("yes")        || cleaned.contains("place")      ||
+                    cleaned.contains("confirm")    || cleaned.contains("ok")         ||
+                    cleaned.contains("haan")       || cleaned.contains("हाँ")        ||
+                    cleaned.contains("हां")        || cleaned.contains("theek")      ||
+                    cleaned.contains("kar do")     || cleaned.contains("karo")       ||
+                    cleaned.contains("order kar")  || cleaned.contains("ऑर्डर कर")  ||
+                    cleaned.contains("bilkul")     || cleaned.contains("zaroor")     ||
+                    cleaned.contains("done")       || cleaned.contains("proceed")    ||
+                    cleaned.contains("हा")         || cleaned.contains("चलो")        -> {
                         placeOrder()
                     }
-                    s.contains("no")         || s.contains("cancel")      ||
-                    s.contains("nahi")       || s.contains("नहीं")        ||
-                    s.contains("mat")        || s.contains("band kar")    ||
-                    s.contains("ruk")        -> {
+                    cleaned.contains("no")         || cleaned.contains("cancel")     ||
+                    cleaned.contains("nahi")       || cleaned.contains("नहीं")       ||
+                    cleaned.contains("mat")        || cleaned.contains("band kar")   ||
+                    cleaned.contains("ruk")        -> {
                         speak("Order cancelled. Goodbye!") {
                             cart.clear()
                             UserSessionManager.logout()
@@ -371,30 +359,31 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-    // ─── ORDER INTENT (LISTENING state) ───────────────────────
+            else -> {}
+        }
+    }
+
+    // ─── ORDER INTENT ─────────────────────────────────────────
 
     private fun handleOrderIntent(text: String, lower: String) {
+        val cleaned = lower.replace(Regex("[,।.!?]"), "").trim()
 
-        // Shortcut keywords BEFORE AI call
-        if (lower.contains("repeat") || lower.contains("same as last") ||
-            lower.contains("previous order")) {
+        if (cleaned.contains("repeat") || cleaned.contains("same as last") ||
+            cleaned.contains("previous order")) {
             repeatLastOrder(); return
         }
-        if (lower.contains("my orders") || lower.contains("history") ||
-            lower.contains("what did i order")) {
+        if (cleaned.contains("my orders") || cleaned.contains("history") ||
+            cleaned.contains("what did i order")) {
             readOrderHistory(); return
         }
 
-        // NO-MORE shortcuts — strip punctuation first
-        val cleanedLower = lower.replace(Regex("[,।.!?]"), "").trim()
-        if (isNoMoreIntent(cleanedLower)) {
+        // Check no-more BEFORE going to AI
+        if (isNoMoreIntent(cleaned)) {
             readCartAndConfirm(); return
         }
 
         lifecycleScope.launch {
             val parsed = AIOrderParser.parse(text)
-
-            // Update language from AI parse result
             LanguageManager.setLanguage(parsed.detectedLanguage)
 
             runOnUiThread {
@@ -407,17 +396,13 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                     "confirm" -> {
-                        if (currentState == AssistantState.CONFIRMING) {
-                            placeOrder()
-                        } else {
-                            readCartAndConfirm()
-                        }
+                        if (currentState == AssistantState.CONFIRMING) placeOrder()
+                        else readCartAndConfirm()
                     }
                     "history" -> readOrderHistory()
                     else -> {
-                        // "order" intent
                         if (parsed.items.isEmpty()) {
-                            val fallback = keywordFallback(lower)
+                            val fallback = keywordFallback(cleaned)
                             if (fallback != null) {
                                 searchAndAskQuantity(fallback)
                             } else {
@@ -435,13 +420,10 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // ─── ASKING_MORE HANDLER ──────────────────────────────────
+    // ─── ASKING MORE ──────────────────────────────────────────
 
-    private fun handleAskingMore(lower: String, originalText: String) {
-        val cleaned = lower.replace(Regex("[,।.!?]"), "").trim()
-    
+    private fun handleAskingMore(cleaned: String, originalText: String) {
         when {
-            // User wants to add more
             cleaned.contains("yes")   || cleaned.contains("add")   ||
             cleaned.contains("more")  || cleaned.contains("also")  ||
             cleaned.contains("और")    || cleaned.contains("aur")   ||
@@ -449,11 +431,9 @@ class MainActivity : ComponentActivity() {
                 currentState = AssistantState.LISTENING
                 speak("What else would you like?") { startListening() }
             }
-    
-            // User is DONE — checked before else
+
             isNoMoreIntent(cleaned) -> readCartAndConfirm()
-    
-            // Direct new item or AI fallback
+
             else -> {
                 lifecycleScope.launch {
                     val parsed = AIOrderParser.parse(originalText)
@@ -463,11 +443,9 @@ class MainActivity : ComponentActivity() {
                             parsed.intent == "cancel"  -> readCartAndConfirm()
                             parsed.items.isNotEmpty()  -> {
                                 currentState = AssistantState.LISTENING
-                                handleOrderIntent(originalText, cleaned)
+                                handleOrderIntent(originalText, originalText.lowercase())
                             }
-                            else -> speak("Should I add more or place the order?") {
-                                startListening()
-                            }
+                            else -> speak("Should I add more or place the order?") { startListening() }
                         }
                     }
                 }
@@ -475,21 +453,18 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // ─── NO-MORE INTENT DETECTION ─────────────────────────────
+    // ─── NO-MORE INTENT ───────────────────────────────────────
 
-    private fun isNoMoreIntent(lower: String): Boolean {
-        val s = lower.replace(Regex("[,।.!?]"), "").trim()
+    private fun isNoMoreIntent(s: String): Boolean {
         val phrases = listOf(
             "no", "nope", "done", "nothing", "finish", "stop",
             "place order", "checkout", "place it", "that is all",
             "that's all", "thats all", "i am done", "im done",
-            // Hindi
             "नहीं", "नही", "बस", "हो गया", "इतना ही", "बस इतना",
             "और नहीं", "और कुछ नहीं", "कुछ नहीं", "नहीं चाहिए",
             "नहीं चाहूंगा", "नहीं चाहूँगा", "कुछ और नहीं",
             "और कुछ नहीं चाहिए", "और कुछ नहीं चाहूंगा",
             "कुछ और नहीं चाहिए", "नहीं बस",
-            // Hinglish
             "bas", "nahi", "nahi chahiye", "kuch nahi", "aur nahi",
             "khatam", "order kar do", "order karo", "kar do",
             "theek hai bas", "bas ho gaya", "nahi chahhunga"
@@ -499,33 +474,33 @@ class MainActivity : ComponentActivity() {
 
     // ─── KEYWORD FALLBACK ─────────────────────────────────────
 
-    private fun keywordFallback(lower: String): String? = when {
-        lower.contains("rice")    || lower.contains("चावल")   -> "rice"
-        lower.contains("oil")     || lower.contains("तेल")    -> "oil"
-        lower.contains("sugar")   || lower.contains("चीनी")   -> "sugar"
-        lower.contains("wheat")   || lower.contains("गेहूं")  -> "wheat"
-        lower.contains("dal")     || lower.contains("दाल")    -> "dal"
-        lower.contains("salt")    || lower.contains("नमक")    -> "salt"
-        lower.contains("milk")    || lower.contains("दूध")    -> "milk"
-        lower.contains("flour")   || lower.contains("atta")   -> "wheat flour"
-        lower.contains("tea")     || lower.contains("चाय")    -> "tea"
-        lower.contains("coffee")                               -> "coffee"
-        lower.contains("ghee")                                 -> "ghee"
-        lower.contains("butter")                               -> "butter"
-        lower.contains("paneer")                               -> "paneer"
-        lower.contains("eggs")    || lower.contains("egg")    -> "eggs"
-        lower.contains("bread")                                -> "bread"
-        lower.contains("sooji")   || lower.contains("semolina") -> "semolina"
-        lower.contains("maida")                                -> "maida"
-        lower.contains("poha")                                 -> "poha"
-        lower.contains("chana")                                -> "chickpeas"
-        lower.contains("rajma")                                -> "kidney beans"
-        lower.contains("turmeric") || lower.contains("haldi") -> "turmeric"
-        lower.contains("jeera")   || lower.contains("cumin")  -> "cumin"
+    private fun keywordFallback(s: String): String? = when {
+        s.contains("rice")    || s.contains("चावल")    -> "rice"
+        s.contains("oil")     || s.contains("तेल")     -> "oil"
+        s.contains("sugar")   || s.contains("चीनी")    -> "sugar"
+        s.contains("wheat")   || s.contains("गेहूं")   -> "wheat"
+        s.contains("dal")     || s.contains("दाल")     -> "dal"
+        s.contains("salt")    || s.contains("नमक")     -> "salt"
+        s.contains("milk")    || s.contains("दूध")     -> "milk"
+        s.contains("flour")   || s.contains("atta")    -> "wheat flour"
+        s.contains("tea")     || s.contains("चाय")     -> "tea"
+        s.contains("coffee")                            -> "coffee"
+        s.contains("ghee")                              -> "ghee"
+        s.contains("butter")                            -> "butter"
+        s.contains("paneer")                            -> "paneer"
+        s.contains("eggs")    || s.contains("egg")     -> "eggs"
+        s.contains("bread")                             -> "bread"
+        s.contains("sooji")   || s.contains("semolina") -> "semolina"
+        s.contains("maida")                             -> "maida"
+        s.contains("poha")                              -> "poha"
+        s.contains("chana")                             -> "chickpeas"
+        s.contains("rajma")                             -> "kidney beans"
+        s.contains("turmeric") || s.contains("haldi")  -> "turmeric"
+        s.contains("jeera")   || s.contains("cumin")   -> "cumin"
         else -> null
     }
 
-    // ─── LOGIN HELPER ─────────────────────────────────────────
+    // ─── LOGIN ────────────────────────────────────────────────
 
     private suspend fun doLogin(email: String, password: String) {
         UserSessionManager.login(email, password)
@@ -557,7 +532,7 @@ class MainActivity : ComponentActivity() {
 
     private fun searchAndAskQuantity(
         itemName: String,
-        qty: Int    = 0,
+        qty: Int      = 0,
         unit: String? = null
     ) {
         lifecycleScope.launch {
@@ -596,8 +571,8 @@ class MainActivity : ComponentActivity() {
             val product = apiClient.searchProduct(item.name)
             if (product != null) {
                 cart.add(CartItem(product, item.quantity))
-                val unit = item.unit ?: product.unit ?: ""
-                val qty  = if (unit.isNotBlank()) "${item.quantity} $unit" else "${item.quantity}"
+                val u   = item.unit ?: product.unit ?: ""
+                val qty = if (u.isNotBlank()) "${item.quantity} $u" else "${item.quantity}"
                 found.add("$qty ${product.name}")
             } else {
                 notFound.add(item.name)
@@ -713,7 +688,7 @@ class MainActivity : ComponentActivity() {
                 speak(farewell) {
                     cart.clear()
                     UserSessionManager.logout()
-                    // startWakeWordListening() already calls porcupine.stop() — don't double-call
+                    // startWakeWordListening already calls porcupine.stop() — no double call
                     Handler(Looper.getMainLooper()).postDelayed({
                         startWakeWordListening()
                     }, 2500)
@@ -744,16 +719,13 @@ class MainActivity : ComponentActivity() {
 
     private fun setUiState(s: ButlerUiState) = runOnUiThread { uiState.value = s }
 
-   private fun speak(text: String, onDone: (() -> Unit)? = null) {
+    private fun speak(text: String, onDone: (() -> Unit)? = null) {
         sarvamSTT.stop()
-    
         lifecycleScope.launch {
             val lang      = LanguageManager.getLanguage()
             val finalText = TranslationManager.translate(text, lang)
-    
             Log.d("Butler", "Original: $text")
             Log.d("Butler", "Translated ($lang): $finalText")
-    
             runOnUiThread {
                 setUiState(ButlerUiState.Speaking(finalText))
                 ttsManager.speak(
@@ -803,4 +775,3 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
-
