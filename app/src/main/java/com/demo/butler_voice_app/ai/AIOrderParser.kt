@@ -44,32 +44,37 @@ object AIOrderParser {
                 val context      = UserSessionManager.buildPersonalizationContext()
 
                 val prompt = """
-You are a multilingual Indian grocery ordering assistant.
-
-User said: "$text"
-Detected language: $detectedLang
-Customer context: $context
-
-Your task:
-1. Detect the INTENT:
-   - "order"    → customer wants to buy something
-   - "no_more"  → customer is done adding items (no, done, nothing, bas, nahi, kuch nahi, aur nahi, नहीं, बस, और कुछ नहीं)
-   - "confirm"  → customer confirms the order (yes, haan, theek hai, ok, place it)
-   - "cancel"   → customer cancels (cancel, no, nahi)
-   - "history"  → customer asks about past orders
-2. If intent is "order", extract items with quantity and unit
-3. Normalize item names to English
-4. Default quantity = 1, default unit = "kg" for staples
-
-Return ONLY valid JSON (no markdown, no preamble):
-{
-  "language": "$detectedLang",
-  "intent": "order",
-  "items": [
-    {"name": "rice", "quantity": 2, "unit": "kg"}
-  ]
-}
-""".trimIndent()
+                You are an AI assistant for a multilingual grocery voice ordering system.
+                
+                User said: "$text"
+                Detected language: $detectedLang
+                Customer context: $context
+                
+                Your task:
+                
+                1. Identify INTENT:
+                   - "order"         → user wants to order/add items
+                   - "add_more"      → user wants to add more items
+                   - "finish_order"  → user is done adding (no, nahi, bas, nothing, aur nahi, कुछ नहीं, नहीं चाहिए)
+                   - "confirm_order" → user confirms order (yes, haan, kar do, place order)
+                   - "cancel_order"  → user cancels order
+                   - "history"       → asking past orders
+                   - "unknown"       → unclear
+                
+                2. Extract items ONLY if intent = order/add_more
+                
+                3. Normalize item names to English
+                
+                Return ONLY JSON:
+                
+                {
+                  "language": "$detectedLang",
+                  "intent": "order",
+                  "items": [
+                    {"name": "rice", "quantity": 1, "unit": "kg"}
+                  ]
+                }
+                """.trimIndent()
 
                 val messagesArray = org.json.JSONArray().apply {
                     put(JSONObject().apply {
