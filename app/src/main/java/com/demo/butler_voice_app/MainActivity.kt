@@ -344,14 +344,23 @@ class MainActivity : ComponentActivity() {
             AssistantState.ASKING_MORE -> handleAskingMore(lower, text)
 
             AssistantState.CONFIRMING -> {
+                val s = lower.replace(Regex("[,।.!?]"), "").trim()
                 when {
-                    lower.contains("yes")     || lower.contains("place")   ||
-                    lower.contains("confirm") || lower.contains("ok")      ||
-                    lower.contains("haan")    || lower.contains("हाँ")     ||
-                    lower.contains("हां")     || lower.contains("theek")   -> placeOrder()
-
-                    lower.contains("no")      || lower.contains("cancel")  ||
-                    lower.contains("nahi")    || lower.contains("नहीं")    -> {
+                    s.contains("yes")        || s.contains("place")       ||
+                    s.contains("confirm")    || s.contains("ok")          ||
+                    s.contains("haan")       || s.contains("हाँ")         ||
+                    s.contains("हां")        || s.contains("theek")       ||
+                    s.contains("kar do")     || s.contains("karo")        ||
+                    s.contains("order kar")  || s.contains("ऑर्डर कर")   ||
+                    s.contains("bilkul")     || s.contains("zaroor")      ||
+                    s.contains("done")       || s.contains("proceed")     ||
+                    s.contains("हा")         || s.contains("चलो")         -> {
+                        placeOrder()
+                    }
+                    s.contains("no")         || s.contains("cancel")      ||
+                    s.contains("nahi")       || s.contains("नहीं")        ||
+                    s.contains("mat")        || s.contains("band kar")    ||
+                    s.contains("ruk")        -> {
                         speak("Order cancelled. Goodbye!") {
                             cart.clear()
                             UserSessionManager.logout()
@@ -361,10 +370,6 @@ class MainActivity : ComponentActivity() {
                     else -> speak("Say yes to confirm or no to cancel.") { startListening() }
                 }
             }
-
-            else -> {}
-        }
-    }
 
     // ─── ORDER INTENT (LISTENING state) ───────────────────────
 
@@ -380,8 +385,9 @@ class MainActivity : ComponentActivity() {
             readOrderHistory(); return
         }
 
-        // NO-MORE shortcuts (catches Hindi without AI call)
-        if (isNoMoreIntent(lower)) {
+        // NO-MORE shortcuts — strip punctuation first
+        val cleanedLower = lower.replace(Regex("[,।.!?]"), "").trim()
+        if (isNoMoreIntent(cleanedLower)) {
             readCartAndConfirm(); return
         }
 
@@ -432,33 +438,35 @@ class MainActivity : ComponentActivity() {
     // ─── ASKING_MORE HANDLER ──────────────────────────────────
 
     private fun handleAskingMore(lower: String, originalText: String) {
+        val cleaned = lower.replace(Regex("[,।.!?]"), "").trim()
+    
         when {
-            // User wants to add more items
-            lower.contains("yes")  || lower.contains("add")    ||
-            lower.contains("more") || lower.contains("also")   ||
-            lower.contains("और")   || lower.contains("aur")    -> {
+            // User wants to add more
+            cleaned.contains("yes")   || cleaned.contains("add")   ||
+            cleaned.contains("more")  || cleaned.contains("also")  ||
+            cleaned.contains("और")    || cleaned.contains("aur")   ||
+            cleaned.contains("हाँ")   || cleaned.contains("haan")  -> {
                 currentState = AssistantState.LISTENING
                 speak("What else would you like?") { startListening() }
             }
-
-            // User is done
-            isNoMoreIntent(lower) -> readCartAndConfirm()
-
-            // Could be a new item order directly (e.g., user says "sugar" instead of "yes")
+    
+            // User is DONE — checked before else
+            isNoMoreIntent(cleaned) -> readCartAndConfirm()
+    
+            // Direct new item or AI fallback
             else -> {
-                // Try to parse as a new order item
                 lifecycleScope.launch {
                     val parsed = AIOrderParser.parse(originalText)
                     runOnUiThread {
                         when {
-                            parsed.intent == "no_more" -> readCartAndConfirm()
+                            parsed.intent == "no_more" ||
+                            parsed.intent == "cancel"  -> readCartAndConfirm()
                             parsed.items.isNotEmpty()  -> {
-                                // They gave us a new item directly
                                 currentState = AssistantState.LISTENING
-                                handleOrderIntent(originalText, lower)
+                                handleOrderIntent(originalText, cleaned)
                             }
-                            else -> {
-                                speak("Should I add more items or place the order?") { startListening() }
+                            else -> speak("Should I add more or place the order?") {
+                                startListening()
                             }
                         }
                     }
@@ -470,15 +478,23 @@ class MainActivity : ComponentActivity() {
     // ─── NO-MORE INTENT DETECTION ─────────────────────────────
 
     private fun isNoMoreIntent(lower: String): Boolean {
-        val noMorePhrases = listOf(
-            "no", "done", "nothing", "that's all", "thats all", "finish",
-            "place order", "checkout", "order karo", "place it",
+        val s = lower.replace(Regex("[,।.!?]"), "").trim()
+        val phrases = listOf(
+            "no", "nope", "done", "nothing", "finish", "stop",
+            "place order", "checkout", "place it", "that is all",
+            "that's all", "thats all", "i am done", "im done",
             // Hindi
-            "नहीं", "नही", "बस", "हो गया", "इतना ही", "kuch nahi",
-            "और कुछ नहीं", "और नहीं", "नहीं चाहिए", "bas", "nahi",
-            "aur nahi", "khatam", "theek hai", "order kar do"
+            "नहीं", "नही", "बस", "हो गया", "इतना ही", "बस इतना",
+            "और नहीं", "और कुछ नहीं", "कुछ नहीं", "नहीं चाहिए",
+            "नहीं चाहूंगा", "नहीं चाहूँगा", "कुछ और नहीं",
+            "और कुछ नहीं चाहिए", "और कुछ नहीं चाहूंगा",
+            "कुछ और नहीं चाहिए", "नहीं बस",
+            // Hinglish
+            "bas", "nahi", "nahi chahiye", "kuch nahi", "aur nahi",
+            "khatam", "order kar do", "order karo", "kar do",
+            "theek hai bas", "bas ho gaya", "nahi chahhunga"
         )
-        return noMorePhrases.any { lower.contains(it) }
+        return phrases.any { s.contains(it) }
     }
 
     // ─── KEYWORD FALLBACK ─────────────────────────────────────
@@ -697,11 +713,10 @@ class MainActivity : ComponentActivity() {
                 speak(farewell) {
                     cart.clear()
                     UserSessionManager.logout()
-                    // Stop porcupine FIRST, then restart after delay
-                    porcupine.stop()
+                    // startWakeWordListening() already calls porcupine.stop() — don't double-call
                     Handler(Looper.getMainLooper()).postDelayed({
                         startWakeWordListening()
-                    }, 2000)
+                    }, 2500)
                 }
 
             } catch (e: Exception) {
