@@ -2,24 +2,17 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Internet for backend API -->
     <uses-permission android:name="android.permission.INTERNET"/>
-
-    <!-- Microphone access -->
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
-
-    <!-- Optional but recommended for device stability -->
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
 
-    <!-- Allow visibility to eSpeak TTS engine on Android 11+ -->
     <queries>
         <package android:name="com.reecedunn.espeak" />
         <intent>
             <action android:name="android.intent.action.TTS_SERVICE" />
         </intent>
     </queries>
-
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
 
     <application
         android:allowBackup="true"
@@ -36,18 +29,15 @@
             android:name=".MainActivity"
             android:exported="true"
             android:label="@string/app_name"
+            android:launchMode="singleTop"
             android:theme="@style/Theme.Butlervoiceapp">
-
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.HOME" />
-                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.HOME"/>
+                <category android:name="android.intent.category.DEFAULT"/>
             </intent-filter>
-
         </activity>
-
 
         <receiver
             android:name=".BootReceiver"
@@ -59,5 +49,4 @@
         </receiver>
 
     </application>
-
 </manifest>
