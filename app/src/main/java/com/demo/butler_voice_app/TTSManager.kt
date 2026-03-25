@@ -73,9 +73,25 @@ class TTSManager(
 
         client.newCall(request).enqueue(object : Callback {
 
+            // Replace onFailure:
             override fun onFailure(call: Call, e: IOException) {
-                Log.e("TTS", "ElevenLabs failed: ${e.message}")
-                speakFallback(text, language, onDone)
+                Log.e("TTS", "ElevenLabs failed (attempt 1): ${e.message}")
+                // Retry once
+                client.newCall(request).enqueue(object : Callback {
+                    override fun onFailure(call: Call, e: IOException) {
+                        Log.e("TTS", "ElevenLabs failed (attempt 2): ${e.message}")
+                        speakFallback(text, language, onDone)
+                    }
+                    override fun onResponse(call: Call, response: Response) {
+                        if (!response.isSuccessful) {
+                            speakFallback(text, language, onDone)
+                            return
+                        }
+                        val bytes = response.body?.bytes()
+                        if (bytes == null) { speakFallback(text, language, onDone); return }
+                        playAudio(bytes, onDone)
+                    }
+                })
             }
 
             override fun onResponse(call: Call, response: Response) {
