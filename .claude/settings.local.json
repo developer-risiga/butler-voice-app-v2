@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find W:Butlervoice-DeviceKethan_Sirmy_testingbutler-voice-first-app -maxdepth 2 -type f -name README.md -o -name build.gradle* -o -name package.json -o -name AndroidManifest.xml -o -name .cursorrules -o -name copilot-instructions.md)",
+      "WebFetch(domain:repo.maven.apache.org)"
+    ]
+  }
+}
