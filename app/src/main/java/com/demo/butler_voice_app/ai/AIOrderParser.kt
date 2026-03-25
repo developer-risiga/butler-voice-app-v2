@@ -20,7 +20,8 @@ data class ParsedItem(
 
 data class ParsedOrder(
     val items: List<ParsedItem>,
-    val detectedLanguage: String = "en"
+    val detectedLanguage: String = "en",
+    val intent: String = "order"   // "order" | "no_more" | "confirm" | "cancel" | "history"
 )
 
 object AIOrderParser {
@@ -34,43 +35,36 @@ object AIOrderParser {
         return withContext(Dispatchers.IO) {
             try {
                 val keyLength = BuildConfig.OPENAI_API_KEY.length
-                val keyStart  = BuildConfig.OPENAI_API_KEY.take(10)
-                Log.d("AIParser", "Key length: $keyLength, starts: $keyStart")
-
                 if (keyLength < 20 || BuildConfig.OPENAI_API_KEY == "DUMMY_KEY") {
-                    Log.e("AIParser", "OpenAI key is missing or dummy — skipping AI parse")
+                    Log.e("AIParser", "OpenAI key missing")
                     return@withContext ParsedOrder(emptyList())
                 }
 
-                // ✅ NEW: Detect language
                 val detectedLang = LanguageDetector.detect(text)
+                val context      = UserSessionManager.buildPersonalizationContext()
 
-                val context = UserSessionManager.buildPersonalizationContext()
-
-                // ✅ UPDATED PROMPT (Multilingual)
                 val prompt = """
-You are a multilingual grocery assistant.
+You are a multilingual Indian grocery ordering assistant.
 
-User input: "$text"
+User said: "$text"
 Detected language: $detectedLang
+Customer context: $context
 
-Context: $context
+Your task:
+1. Detect the INTENT:
+   - "order"    → customer wants to buy something
+   - "no_more"  → customer is done adding items (no, done, nothing, bas, nahi, kuch nahi, aur nahi, नहीं, बस, और कुछ नहीं)
+   - "confirm"  → customer confirms the order (yes, haan, theek hai, ok, place it)
+   - "cancel"   → customer cancels (cancel, no, nahi)
+   - "history"  → customer asks about past orders
+2. If intent is "order", extract items with quantity and unit
+3. Normalize item names to English
+4. Default quantity = 1, default unit = "kg" for staples
 
-Tasks:
-1. Understand the input in any Indian language
-2. Translate internally to English
-3. Extract grocery items
-4. Normalize names into English (rice, oil, sugar, milk, dal, etc.)
-5. Extract quantity and unit
-
-Rules:
-- Always return JSON only
-- No markdown
-- If quantity missing → default 1
-
-Return:
+Return ONLY valid JSON (no markdown, no preamble):
 {
   "language": "$detectedLang",
+  "intent": "order",
   "items": [
     {"name": "rice", "quantity": 2, "unit": "kg"}
   ]
@@ -87,7 +81,8 @@ Return:
                 val reqBody = JSONObject().apply {
                     put("model", "gpt-4o-mini")
                     put("messages", messagesArray)
-                    put("max_tokens", 200)
+                    put("max_tokens", 300)
+                    put("temperature", 0.1)
                 }.toString().toRequestBody("application/json".toMediaType())
 
                 val req = Request.Builder()
@@ -100,8 +95,7 @@ Return:
                 val res     = http.newCall(req).execute()
                 val resBody = res.body?.string() ?: return@withContext ParsedOrder(emptyList())
 
-                Log.d("AIParser", "OpenAI response code: ${res.code}")
-                Log.d("AIParser", "OpenAI response: $resBody")
+                Log.d("AIParser", "OpenAI code: ${res.code}")
 
                 if (!res.isSuccessful) {
                     Log.e("AIParser", "OpenAI error ${res.code}: $resBody")
@@ -114,16 +108,14 @@ Return:
                     .getJSONObject("message")
                     .getString("content")
 
-                // ✅ CLEAN RESPONSE
                 val cleanedContent = rawContent
                     .replace("```json", "")
                     .replace("```", "")
-                    .replace("\n", "")
+                    .replace("\n", " ")
                     .trim()
 
                 Log.d("AIParser", "Content: $cleanedContent")
 
-                // ✅ SAFE JSON PARSE
                 val json = try {
                     JSONObject(cleanedContent)
                 } catch (e: Exception) {
@@ -132,29 +124,28 @@ Return:
                 }
 
                 val language = json.optString("language", detectedLang)
-                val arr      = json.getJSONArray("items")
+                val intent   = json.optString("intent", "order")
+                val arr      = json.optJSONArray("items") ?: org.json.JSONArray()
                 val items    = mutableListOf<ParsedItem>()
 
                 for (i in 0 until arr.length()) {
-                    val obj = arr.getJSONObject(i)
-
-                    val rawName = obj.getString("name")
+                    val obj     = arr.getJSONObject(i)
+                    val rawName = obj.optString("name", "")
+                    if (rawName.isBlank()) continue
 
                     items.add(
                         ParsedItem(
-                            name = ItemNormalizer.normalize(rawName), // ✅ normalization
+                            name     = ItemNormalizer.normalize(rawName),
                             quantity = obj.optInt("quantity", 1),
-                            unit = if (
-                                obj.has("unit") &&
-                                !obj.isNull("unit") &&
-                                obj.getString("unit") != "null"
-                            ) obj.getString("unit") else null
+                            unit     = obj.optString("unit").takeIf {
+                                it.isNotBlank() && it != "null"
+                            }
                         )
                     )
                 }
 
-                Log.d("AIParser", "Parsed: ${items.size} items, lang=$language")
-                ParsedOrder(items, language)
+                Log.d("AIParser", "Parsed: ${items.size} items, intent=$intent, lang=$language")
+                ParsedOrder(items, language, intent)
 
             } catch (e: Exception) {
                 Log.e("AIParser", "Exception ${e.javaClass.simpleName}: ${e.message}")
@@ -162,4 +153,4 @@ Return:
             }
         }
     }
-}    
+}
