@@ -35,10 +35,10 @@ class SarvamSTTManager(
         AudioFormat.ENCODING_PCM_16BIT
     )
 
-    private val silenceThreshold    = 400   // sensitive enough for whispers
-    private val silenceFramesNeeded = 18    // ~0.7s silence → stop
-    private val maxPreSpeechMs      = 5000L // wait up to 5s for speech to start
-    private val maxTotalMs          = 10000L
+    private val silenceThreshold    = 350   // picks up quiet voices
+    private val silenceFramesNeeded = 15    // ~0.6s silence = stop
+    private val maxPreSpeechMs      = 4000L //give up if no speech in 4s
+    private val maxTotalMs          = 8000L // hard cap 8s
 
     fun startListening(onResult: (String) -> Unit, onError: () -> Unit) {
 
