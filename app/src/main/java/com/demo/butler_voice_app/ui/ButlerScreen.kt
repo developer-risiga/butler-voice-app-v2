@@ -11,7 +11,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.scale
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -21,60 +20,54 @@ import androidx.compose.ui.unit.sp
 
 // ─── STATES ───────────────────────────────────────────────────
 sealed class ButlerUiState {
-    object Idle                                               : ButlerUiState()
-    object Listening                                          : ButlerUiState()
-    data class Thinking(val heard: String)                    : ButlerUiState()
+    object Idle                                                          : ButlerUiState()
+    object Listening                                                     : ButlerUiState()
+    data class Thinking(val heard: String)                               : ButlerUiState()
     data class Speaking(val text: String, val isFallback: Boolean = false) : ButlerUiState()
-    data class OrderDone(val shortId: String, val total: Double) : ButlerUiState()
-    data class Error(val message: String)                     : ButlerUiState()
+    data class OrderDone(val shortId: String, val total: Double)         : ButlerUiState()
+    data class Error(val message: String)                                : ButlerUiState()
 }
 
 // ─── COLORS ───────────────────────────────────────────────────
-private object Colors {
-    val Bg          = Color(0xFF080C10)
-    val Surface     = Color(0xFF111820)
-    val OrbIdle     = Color(0xFF2A3540)
-    val OrbListen   = Color(0xFF00E5A0)
-    val OrbThink    = Color(0xFF9C7AFF)
-    val OrbSpeak    = Color(0xFF3EAAFF)
-    val OrbSuccess  = Color(0xFF00E5A0)
-    val OrbError    = Color(0xFFFF4D6A)
-    val TextPrimary = Color(0xFFF0F4F8)
-    val TextMuted   = Color(0xFF556070)
-    val TextSub     = Color(0xFF8A9AAA)
-    val AccentGreen = Color(0xFF00E5A0)
-    val AccentBlue  = Color(0xFF3EAAFF)
-}
+private val BgColor      = Color(0xFF080C10)
+private val SurfaceColor = Color(0xFF111820)
+private val OrbIdle      = Color(0xFF2A3540)
+private val OrbListen    = Color(0xFF00E5A0)
+private val OrbThink     = Color(0xFF9C7AFF)
+private val OrbSpeak     = Color(0xFF3EAAFF)
+private val OrbSuccess   = Color(0xFF00E5A0)
+private val OrbError     = Color(0xFFFF4D6A)
+private val TextPrimary  = Color(0xFFF0F4F8)
+private val TextMuted    = Color(0xFF556070)
+private val TextSub      = Color(0xFF8A9AAA)
 
 // ─── MAIN SCREEN ──────────────────────────────────────────────
 @Composable
 fun ButlerScreen(state: ButlerUiState) {
 
     val orbColor = when (state) {
-        is ButlerUiState.Idle      -> Colors.OrbIdle
-        is ButlerUiState.Listening -> Colors.OrbListen
-        is ButlerUiState.Thinking  -> Colors.OrbThink
-        is ButlerUiState.Speaking  -> Colors.OrbSpeak
-        is ButlerUiState.OrderDone -> Colors.OrbSuccess
-        is ButlerUiState.Error     -> Colors.OrbError
+        is ButlerUiState.Idle      -> OrbIdle
+        is ButlerUiState.Listening -> OrbListen
+        is ButlerUiState.Thinking  -> OrbThink
+        is ButlerUiState.Speaking  -> OrbSpeak
+        is ButlerUiState.OrderDone -> OrbSuccess
+        is ButlerUiState.Error     -> OrbError
     }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Colors.Bg),
+            .background(BgColor),
         contentAlignment = Alignment.Center
     ) {
 
-        // Background ambient glow
+        // Ambient background glow — uses a simple Box with alpha, no blur (avoids API issues)
         Box(
             modifier = Modifier
-                .size(400.dp)
-                .blur(120.dp)
+                .size(320.dp)
                 .background(
                     brush = Brush.radialGradient(
-                        colors = listOf(orbColor.copy(alpha = 0.08f), Color.Transparent),
-                        radius = 600f
+                        colors = listOf(orbColor.copy(alpha = 0.07f), Color.Transparent)
                     ),
                     shape = CircleShape
                 )
@@ -93,20 +86,20 @@ fun ButlerScreen(state: ButlerUiState) {
                 text          = "BUTLER",
                 fontSize      = 11.sp,
                 fontWeight    = FontWeight.W600,
-                color         = Colors.TextMuted,
+                color         = TextMuted,
                 letterSpacing = 6.sp
             )
 
-            Spacer(Modifier.height(56.dp))
+            Spacer(modifier = Modifier.height(56.dp))
 
-            // Main orb
-            PulsingOrb(state, orbColor)
+            // Orb
+            PulsingOrb(state = state, orbColor = orbColor)
 
-            Spacer(Modifier.height(44.dp))
+            Spacer(modifier = Modifier.height(44.dp))
 
             // Status headline
-            val headline = when (state) {
-                is ButlerUiState.Idle      -> "Say  "Hey Butler""
+            val headline: String = when (state) {
+                is ButlerUiState.Idle      -> "Say \u201cHey Butler\u201d"
                 is ButlerUiState.Listening -> "Listening..."
                 is ButlerUiState.Thinking  -> "Thinking..."
                 is ButlerUiState.Speaking  -> ""
@@ -119,49 +112,57 @@ fun ButlerScreen(state: ButlerUiState) {
                     text       = headline,
                     fontSize   = 24.sp,
                     fontWeight = FontWeight.W500,
-                    color      = Colors.TextPrimary,
+                    color      = TextPrimary,
                     textAlign  = TextAlign.Center
                 )
             }
 
-            // Transcript (Thinking state)
+            // Transcript shown while Thinking
             if (state is ButlerUiState.Thinking && state.heard.isNotBlank()) {
-                Spacer(Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(12.dp))
                 Text(
-                    text      = "\"${state.heard}\"",
-                    fontSize  = 14.sp,
-                    color     = Colors.TextSub,
-                    textAlign = TextAlign.Center,
+                    text       = "\u201c${state.heard}\u201d",
+                    fontSize   = 14.sp,
+                    color      = TextSub,
+                    textAlign  = TextAlign.Center,
                     lineHeight = 20.sp
                 )
             }
 
-            // Speaking text
+            // Speaking text bubble
             if (state is ButlerUiState.Speaking && state.text.isNotBlank()) {
-                Spacer(Modifier.height(16.dp))
-                SpeakingBubble(state.text)
+                Spacer(modifier = Modifier.height(16.dp))
+                SpeakingBubble(text = state.text)
+                if (state.isFallback) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text     = "Using backup voice",
+                        fontSize = 11.sp,
+                        color    = TextMuted
+                    )
+                }
             }
 
-            // Order success
+            // Order success card
             if (state is ButlerUiState.OrderDone) {
-                Spacer(Modifier.height(28.dp))
-                OrderSuccessCard(state.shortId, state.total)
+                Spacer(modifier = Modifier.height(28.dp))
+                OrderSuccessCard(shortId = state.shortId, total = state.total)
             }
 
-            // Error
+            // Error message
             if (state is ButlerUiState.Error) {
-                Spacer(Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(16.dp))
                 Text(
                     text      = state.message,
                     fontSize  = 14.sp,
-                    color     = Colors.OrbError,
+                    color     = OrbError,
                     textAlign = TextAlign.Center
                 )
             }
 
-            // Waveform bar (Listening state)
+            // Listening waveform
             if (state is ButlerUiState.Listening) {
-                Spacer(Modifier.height(28.dp))
+                Spacer(modifier = Modifier.height(28.dp))
                 AudioWaveform()
             }
         }
@@ -175,19 +176,19 @@ fun PulsingOrb(state: ButlerUiState, orbColor: Color) {
         is ButlerUiState.Listening -> 1.35f
         is ButlerUiState.Speaking  -> 1.18f
         is ButlerUiState.Thinking  -> 1.10f
-        else -> 1.03f
+        else                       -> 1.03f
     }
     val durationMs = when (state) {
         is ButlerUiState.Listening -> 550
         is ButlerUiState.Speaking  -> 750
         is ButlerUiState.Thinking  -> 900
-        else -> 2000
+        else                       -> 2000
     }
 
     val infinite = rememberInfiniteTransition(label = "orb")
     val scale by infinite.animateFloat(
-        initialValue = 1f,
-        targetValue  = pulseTarget,
+        initialValue  = 1f,
+        targetValue   = pulseTarget,
         animationSpec = infiniteRepeatable(
             animation  = tween(durationMs, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
@@ -196,28 +197,24 @@ fun PulsingOrb(state: ButlerUiState, orbColor: Color) {
     )
 
     Box(contentAlignment = Alignment.Center) {
-        // Outermost halo
         Box(
             modifier = Modifier
                 .size(160.dp)
                 .scale(scale * 0.95f)
                 .background(orbColor.copy(alpha = 0.05f), CircleShape)
         )
-        // Middle halo
         Box(
             modifier = Modifier
                 .size(120.dp)
                 .scale(scale * 0.9f)
                 .background(orbColor.copy(alpha = 0.12f), CircleShape)
         )
-        // Inner ring
         Box(
             modifier = Modifier
                 .size(88.dp)
                 .scale(scale * 0.85f)
                 .background(orbColor.copy(alpha = 0.22f), CircleShape)
         )
-        // Core
         Box(
             modifier = Modifier
                 .size(64.dp)
@@ -225,7 +222,7 @@ fun PulsingOrb(state: ButlerUiState, orbColor: Color) {
                     brush = Brush.radialGradient(
                         colors = listOf(
                             orbColor.copy(alpha = 0.95f),
-                            orbColor.copy(alpha = 0.7f)
+                            orbColor.copy(alpha = 0.70f)
                         )
                     ),
                     shape = CircleShape
@@ -234,20 +231,19 @@ fun PulsingOrb(state: ButlerUiState, orbColor: Color) {
     }
 }
 
-// ─── AUDIO WAVEFORM BARS ──────────────────────────────────────
+// ─── AUDIO WAVEFORM ───────────────────────────────────────────
 @Composable
 fun AudioWaveform() {
     val infinite = rememberInfiniteTransition(label = "wave")
-    val bars = 7
 
     Row(
         horizontalArrangement = Arrangement.spacedBy(5.dp),
-        verticalAlignment = Alignment.CenterVertically
+        verticalAlignment     = Alignment.CenterVertically
     ) {
-        repeat(bars) { i ->
+        repeat(7) { i ->
             val height by infinite.animateFloat(
-                initialValue = 6f,
-                targetValue  = 30f,
+                initialValue  = 6f,
+                targetValue   = 30f,
                 animationSpec = infiniteRepeatable(
                     animation  = tween(
                         durationMillis = 300 + (i * 80),
@@ -261,7 +257,7 @@ fun AudioWaveform() {
                 modifier = Modifier
                     .width(4.dp)
                     .height(height.dp)
-                    .background(Colors.OrbListen.copy(alpha = 0.7f), RoundedCornerShape(2.dp))
+                    .background(OrbListen.copy(alpha = 0.7f), RoundedCornerShape(2.dp))
             )
         }
     }
@@ -271,16 +267,16 @@ fun AudioWaveform() {
 @Composable
 fun SpeakingBubble(text: String) {
     Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = Colors.Surface,
+        shape    = RoundedCornerShape(16.dp),
+        color    = SurfaceColor,
         modifier = Modifier.fillMaxWidth()
     ) {
         Text(
             text       = text,
             fontSize   = 16.sp,
-            color      = Colors.TextPrimary,
+            color      = TextPrimary,
             textAlign  = TextAlign.Center,
-            lineHeight  = 24.sp,
+            lineHeight = 24.sp,
             modifier   = Modifier.padding(horizontal = 20.dp, vertical = 16.dp)
         )
     }
@@ -299,21 +295,21 @@ fun OrderSuccessCard(shortId: String, total: Double) {
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
-                text       = "✓  Order confirmed",
+                text       = "\u2713  Order confirmed",
                 fontSize   = 13.sp,
                 fontWeight = FontWeight.W500,
                 color      = Color(0xFF4DDFB0)
             )
-            Spacer(Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(8.dp))
             Text(
                 text       = "#$shortId",
                 fontSize   = 36.sp,
                 fontWeight = FontWeight.Bold,
-                color      = Colors.AccentGreen
+                color      = OrbSuccess
             )
-            Spacer(Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text     = "₹%.2f".format(total),
+                text     = "\u20B9%.2f".format(total),
                 fontSize = 18.sp,
                 color    = Color(0xFF8FDDBE)
             )
