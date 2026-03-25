@@ -31,10 +31,10 @@ data class PurchaseSummary(
 
 object UserSessionManager {
 
-    var currentProfile: UserProfile? = null
-    var purchaseHistory: List<PurchaseSummary> = emptyList()
-    private var currentToken: String? = null
-    private var currentUid: String? = null
+    var currentProfile  : UserProfile?          = null
+    var purchaseHistory : List<PurchaseSummary> = emptyList()
+    private var currentToken : String? = null
+    private var currentUid   : String? = null
 
     private val http = OkHttpClient()
     private val json = Json { ignoreUnknownKeys = true }
@@ -42,9 +42,68 @@ object UserSessionManager {
     private val url get() = SupabaseClient.SUPABASE_URL
     private val key get() = SupabaseClient.SUPABASE_KEY
 
-    fun isLoggedIn(): Boolean = currentToken != null && currentUid != null
-    fun currentUserId(): String? = currentUid
-    fun getToken(): String? = currentToken
+    fun isLoggedIn()    : Boolean = currentToken != null && currentUid != null
+    fun currentUserId() : String? = currentUid
+    fun getToken()      : String? = currentToken
+
+    // ─── RESTORE SESSION FROM DISK ────────────────────────────
+    /**
+     * Call this on wake word detected to auto-login returning users.
+     * Returns true if session was restored successfully.
+     */
+    suspend fun tryRestoreSession(): Boolean {
+        if (!SessionStore.hasSession()) return false
+        if (isLoggedIn())               return true  // already in memory
+
+        val savedToken = SessionStore.getToken() ?: return false
+        val savedUid   = SessionStore.getUid()   ?: return false
+        val savedName  = SessionStore.getName()
+
+        return withContext(Dispatchers.IO) {
+            try {
+                // Validate token is still alive by fetching profile
+                val req = Request.Builder()
+                    .url("$url/rest/v1/profiles?id=eq.$savedUid&select=*")
+                    .addHeader("apikey", key)
+                    .addHeader("Authorization", "Bearer $savedToken")
+                    .addHeader("Accept", "application/json")
+                    .get()
+                    .build()
+
+                val res  = http.newCall(req).execute()
+                val body = res.body?.string() ?: "[]"
+
+                if (!res.isSuccessful) {
+                    Log.w("Session", "Saved token expired, clearing")
+                    SessionStore.clear()
+                    return@withContext false
+                }
+
+                // Token valid — restore session
+                currentToken = savedToken
+                currentUid   = savedUid
+
+                val arr   = json.parseToJsonElement(body).jsonArray
+                val first = arr.firstOrNull()
+                currentProfile = if (first != null) {
+                    json.decodeFromJsonElement(UserProfile.serializer(), first)
+                } else {
+                    UserProfile(id = savedUid, full_name = savedName)
+                }
+
+                // Load purchase history in background
+                loadPurchaseHistory()
+
+                Log.d("Session", "✅ Session restored for: ${currentProfile?.full_name}")
+                true
+
+            } catch (e: Exception) {
+                Log.e("Session", "Session restore failed: ${e.message}")
+                SessionStore.clear()
+                false
+            }
+        }
+    }
 
     // ─── LOGIN ────────────────────────────────────────────────
 
@@ -61,20 +120,28 @@ object UserSessionManager {
                     .post(body)
                     .build()
 
-                val res = http.newCall(req).execute()
+                val res     = http.newCall(req).execute()
                 val resBody = res.body?.string() ?: ""
 
                 if (!res.isSuccessful) {
                     return@withContext Result.failure(Exception("Login failed: $resBody"))
                 }
 
-                val obj = json.parseToJsonElement(resBody).jsonObject
+                val obj      = json.parseToJsonElement(resBody).jsonObject
                 currentToken = obj["access_token"]?.jsonPrimitive?.content
                 currentUid   = obj["user"]?.jsonObject?.get("id")?.jsonPrimitive?.content
 
                 Log.d("Session", "Login success. UID: $currentUid")
+
+                // ✅ Persist session to disk
+                val userEmail = obj["user"]?.jsonObject?.get("email")?.jsonPrimitive?.content
+                SessionStore.save(currentToken!!, currentUid!!, null, userEmail)
+
                 val profile = loadProfile()
+                // Update saved name after loading profile
+                SessionStore.save(currentToken!!, currentUid!!, profile.full_name, userEmail)
                 Result.success(profile)
+
             } catch (e: Exception) {
                 Log.e("Session", "Login error: ${e.message}")
                 Result.failure(e)
@@ -85,67 +152,71 @@ object UserSessionManager {
     // ─── SIGNUP ───────────────────────────────────────────────
 
     suspend fun signup(
-    email: String,
-    password: String,
-    name: String,
-    phone: String
-): Result<UserProfile> {
-    return withContext(Dispatchers.IO) {
-        try {
-            Log.d("Session", "Attempting signup: email=$email, password length=${password.length}")
-            
-            val body = """{"email":"$email","password":"$password"}"""
-                .toRequestBody("application/json".toMediaType())
+        email: String,
+        password: String,
+        name: String,
+        phone: String
+    ): Result<UserProfile> {
+        return withContext(Dispatchers.IO) {
+            try {
+                Log.d("Session", "Attempting signup: email=$email, password length=${password.length}")
 
-            val req = Request.Builder()
-                .url("$url/auth/v1/signup")
-                .addHeader("apikey", key)
-                .addHeader("Content-Type", "application/json")
-                .post(body)
-                .build()
+                val body = """{"email":"$email","password":"$password"}"""
+                    .toRequestBody("application/json".toMediaType())
 
-            val res = http.newCall(req).execute()
-            val resBody = res.body?.string() ?: ""
+                val req = Request.Builder()
+                    .url("$url/auth/v1/signup")
+                    .addHeader("apikey", key)
+                    .addHeader("Content-Type", "application/json")
+                    .post(body)
+                    .build()
 
-            Log.d("Session", "Signup response ${res.code}: $resBody")
+                val res     = http.newCall(req).execute()
+                val resBody = res.body?.string() ?: ""
+                Log.d("Session", "Signup response ${res.code}: $resBody")
 
-            if (!res.isSuccessful) {
-                return@withContext Result.failure(Exception("Signup failed ${res.code}: $resBody"))
+                if (!res.isSuccessful) {
+                    return@withContext Result.failure(Exception("Signup failed ${res.code}: $resBody"))
+                }
+
+                val obj      = json.parseToJsonElement(resBody).jsonObject
+                currentToken = obj["access_token"]?.jsonPrimitive?.content
+                currentUid   = obj["user"]?.jsonObject?.get("id")?.jsonPrimitive?.content
+                    ?: obj["id"]?.jsonPrimitive?.content
+
+                Log.d("Session", "Signup success. UID: $currentUid, token: ${currentToken?.take(20)}")
+
+                val userId = currentUid ?: throw Exception("No user ID after signup")
+                val token  = currentToken ?: throw Exception("No token after signup")
+
+                // Insert profile
+                val profileJson = """{"id":"$userId","full_name":"$name","phone":"$phone"}"""
+                val profileReq  = Request.Builder()
+                    .url("$url/rest/v1/profiles")
+                    .addHeader("apikey", key)
+                    .addHeader("Authorization", "Bearer $token")
+                    .addHeader("Content-Type", "application/json")
+                    .addHeader("Prefer", "return=minimal")
+                    .post(profileJson.toRequestBody("application/json".toMediaType()))
+                    .build()
+
+                val profileRes = http.newCall(profileReq).execute()
+                Log.d("Session", "Profile insert code: ${profileRes.code}")
+
+                val profile = UserProfile(id = userId, full_name = name, phone = phone)
+                currentProfile = profile
+
+                // ✅ Persist session to disk
+                SessionStore.save(token, userId, name, email)
+
+                Result.success(profile)
+
+            } catch (e: Exception) {
+                Log.e("Session", "Signup exception ${e.javaClass.simpleName}: ${e.message}")
+                Result.failure(e)
             }
-
-            val obj = json.parseToJsonElement(resBody).jsonObject
-            currentToken = obj["access_token"]?.jsonPrimitive?.content
-            currentUid   = obj["user"]?.jsonObject?.get("id")?.jsonPrimitive?.content
-                ?: obj["id"]?.jsonPrimitive?.content
-
-            Log.d("Session", "Signup success. UID: $currentUid, token: ${currentToken?.take(20)}")
-
-            val userId = currentUid ?: throw Exception("No user ID after signup")
-            val token  = currentToken ?: throw Exception("No token after signup")
-
-            val profileJson = """{"id":"$userId","full_name":"$name","phone":"$phone"}"""
-            val profileReq = Request.Builder()
-                .url("$url/rest/v1/profiles")
-                .addHeader("apikey", key)
-                .addHeader("Authorization", "Bearer $token")
-                .addHeader("Content-Type", "application/json")
-                .addHeader("Prefer", "return=minimal")
-                .post(profileJson.toRequestBody("application/json".toMediaType()))
-                .build()
-
-            val profileRes = http.newCall(profileReq).execute()
-            Log.d("Session", "Profile insert code: ${profileRes.code}")
-
-            val profile = UserProfile(id = userId, full_name = name, phone = phone)
-            currentProfile = profile
-            Result.success(profile)
-
-        } catch (e: Exception) {
-            Log.e("Session", "Signup exception ${e.javaClass.simpleName}: ${e.message}")
-            Result.failure(e)
         }
     }
-}
 
     // ─── LOAD PROFILE ─────────────────────────────────────────
 
@@ -154,7 +225,6 @@ object UserSessionManager {
             val userId = currentUid ?: return@withContext UserProfile(id = "")
             val token  = currentToken ?: return@withContext UserProfile(id = userId)
 
-            // Fetch profile
             val profile = try {
                 val req = Request.Builder()
                     .url("$url/rest/v1/profiles?id=eq.$userId&select=*")
@@ -181,32 +251,40 @@ object UserSessionManager {
             }
 
             currentProfile = profile
-
-            // Fetch purchase history
-           purchaseHistory = try {
-                val req = Request.Builder()
-                    .url("$url/rest/v1/order_items?select=product_name,order_id,orders(user_id)&orders.user_id=eq.$userId&limit=10")
-                    .addHeader("apikey", key)
-                    .addHeader("Authorization", "Bearer $token")
-                    .addHeader("Accept", "application/json")
-                    .get()
-                    .build()
-            
-                val res  = http.newCall(req).execute()
-                val body = res.body?.string() ?: "[]"
-                val arr  = json.parseToJsonElement(body).jsonArray
-            
-                arr.mapNotNull {
-                    val name = it.jsonObject["product_name"]?.jsonPrimitive?.content
-                    if (!name.isNullOrBlank()) PurchaseSummary(product_name = name) else null
-                }.distinctBy { it.product_name }
-            } catch (e: Exception) {
-                Log.e("Session", "History load error: ${e.message}")
-                emptyList()
-            }
+            loadPurchaseHistory()
 
             Log.d("Session", "Loaded: ${profile.full_name}, history: ${purchaseHistory.size}")
             profile
+        }
+    }
+
+    // ─── PURCHASE HISTORY ─────────────────────────────────────
+
+    private suspend fun loadPurchaseHistory() {
+        val userId = currentUid ?: return
+        val token  = currentToken ?: return
+
+        purchaseHistory = try {
+            val req = Request.Builder()
+                .url("$url/rest/v1/order_items?select=product_name,order_id,orders(user_id)&orders.user_id=eq.$userId&limit=10")
+                .addHeader("apikey", key)
+                .addHeader("Authorization", "Bearer $token")
+                .addHeader("Accept", "application/json")
+                .get()
+                .build()
+
+            val res  = http.newCall(req).execute()
+            val body = res.body?.string() ?: "[]"
+            val arr  = json.parseToJsonElement(body).jsonArray
+
+            arr.mapNotNull {
+                val name = it.jsonObject["product_name"]?.jsonPrimitive?.content
+                if (!name.isNullOrBlank()) PurchaseSummary(product_name = name) else null
+            }.distinctBy { it.product_name }
+
+        } catch (e: Exception) {
+            Log.e("Session", "History load error: ${e.message}")
+            emptyList()
         }
     }
 
@@ -225,12 +303,25 @@ object UserSessionManager {
     }
 
     // ─── LOGOUT ───────────────────────────────────────────────
-
+    /**
+     * Soft logout — clears memory but keeps disk session.
+     * Use after order completion so next session auto-logs in.
+     */
     fun logout() {
-        currentToken   = null
-        currentUid     = null
-        currentProfile = null
+        currentToken    = null
+        currentUid      = null
+        currentProfile  = null
         purchaseHistory = emptyList()
-        Log.d("Session", "Logged out")
+        Log.d("Session", "Logged out (session persisted on disk)")
+    }
+
+    /**
+     * Hard logout — clears memory AND disk.
+     * Use when user explicitly wants to sign out.
+     */
+    fun hardLogout() {
+        logout()
+        SessionStore.clear()
+        Log.d("Session", "Hard logout — session cleared from disk")
     }
 }
