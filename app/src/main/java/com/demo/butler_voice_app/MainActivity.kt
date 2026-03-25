@@ -1,5 +1,9 @@
 package com.demo.butler_voice_app
 
+
+
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 import android.Manifest
 import android.content.pm.PackageManager
 import android.media.AudioManager
@@ -214,28 +218,39 @@ class MainActivity : ComponentActivity() {
             }
 
             AssistantState.ASKING_NAME -> {
-                val cleaned = text.trim()
-                    .replace(Regex("my name is\\s*",   RegexOption.IGNORE_CASE), "")
-                    .replace(Regex("i am\\s*",         RegexOption.IGNORE_CASE), "")
-                    .replace(Regex("mera naam\\s*",    RegexOption.IGNORE_CASE), "")
-                    .replace("मेरा नाम", "")
-                    .replace("है", "")
-                    .replace("నా పేరు", "")
-                    .replace(".", "")
-                    .trim()
-
-                if (cleaned.isBlank() || cleaned.contains("@")) {
-                    speak("Please say just your first name.") { startListening() }
-                    return
+                // If transcript is non-Latin script, translate it to English first
+                lifecycleScope.launch {
+                    val translatedForParsing = if (LanguageDetector.detect(text) != "en") {
+                        translateToEnglish(text)
+                    } else {
+                        text
+                    }
+            
+                    val cleaned = translatedForParsing.trim()
+                        .replace(Regex("my name is\\s*",   RegexOption.IGNORE_CASE), "")
+                        .replace(Regex("i am\\s*",         RegexOption.IGNORE_CASE), "")
+                        .replace(Regex("mera naam\\s*",    RegexOption.IGNORE_CASE), "")
+                        .replace(Regex("my name's\\s*",    RegexOption.IGNORE_CASE), "")
+                        .replace(".", "")
+                        .trim()
+            
+                    if (cleaned.isBlank() || cleaned.contains("@")) {
+                        runOnUiThread {
+                            speak("Please say just your first name.") { startListening() }
+                        }
+                        return@launch
+                    }
+            
+                    tempName = cleaned.split(" ")
+                        .firstOrNull { it.length > 1 }
+                        ?.replaceFirstChar { it.uppercase() }
+                        ?: cleaned.replaceFirstChar { it.uppercase() }
+            
+                    runOnUiThread {
+                        currentState = AssistantState.ASKING_EMAIL
+                        speak("Nice to meet you $tempName! What's your email?") { startListening() }
+                    }
                 }
-
-                tempName = cleaned.split(" ")
-                    .firstOrNull { it.length > 1 }
-                    ?.replaceFirstChar { it.uppercase() }
-                    ?: cleaned.replaceFirstChar { it.uppercase() }
-
-                currentState = AssistantState.ASKING_EMAIL
-                speak("Nice to meet you $tempName! What's your email?") { startListening() }
             }
 
             AssistantState.ASKING_EMAIL -> {
@@ -714,7 +729,7 @@ class MainActivity : ComponentActivity() {
 
     private fun setUiState(s: ButlerUiState) = runOnUiThread { uiState.value = s }
 
-    private fun speak(text: String, onDone: (() -> Unit)? = null) {
+   private fun speak(text: String, onDone: (() -> Unit)? = null) {
         sarvamSTT.stop()
     
         lifecycleScope.launch {
@@ -734,4 +749,43 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    private suspend fun translateToEnglish(text: String): String {
+        return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                val body = org.json.JSONObject().apply {
+                    put("model", "gpt-4o-mini")
+                    put("messages", org.json.JSONArray().apply {
+                        put(org.json.JSONObject().apply {
+                            put("role", "user")
+                            put("content", "Translate to English. Return ONLY the translated text, nothing else: $text")
+                        })
+                    })
+                    put("max_tokens", 50)
+                    put("temperature", 0.1)
+                }.toString().toRequestBody("application/json".toMediaType())
+
+                val request = okhttp3.Request.Builder()
+                    .url("https://api.openai.com/v1/chat/completions")
+                    .addHeader("Authorization", "Bearer ${BuildConfig.OPENAI_API_KEY}")
+                    .addHeader("Content-Type", "application/json")
+                    .post(body)
+                    .build()
+
+                val response = okhttp3.OkHttpClient().newCall(request).execute()
+                val resBody  = response.body?.string() ?: return@withContext text
+
+                org.json.JSONObject(resBody)
+                    .getJSONArray("choices")
+                    .getJSONObject(0)
+                    .getJSONObject("message")
+                    .getString("content")
+                    .trim()
+            } catch (e: Exception) {
+                Log.e("Butler", "translateToEnglish failed: ${e.message}")
+                text
+            }
+        }
+    }
 }
+
