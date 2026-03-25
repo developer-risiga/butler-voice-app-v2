@@ -332,87 +332,111 @@ class MainActivity : ComponentActivity() {
 
             AssistantState.ASKING_MORE -> handleAskingMore(cleaned, text)
 
-            AssistantState.CONFIRMING -> {
-                when {
-                    cleaned.contains("yes")        || cleaned.contains("place")      ||
-                    cleaned.contains("confirm")    || cleaned.contains("ok")         ||
-                    cleaned.contains("haan")       || cleaned.contains("हाँ")        ||
-                    cleaned.contains("हां")        || cleaned.contains("theek")      ||
-                    cleaned.contains("kar do")     || cleaned.contains("karo")       ||
-                    cleaned.contains("order kar")  || cleaned.contains("ऑर्डर कर")  ||
-                    cleaned.contains("bilkul")     || cleaned.contains("zaroor")     ||
-                    cleaned.contains("done")       || cleaned.contains("proceed")    ||
-                    cleaned.contains("हा")         || cleaned.contains("चलो")        -> {
-                        placeOrder()
-                    }
-                    cleaned.contains("no")         || cleaned.contains("cancel")     ||
-                    cleaned.contains("nahi")       || cleaned.contains("नहीं")       ||
-                    cleaned.contains("mat")        || cleaned.contains("band kar")   ||
-                    cleaned.contains("ruk")        -> {
-                        speak("Order cancelled. Goodbye!") {
-                            cart.clear()
-                            UserSessionManager.logout()
-                            startWakeWordListening()
+           AssistantState.CONFIRMING -> {
+            
+                lifecycleScope.launch {
+            
+                    val parsed = AIOrderParser.parse(text)
+            
+                    // ✅ update language properly
+                    LanguageManager.setLanguage(parsed.detectedLanguage)
+            
+                    runOnUiThread {
+            
+                        when (parsed.intent) {
+            
+                            "confirm_order" -> {
+                                placeOrder()
+                            }
+            
+                            "cancel_order" -> {
+                                speak("Order cancelled. Goodbye!") {
+                                    cart.clear()
+                                    UserSessionManager.logout()
+                                    startWakeWordListening()
+                                }
+                            }
+            
+                            else -> {
+                                speak("Please say yes to confirm or no to cancel.") {
+                                    startListening()
+                                }
+                            }
                         }
                     }
-                    else -> speak("Say yes to confirm or no to cancel.") { startListening() }
                 }
             }
-
-            else -> {}
-        }
-    }
 
     // ─── ORDER INTENT ─────────────────────────────────────────
 
     private fun handleOrderIntent(text: String, lower: String) {
-        val cleaned = lower.replace(Regex("[,।.!?]"), "").trim()
-
-        if (cleaned.contains("repeat") || cleaned.contains("same as last") ||
-            cleaned.contains("previous order")) {
-            repeatLastOrder(); return
-        }
-        if (cleaned.contains("my orders") || cleaned.contains("history") ||
-            cleaned.contains("what did i order")) {
-            readOrderHistory(); return
-        }
-
-        // Check no-more BEFORE going to AI
-        if (isNoMoreIntent(cleaned)) {
-            readCartAndConfirm(); return
-        }
 
         lifecycleScope.launch {
+    
             val parsed = AIOrderParser.parse(text)
             LanguageManager.setLanguage(parsed.detectedLanguage)
-
+    
+            val cleaned = lower.replace(Regex("[,।.!?]"), "").trim()
+    
             runOnUiThread {
+    
                 when (parsed.intent) {
-                    "no_more", "cancel" -> {
+    
+                    "finish_order" -> {
                         if (cart.isEmpty()) {
-                            speak("Your cart is empty. What would you like to order?") { startListening() }
+                            speak("Your cart is empty. What would you like to order?") {
+                                startListening()
+                            }
                         } else {
                             readCartAndConfirm()
                         }
                     }
-                    "confirm" -> {
-                        if (currentState == AssistantState.CONFIRMING) placeOrder()
-                        else readCartAndConfirm()
+    
+                    "confirm_order" -> {
+                        if (currentState == AssistantState.CONFIRMING) {
+                            placeOrder()
+                        } else {
+                            readCartAndConfirm()
+                        }
                     }
+    
+                    "cancel_order" -> {
+                        speak("Order cancelled") {
+                            startWakeWordListening()
+                        }
+                    }
+    
                     "history" -> readOrderHistory()
-                    else -> {
+    
+                    "order", "add_more" -> {
+    
                         if (parsed.items.isEmpty()) {
                             val fallback = keywordFallback(cleaned)
+    
                             if (fallback != null) {
                                 searchAndAskQuantity(fallback)
                             } else {
-                                speak("Tell me what you want to order.") { startListening() }
+                                speak("Tell me what you want to order.") {
+                                    startListening()
+                                }
                             }
+    
                         } else if (parsed.items.size == 1) {
+    
                             val item = parsed.items.first()
                             searchAndAskQuantity(item.name, item.quantity, item.unit)
+    
                         } else {
-                            lifecycleScope.launch { addMultipleItemsToCart(parsed.items) }
+    
+                            lifecycleScope.launch {
+                                addMultipleItemsToCart(parsed.items)
+                            }
+                        }
+                    }
+    
+                    else -> {
+                        speak("I didn't understand. Please try again.") {
+                            startListening()
                         }
                     }
                 }
@@ -423,29 +447,30 @@ class MainActivity : ComponentActivity() {
     // ─── ASKING MORE ──────────────────────────────────────────
 
     private fun handleAskingMore(cleaned: String, originalText: String) {
-        when {
-            cleaned.contains("yes")   || cleaned.contains("add")   ||
-            cleaned.contains("more")  || cleaned.contains("also")  ||
-            cleaned.contains("और")    || cleaned.contains("aur")   ||
-            cleaned.contains("हाँ")   || cleaned.contains("haan")  -> {
-                currentState = AssistantState.LISTENING
-                speak("What else would you like?") { startListening() }
-            }
 
-            isNoMoreIntent(cleaned) -> readCartAndConfirm()
-
-            else -> {
-                lifecycleScope.launch {
-                    val parsed = AIOrderParser.parse(originalText)
-                    runOnUiThread {
-                        when {
-                            parsed.intent == "no_more" ||
-                            parsed.intent == "cancel"  -> readCartAndConfirm()
-                            parsed.items.isNotEmpty()  -> {
-                                currentState = AssistantState.LISTENING
-                                handleOrderIntent(originalText, originalText.lowercase())
-                            }
-                            else -> speak("Should I add more or place the order?") { startListening() }
+        lifecycleScope.launch {
+    
+            val parsed = AIOrderParser.parse(originalText)
+            LanguageManager.setLanguage(parsed.detectedLanguage)
+    
+            runOnUiThread {
+    
+                when (parsed.intent) {
+    
+                    "add_more", "order" -> {
+                        currentState = AssistantState.LISTENING
+                        speak("What else would you like?") {
+                            startListening()
+                        }
+                    }
+    
+                    "finish_order" -> {
+                        readCartAndConfirm()
+                    }
+    
+                    else -> {
+                        speak("Should I add more or place the order?") {
+                            startListening()
                         }
                     }
                 }
