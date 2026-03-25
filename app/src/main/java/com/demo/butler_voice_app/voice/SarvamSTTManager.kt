@@ -36,9 +36,9 @@ class SarvamSTTManager(
     )
 
     private val silenceThreshold    = 350   // picks up quiet voices
-    private val silenceFramesNeeded = 15    // ~0.6s silence = stop
+    private val silenceFramesNeeded = 12    // ~0.6s silence = stop
     private val maxPreSpeechMs      = 4000L //give up if no speech in 4s
-    private val maxTotalMs          = 8000L // hard cap 8s
+    private val maxTotalMs          = 7000L // hard cap 8s
 
     fun startListening(onResult: (String) -> Unit, onError: () -> Unit) {
 
