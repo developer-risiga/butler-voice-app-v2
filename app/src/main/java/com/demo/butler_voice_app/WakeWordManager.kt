@@ -12,28 +12,27 @@ class WakeWordManager(
     private val accessKey: String,
     private val onWakeWordDetected: () -> Unit
 ) {
-
     private val appContext = context.applicationContext
     private var porcupineManager: PorcupineManager? = null
+    private var isRunning = false
 
     @Synchronized
     fun start() {
-        if (porcupineManager != null) {
+        if (isRunning) {
             Log.d("Porcupine", "⚠️ Already running")
             return
         }
-
         if (accessKey.isBlank()) {
             Log.e("Porcupine", "❌ AccessKey is missing!")
             return
         }
-
         try {
-            val keywordPath = copyAssetToFile(
-                "Hey-Butler_en_android_v4_0_0.ppn"
-            )
+            // Always clean up before creating new instance
+            safeDelete()
 
-            val manager = PorcupineManager.Builder()
+            val keywordPath = copyAssetToFile("Hey-Butler_en_android_v4_0_0.ppn")
+
+            porcupineManager = PorcupineManager.Builder()
                 .setAccessKey(accessKey)
                 .setKeywordPath(keywordPath)
                 .setSensitivity(0.7f)
@@ -42,62 +41,56 @@ class WakeWordManager(
                     onWakeWordDetected()
                 })
 
-            manager.start()
-            porcupineManager = manager
-
+            porcupineManager!!.start()
+            isRunning = true
             Log.d("Porcupine", "🚀 Wake word engine started")
 
         } catch (e: PorcupineException) {
             Log.e("Porcupine", "❌ Failed to start: ${e.message}")
-            cleanup()
+            safeDelete()
         } catch (e: Exception) {
             Log.e("Porcupine", "❌ Unexpected error: ${e.message}")
-            cleanup()
+            safeDelete()
         }
     }
 
     @Synchronized
     fun stop() {
-        if (porcupineManager == null) {
+        if (!isRunning && porcupineManager == null) {
             Log.d("Porcupine", "⚠️ Already stopped")
             return
         }
-
         try {
             porcupineManager?.stop()
-            porcupineManager?.delete()
             Log.d("Porcupine", "🛑 Wake word engine stopped")
-
-        } catch (e: PorcupineException) {
+        } catch (e: Exception) {
             Log.e("Porcupine", "❌ Error stopping: ${e.message}")
         } finally {
-            cleanup()
+            safeDelete()
+            isRunning = false
         }
     }
 
-    private fun cleanup() {
-        porcupineManager = null
+    private fun safeDelete() {
+        try {
+            porcupineManager?.delete()
+        } catch (e: Exception) {
+            Log.w("Porcupine", "delete() warning: ${e.message}")
+        } finally {
+            porcupineManager = null
+        }
     }
 
     private fun copyAssetToFile(assetName: String): String {
         val file = File(appContext.filesDir, assetName)
-
         if (!file.exists()) {
-            try {
-                appContext.assets.open(assetName).use { input ->
-                    file.outputStream().use { output ->
-                        input.copyTo(output)
-                    }
-                }
-                Log.d("Porcupine", "📁 Copied: ${file.absolutePath}")
-            } catch (e: Exception) {
-                Log.e("Porcupine", "❌ Asset copy failed: ${e.message}")
-                throw e
+            appContext.assets.open(assetName).use { input ->
+                file.outputStream().use { output -> input.copyTo(output) }
             }
+            Log.d("Porcupine", "📁 Copied: ${file.absolutePath}")
         } else {
             Log.d("Porcupine", "📁 Using cached file")
         }
-
         return file.absolutePath
     }
 }
