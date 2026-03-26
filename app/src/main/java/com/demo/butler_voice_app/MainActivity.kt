@@ -1,7 +1,8 @@
 package com.demo.butler_voice_app
 
 
-
+private var userLocation: android.location.Location? = null
+private lateinit var locationManager: android.location.LocationManager
 import com.demo.butler_voice_app.api.SmartProductRepository
 import com.demo.butler_voice_app.api.SupabaseClient
 import okhttp3.MediaType.Companion.toMediaType
@@ -136,6 +137,27 @@ class MainActivity : ComponentActivity() {
         Log.d("Butler", "Waiting for wake word...")
         try { porcupine.stop() } catch (_: Exception) {}
         porcupine.start()
+    }
+
+
+    private fun startLocationUpdates() {
+        try {
+            locationManager = getSystemService(LOCATION_SERVICE) as android.location.LocationManager
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
+                == PackageManager.PERMISSION_GRANTED) {
+                locationManager.requestLocationUpdates(
+                    android.location.LocationManager.GPS_PROVIDER, 30000L, 50f
+                ) { location -> userLocation = location }
+                // Get last known immediately
+                userLocation = locationManager.getLastKnownLocation(
+                    android.location.LocationManager.GPS_PROVIDER
+                ) ?: locationManager.getLastKnownLocation(
+                    android.location.LocationManager.NETWORK_PROVIDER
+                )
+            }
+        } catch (e: Exception) {
+            Log.e("Butler", "Location error: ${e.message}")
+        }
     }
 
     private fun onWakeWordDetected() {
@@ -541,12 +563,20 @@ class MainActivity : ComponentActivity() {
                         onResult = { spoken ->
                             runOnUiThread {
                                 val lower = spoken.lowercase().trim()
+                                // If silent/empty — ask again, don't auto-pick
+                                if (lower.isBlank()) {
+                                    speak("Please say a product name to pick.") {
+                                        startListening()
+                                    }
+                                    return@runOnUiThread
+                                }
                                 val match = recs.firstOrNull {
                                     it.productName.lowercase().contains(lower) ||
                                             lower.contains(it.productName.lowercase().split(" ").first())
                                 } ?: if (lower.contains("yes") || lower.contains("haan") ||
-                                    lower.contains("हाँ") || lower.contains("add")) {
-                                    recs.first()
+                                    lower.contains("हाँ") || lower.contains("add") ||
+                                    lower.isBlank()) {
+                                    recs.first() // Auto-pick best value on yes/blank
                                 } else null
 
                                 if (match != null) {
