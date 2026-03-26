@@ -1,5 +1,6 @@
 package com.demo.butler_voice_app
 
+import com.demo.butler_voice_app.ai.MultilingualMatcher
 import com.demo.butler_voice_app.api.SmartProductRepository
 import com.demo.butler_voice_app.api.SupabaseClient
 import okhttp3.MediaType.Companion.toMediaType
@@ -202,10 +203,18 @@ class MainActivity : ComponentActivity() {
                 runOnUiThread {
                     val transcript = text.trim()
                     Log.d("Butler", "Transcript: $transcript")
+
                     val detectedLang = LanguageDetector.detect(transcript)
+
+                    // Only update session language if transcript is substantial
+                    // Prevents noise/blank audio from switching to wrong language
                     if (transcript.length > 3) {
-                        LanguageManager.setLanguage(detectedLang)
+                        // Use script detection for more accuracy on Indian languages
+                        val scriptLang = MultilingualMatcher.detectScript(transcript)
+                        val finalLang = if (scriptLang != "en") scriptLang else detectedLang
+                        LanguageManager.setLanguage(finalLang)
                     }
+
                     Log.d("LANG_DEBUG", "Detected=$detectedLang | Session=${LanguageManager.getLanguage()}")
 
                     if (transcript.isBlank()) {
@@ -235,7 +244,7 @@ class MainActivity : ComponentActivity() {
 
     private fun handleCommand(text: String) {
         val lower   = text.lowercase().trim()
-        val cleaned = lower.replace(Regex("[,।.!?]"), "").trim()
+        val cleaned = lower.replace(Regex("[,।.!?؟]"), "").trim()
 
         when (currentState) {
 
@@ -243,13 +252,14 @@ class MainActivity : ComponentActivity() {
                 when {
                     cleaned.contains("new")      || cleaned.contains("first")   ||
                             cleaned.contains("register") || cleaned.contains("नया")     ||
-                            cleaned.contains("नई") -> {
+                            cleaned.contains("नई")       || cleaned.contains("नवीन")    -> {
                         currentState = AssistantState.ASKING_NAME
                         speak("Great! What's your name?") { startListening() }
                     }
                     cleaned.contains("returning") || cleaned.contains("before") ||
                             cleaned.contains("yes")       || cleaned.contains("have")   ||
-                            cleaned.contains("पहले")      || cleaned.contains("login")  -> {
+                            cleaned.contains("पहले")      || cleaned.contains("login")  ||
+                            cleaned.contains("जुना")      || cleaned.contains("पुराना") -> {
                         currentState = AssistantState.ASKING_EMAIL
                         speak("Welcome back! Please say your email.") { startListening() }
                     }
@@ -265,6 +275,9 @@ class MainActivity : ComponentActivity() {
                         .replace(Regex("i am\\s*",        RegexOption.IGNORE_CASE), "")
                         .replace(Regex("mera naam\\s*",   RegexOption.IGNORE_CASE), "")
                         .replace(Regex("my name's\\s*",   RegexOption.IGNORE_CASE), "")
+                        .replace(Regex("मेरा नाम\\s*",    RegexOption.IGNORE_CASE), "")
+                        .replace(Regex("నా పేరు\\s*",     RegexOption.IGNORE_CASE), "")
+                        .replace(Regex("என் பெயர்\\s*",   RegexOption.IGNORE_CASE), "")
                         .replace(".", "").trim()
                     if (nameText.isBlank() || nameText.contains("@")) {
                         runOnUiThread { speak("Please say just your first name.") { startListening() } }
@@ -352,20 +365,11 @@ class MainActivity : ComponentActivity() {
 
             AssistantState.CONFIRMING -> {
                 when {
-                    cleaned.contains("yes")       || cleaned.contains("place")      ||
-                            cleaned.contains("confirm")   || cleaned.contains("ok")         ||
-                            cleaned.contains("haan")      || cleaned.contains("हाँ")        ||
-                            cleaned.contains("हां")       || cleaned.contains("theek")      ||
-                            cleaned.contains("kar do")    || cleaned.contains("karo")       ||
-                            cleaned.contains("order kar") || cleaned.contains("ऑर्डर कर")  ||
-                            cleaned.contains("bilkul")    || cleaned.contains("zaroor")     ||
-                            cleaned.contains("done")      || cleaned.contains("proceed")    ||
-                            cleaned.contains("चलो")       || cleaned.contains("हा")         -> placeOrder()
+                    // ✅ Uses multilingual yes detection
+                    MultilingualMatcher.isYes(cleaned) -> placeOrder()
 
-                    cleaned.contains("no")        || cleaned.contains("cancel")     ||
-                            cleaned.contains("nahi")      || cleaned.contains("नहीं")       ||
-                            cleaned.contains("mat")       || cleaned.contains("band kar")   ||
-                            cleaned.contains("ruk")       -> {
+                    // ✅ Uses multilingual no detection
+                    MultilingualMatcher.isNo(cleaned) -> {
                         speak("Order cancelled. Goodbye!") {
                             cart.clear(); UserSessionManager.logout(); startWakeWordListening()
                         }
@@ -441,10 +445,10 @@ class MainActivity : ComponentActivity() {
 
     private fun handleAskingMore(cleaned: String, originalText: String) {
         when {
-            cleaned.contains("yes")  || cleaned.contains("add")   ||
-                    cleaned.contains("more") || cleaned.contains("also")  ||
-                    cleaned.contains("और")   || cleaned.contains("aur")   ||
-                    cleaned.contains("हाँ")  || cleaned.contains("haan")  -> {
+            // ✅ Uses multilingual yes detection
+            MultilingualMatcher.isYes(cleaned) ||
+                    cleaned.contains("add") || cleaned.contains("more") ||
+                    cleaned.contains("और") || cleaned.contains("aur") -> {
                 currentState = AssistantState.LISTENING
                 speakWithCart("What else would you like?") { startListening() }
             }
@@ -486,14 +490,11 @@ class MainActivity : ComponentActivity() {
                             .joinToString(". ") +
                         ". Say 1, 2, or 3 to pick."
 
-                // Keep recommendation cards visible while speaking
                 speakKeepingRecsVisible(readout) {
                     sarvamSTT.startListening(
                         onResult = { spoken ->
                             runOnUiThread {
                                 val lower = spoken.lowercase().trim()
-
-                                // Silent — ask again, never auto-pick
                                 if (lower.isBlank()) {
                                     speakKeepingRecsVisible("Please say 1, 2, or 3 to pick a product.") {
                                         sarvamSTT.startListening(
@@ -505,8 +506,7 @@ class MainActivity : ComponentActivity() {
                                     }
                                     return@runOnUiThread
                                 }
-
-                                handleRecSelection(lower, recs, qty, itemName)
+                                handleRecSelection(spoken, recs, qty, itemName)
                             }
                         },
                         onError = {
@@ -515,7 +515,6 @@ class MainActivity : ComponentActivity() {
                     )
                 }
             } else {
-                // No recommendations from dark stores — fall back to product cache
                 val product = apiClient.searchProduct(itemName)
                 runOnUiThread {
                     if (product != null) {
@@ -540,9 +539,9 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Matches spoken confirmation to one of the 3 recommendation cards.
-     * Supports: number words (1/2/3, one/two/three, पहला/दूसरा/तीसरा)
-     *           and partial product name matching.
+     * ✅ FULLY MULTILINGUAL product selection.
+     * Handles numbers in Hindi, Punjabi, Gujarati, Tamil, Telugu, Kannada,
+     * Malayalam, Bengali, Odia, Marathi, Urdu and more.
      */
     private fun handleRecSelection(
         spoken: String,
@@ -550,34 +549,18 @@ class MainActivity : ComponentActivity() {
         qty: Int,
         itemName: String
     ) {
-        val lower = spoken.lowercase().trim()
+        Log.d("Butler", "handleRecSelection: spoken='$spoken'")
+
+        // ✅ Use MultilingualMatcher for number detection
+        val numberIndex = MultilingualMatcher.matchNumber(spoken)
+        Log.d("Butler", "Number index matched: $numberIndex")
 
         val pick: com.demo.butler_voice_app.api.ProductRecommendation? = when {
-            // Number-based selection — most reliable
-            lower.contains("1") || lower.contains("one") ||
-                    lower.contains("पहला") || lower.contains("pahla") ||
-                    lower.contains("एक") || lower.contains("ek") ||
-                    lower.contains("first") -> recs.getOrNull(0)
-
-            lower.contains("2") || lower.contains("two") ||
-                    lower.contains("दूसरा") || lower.contains("doosra") ||
-                    lower.contains("दो") || lower.contains("do") ||
-                    lower.contains("second") -> recs.getOrNull(1)
-
-            lower.contains("3") || lower.contains("three") ||
-                    lower.contains("तीसरा") || lower.contains("teesra") ||
-                    lower.contains("तीन") || lower.contains("teen") ||
-                    lower.contains("third") -> recs.getOrNull(2)
-
-            // Yes/confirm — pick best value
-            lower.contains("yes") || lower.contains("haan") ||
-                    lower.contains("हाँ") || lower.contains("ok") ||
-                    lower.contains("theek") -> recs.first()
-
-            // Partial name match — split into words and compare
+            numberIndex >= 0 -> recs.getOrNull(numberIndex)
+            MultilingualMatcher.isYes(spoken) -> recs.first()
             else -> recs.firstOrNull { rec ->
                 val recWords = rec.productName.lowercase().split(" ")
-                val spokenWords = lower.split(" ").filter { it.length > 2 }
+                val spokenWords = spoken.lowercase().split(" ").filter { it.length > 2 }
                 spokenWords.any { sw -> recWords.any { rw -> rw.contains(sw) || sw.contains(rw) } }
             }
         }
@@ -600,8 +583,7 @@ class MainActivity : ComponentActivity() {
                 startListening()
             }
         } else {
-            // No match — ask again with simple number prompt
-            speakKeepingRecsVisible("Sorry, say 1, 2, or 3 to pick.") {
+            speakKeepingRecsVisible("Please say 1, 2, or 3 to pick.") {
                 sarvamSTT.startListening(
                     onResult = { spoken2 ->
                         runOnUiThread { handleRecSelection(spoken2, recs, qty, itemName) }
@@ -631,15 +613,15 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // ✅ MULTILINGUAL isNoMoreIntent
     private fun isNoMoreIntent(s: String): Boolean {
+        if (MultilingualMatcher.isDone(s)) return true
         val phrases = listOf(
-            "no","nope","done","nothing","finish","stop","place order","checkout","place it",
-            "that is all","that's all","thats all","i am done","im done",
-            "नहीं","नही","बस","हो गया","इतना ही","बस इतना","और नहीं","और कुछ नहीं",
-            "कुछ नहीं","नहीं चाहिए","नहीं चाहूंगा","नहीं चाहूँगा","कुछ और नहीं",
-            "और कुछ नहीं चाहिए","कुछ और नहीं चाहिए","नहीं बस",
+            "no","nope","done","nothing","finish","stop","place order","checkout",
+            "नहीं","नही","बस","हो गया","इतना ही","और नहीं","और कुछ नहीं",
+            "कुछ नहीं","नहीं चाहिए",
             "bas","nahi","nahi chahiye","kuch nahi","aur nahi","khatam",
-            "order kar do","order karo","kar do","theek hai bas","bas ho gaya","nahi chahhunga"
+            "order kar do","order karo","kar do"
         )
         return phrases.any { s.contains(it) }
     }
@@ -656,28 +638,25 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun keywordFallback(s: String): String? = when {
-        s.contains("rice")     || s.contains("चावल")     -> "rice"
-        s.contains("oil")      || s.contains("तेल")      -> "oil"
-        s.contains("sugar")    || s.contains("चीनी")     -> "sugar"
-        s.contains("wheat")    || s.contains("गेहूं")    -> "wheat"
-        s.contains("dal")      || s.contains("दाल")      -> "dal"
-        s.contains("salt")     || s.contains("नमक")      -> "salt"
-        s.contains("milk")     || s.contains("दूध")      -> "milk"
-        s.contains("flour")    || s.contains("atta")     -> "wheat flour"
-        s.contains("tea")      || s.contains("चाय")      -> "tea"
-        s.contains("coffee")                              -> "coffee"
-        s.contains("ghee")                               -> "ghee"
-        s.contains("butter")                             -> "butter"
-        s.contains("paneer")                             -> "paneer"
-        s.contains("eggs")     || s.contains("egg")      -> "eggs"
-        s.contains("bread")                              -> "bread"
-        s.contains("sooji")    || s.contains("semolina") -> "semolina"
-        s.contains("maida")                              -> "maida"
-        s.contains("poha")                               -> "poha"
-        s.contains("chana")                              -> "chickpeas"
-        s.contains("rajma")                              -> "kidney beans"
-        s.contains("turmeric") || s.contains("haldi")   -> "turmeric"
-        s.contains("jeera")    || s.contains("cumin")    -> "cumin"
+        s.contains("rice")     || s.contains("चावल")   || s.contains("అన్నం")  -> "rice"
+        s.contains("oil")      || s.contains("तेल")    || s.contains("నూనె")   -> "oil"
+        s.contains("sugar")    || s.contains("चीनी")   || s.contains("చక్కెర") -> "sugar"
+        s.contains("wheat")    || s.contains("गेहूं")                           -> "wheat"
+        s.contains("dal")      || s.contains("दाल")    || s.contains("పప్పు")  -> "dal"
+        s.contains("salt")     || s.contains("नमक")    || s.contains("ఉప్పు")  -> "salt"
+        s.contains("milk")     || s.contains("दूध")    || s.contains("పాలు")   -> "milk"
+        s.contains("flour")    || s.contains("atta")                            -> "wheat flour"
+        s.contains("tea")      || s.contains("चाय")    || s.contains("టీ")     -> "tea"
+        s.contains("coffee")                                                    -> "coffee"
+        s.contains("ghee")     || s.contains("घी")                              -> "ghee"
+        s.contains("butter")   || s.contains("मक्खन")                           -> "butter"
+        s.contains("paneer")   || s.contains("पनीर")                            -> "paneer"
+        s.contains("eggs")     || s.contains("egg")    || s.contains("अंडा")   -> "eggs"
+        s.contains("bread")    || s.contains("रोटी")                            -> "bread"
+        s.contains("poha")     || s.contains("पोहा")                            -> "poha"
+        s.contains("dal")      || s.contains("chana")  || s.contains("rajma")  -> "dal"
+        s.contains("turmeric") || s.contains("haldi")  || s.contains("हल्दी")  -> "turmeric"
+        s.contains("jeera")    || s.contains("cumin")  || s.contains("जीरा")   -> "cumin"
         else -> null
     }
 
@@ -775,8 +754,17 @@ class MainActivity : ComponentActivity() {
         val w = mapOf(
             "one" to 1, "two" to 2, "three" to 3, "four" to 4, "five" to 5,
             "six" to 6, "seven" to 7, "eight" to 8, "nine" to 9, "ten" to 10,
+            // Hindi
             "एक" to 1, "दो" to 2, "तीन" to 3, "चार" to 4, "पाँच" to 5,
-            "ek" to 1, "do" to 2, "teen" to 3, "char" to 4, "paanch" to 5
+            "छह" to 6, "सात" to 7, "आठ" to 8, "नौ" to 9, "दस" to 10,
+            // Romanized
+            "ek" to 1, "do" to 2, "teen" to 3, "char" to 4, "paanch" to 5,
+            // Telugu
+            "ఒకటి" to 1, "రెండు" to 2, "మూడు" to 3, "నాలుగు" to 4, "ఐదు" to 5,
+            // Tamil
+            "ஒன்று" to 1, "இரண்டு" to 2, "மூன்று" to 3, "நான்கு" to 4, "ஐந்து" to 5,
+            // Kannada
+            "ಒಂದು" to 1, "ಎರಡು" to 2, "ಮೂರು" to 3, "ನಾಲ್ಕು" to 4, "ಐದು" to 5
         )
         return Regex("\\d+").find(text)?.value?.toIntOrNull()
             ?: w.entries.firstOrNull { text.lowercase().contains(it.key) }?.value ?: 1
@@ -784,11 +772,9 @@ class MainActivity : ComponentActivity() {
 
     private fun setUiState(s: ButlerUiState) = runOnUiThread { uiState.value = s }
 
-    /** Speak without showing cart */
     private fun speak(text: String, onDone: (() -> Unit)? = null) =
         speakWithCart(text, showCart = false, onDone = onDone)
 
-    /** Speak and show live cart on screen */
     private fun speakWithCart(text: String, showCart: Boolean = true, onDone: (() -> Unit)? = null) {
         sarvamSTT.stop()
         lifecycleScope.launch {
@@ -806,10 +792,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /**
-     * Speak without changing UI state — keeps ShowingRecommendations cards visible on screen.
-     * Use this when reading out product options so cards don't disappear.
-     */
     private fun speakKeepingRecsVisible(text: String, onDone: (() -> Unit)? = null) {
         sarvamSTT.stop()
         lifecycleScope.launch {
@@ -818,7 +800,6 @@ class MainActivity : ComponentActivity() {
             Log.d("Butler", "Original: $text")
             Log.d("Butler", "Translated ($lang): $finalText")
             runOnUiThread {
-                // ← No setUiState call here — recommendation cards stay visible
                 ttsManager.speak(text = finalText, language = lang, onDone = { onDone?.invoke() })
             }
         }
