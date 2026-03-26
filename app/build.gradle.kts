@@ -139,6 +139,8 @@ dependencies {
 
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
 
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
+
     // KTOR
     implementation("io.ktor:ktor-client-android:2.3.7")
 

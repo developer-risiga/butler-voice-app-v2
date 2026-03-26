@@ -53,5 +53,7 @@
         <activity android:name=".ui.PaymentActivity" android:exported="false" android:windowSoftInputMode="adjustResize"/>
         <activity android:name=".ui.LoginActivity" android:exported="false" android:windowSoftInputMode="adjustResize"/>
 
+        <activity android:name=".ui.QRPaymentActivity" android:exported="false" android:windowSoftInputMode="adjustResize"/>
+
     </application>
 </manifest>
