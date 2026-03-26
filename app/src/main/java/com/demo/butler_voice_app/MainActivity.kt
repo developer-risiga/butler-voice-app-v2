@@ -1,5 +1,9 @@
 package com.demo.butler_voice_app
 
+
+
+import com.demo.butler_voice_app.api.SmartProductRepository
+import com.demo.butler_voice_app.api.SupabaseClient
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import android.Manifest
@@ -37,6 +41,9 @@ enum class AssistantState {
 
 class MainActivity : ComponentActivity() {
 
+
+
+    private val productRepo = SmartProductRepository(SupabaseClient)
     private val uiState       = mutableStateOf<ButlerUiState>(ButlerUiState.Idle)
     private var tempName      = ""
     private var tempEmail     = ""
@@ -511,26 +518,97 @@ class MainActivity : ComponentActivity() {
 
     private fun searchAndAskQuantity(itemName: String, qty: Int = 0, unit: String? = null) {
         lifecycleScope.launch {
-            val product = apiClient.searchProduct(itemName)
-            runOnUiThread {
-                if (product != null) {
-                    tempProduct = product
-                    if (qty > 0) {
-                        val displayUnit = unit ?: product.unit ?: ""
-                        val displayQty  = if (displayUnit.isNotBlank()) "$qty $displayUnit" else "$qty"
-                        cart.add(CartItem(product, qty))
-                        val suggestion = suggestRelatedItem(product.name)
-                        val msg = if (suggestion != null && cart.size == 1) {
-                            "Added $displayQty ${product.name}. Would you also like $suggestion?"
-                        } else { "Added $displayQty ${product.name}. Anything else?" }
-                        speakWithCart(msg) { currentState = AssistantState.ASKING_MORE; startListening() }
+            // Try smart recommendations first
+            val recs = productRepo.getTopRecommendations(itemName, null)
+
+            if (recs.isNotEmpty()) {
+                // Show top 3 cards on screen
+                runOnUiThread {
+                    setUiState(ButlerUiState.ShowingRecommendations(itemName, recs))
+                }
+
+                // Build voice readout
+                val readout = when (recs.size) {
+                    1 -> "I found ${recs[0].productName} at ${recs[0].priceLabel} from ${recs[0].storeName}, ${recs[0].distanceLabel}. Say yes to add it."
+                    else -> "I found ${recs.size} options. " +
+                            recs.mapIndexed { i, r -> "${i+1}: ${r.productName} at ${r.priceLabel}, ${r.distanceLabel}" }
+                                .joinToString(". ") +
+                            ". Say the product name to pick one."
+                }
+
+                speak(readout) {
+                    sarvamSTT.startListening(
+                        onResult = { spoken ->
+                            runOnUiThread {
+                                val lower = spoken.lowercase().trim()
+                                val match = recs.firstOrNull {
+                                    it.productName.lowercase().contains(lower) ||
+                                            lower.contains(it.productName.lowercase().split(" ").first())
+                                } ?: if (lower.contains("yes") || lower.contains("haan") ||
+                                    lower.contains("हाँ") || lower.contains("add")) {
+                                    recs.first()
+                                } else null
+
+                                if (match != null) {
+                                    val finalQty = if (qty > 0) qty else 1
+                                    // ✅ FIXED: id is Int, no image_url field
+                                    val product = ApiClient.Product(
+                                        id    = match.productId,
+                                        name  = match.productName,
+                                        price = match.priceRs,
+                                        unit  = match.unit
+                                    )
+                                    cart.add(CartItem(product, finalQty))
+                                    val suggestion = suggestRelatedItem(match.productName)
+                                    val msg = if (suggestion != null && cart.size == 1)
+                                        "Added ${match.productName} from ${match.storeName}. Would you also like $suggestion?"
+                                    else "Added ${match.productName}. Anything else?"
+                                    speakWithCart(msg) {
+                                        currentState = AssistantState.ASKING_MORE
+                                        startListening()
+                                    }
+                                } else {
+                                    // Fallback to old search
+                                    lifecycleScope.launch {
+                                        val product = apiClient.searchProduct(itemName)
+                                        runOnUiThread {
+                                            if (product != null) {
+                                                tempProduct = product
+                                                currentState = AssistantState.ASKING_QUANTITY
+                                                speak("How much ${product.name}?") { startListening() }
+                                            } else {
+                                                speak("I couldn't find $itemName. What else would you like?") { startListening() }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        onError = {
+                            runOnUiThread { speak("Sorry, didn't catch that.") { startListening() } }
+                        }
+                    )
+                }
+            } else {
+                // No recommendations — fallback to old search
+                val product = apiClient.searchProduct(itemName)
+                runOnUiThread {
+                    if (product != null) {
+                        tempProduct = product
+                        if (qty > 0) {
+                            cart.add(CartItem(product, qty))
+                            val suggestion = suggestRelatedItem(product.name)
+                            val msg = if (suggestion != null && cart.size == 1)
+                                "Added $qty ${product.name}. Would you also like $suggestion?"
+                            else "Added $qty ${product.name}. Anything else?"
+                            speakWithCart(msg) { currentState = AssistantState.ASKING_MORE; startListening() }
+                        } else {
+                            currentState = AssistantState.ASKING_QUANTITY
+                            speak("How much ${product.name}?") { startListening() }
+                        }
                     } else {
-                        currentState = AssistantState.ASKING_QUANTITY
-                        speak("How much ${product.name}?") { startListening() }
+                        speak("I couldn't find $itemName. What else would you like?") { startListening() }
                     }
-                } else {
-                    AnalyticsManager.logItemNotFound(itemName)
-                    speak("I couldn't find $itemName. What else would you like?") { startListening() }
                 }
             }
         }

@@ -30,6 +30,12 @@ sealed class ButlerUiState {
     data class Speaking(val text: String, val isFallback: Boolean = false, val cart: List<CartDisplayItem> = emptyList()) : ButlerUiState()
     data class OrderDone(val shortId: String, val total: Double, val orderStatus: String = "placed") : ButlerUiState()
     data class Error(val message: String) : ButlerUiState()
+
+
+    data class ShowingRecommendations(
+        val query: String,
+        val recs: List<com.demo.butler_voice_app.api.ProductRecommendation>
+    ) : ButlerUiState()
 }
 
 private val BgColor = Color(0xFF080C10)
@@ -55,6 +61,7 @@ fun ButlerScreen(state: ButlerUiState) {
         is ButlerUiState.Speaking -> OrbSpeak
         is ButlerUiState.OrderDone -> OrbSuccess
         is ButlerUiState.Error -> OrbError
+        is ButlerUiState.ShowingRecommendations -> OrbThink
     }
     Box(modifier = Modifier.fillMaxSize().background(BgColor), contentAlignment = Alignment.Center) {
         Box(modifier = Modifier.size(320.dp).background(brush = Brush.radialGradient(colors = listOf(orbColor.copy(alpha = 0.07f), Color.Transparent)), shape = CircleShape))
@@ -70,6 +77,7 @@ fun ButlerScreen(state: ButlerUiState) {
                 is ButlerUiState.Speaking -> ""
                 is ButlerUiState.OrderDone -> "Order Placed!"
                 is ButlerUiState.Error -> "Something went wrong"
+                is ButlerUiState.ShowingRecommendations -> "Pick a product"
             }
             if (headline.isNotBlank()) { Text(text = headline, fontSize = 24.sp, fontWeight = FontWeight.W500, color = TextPrimary, textAlign = TextAlign.Center) }
             if (state is ButlerUiState.Thinking && state.heard.isNotBlank()) { Spacer(modifier = Modifier.height(12.dp)); Text(text = "\u201c${state.heard}\u201d", fontSize = 14.sp, color = TextSub, textAlign = TextAlign.Center, lineHeight = 20.sp) }
@@ -77,6 +85,21 @@ fun ButlerScreen(state: ButlerUiState) {
                 if (state.text.isNotBlank()) { Spacer(modifier = Modifier.height(16.dp)); SpeakingBubble(text = state.text) }
                 AnimatedVisibility(visible = state.cart.isNotEmpty(), enter = fadeIn() + slideInVertically { it / 2 }, exit = fadeOut()) {
                     Column { Spacer(modifier = Modifier.height(16.dp)); LiveCartCard(items = state.cart) }
+                }
+            }
+
+            if (state is ButlerUiState.ShowingRecommendations && state.recs.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = "Top picks for \"${state.query}\"",
+                    fontSize = 12.sp,
+                    color = TextMuted,
+                    letterSpacing = 2.sp
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                state.recs.forEachIndexed { index, rec ->
+                    RecommendationCard(rec = rec, isBest = index == 0)
+                    Spacer(modifier = Modifier.height(8.dp))
                 }
             }
             if (state is ButlerUiState.OrderDone) { Spacer(modifier = Modifier.height(28.dp)); OrderSuccessCard(shortId = state.shortId, total = state.total, orderStatus = state.orderStatus) }
@@ -159,6 +182,64 @@ fun OrderSuccessCard(shortId: String, total: Double, orderStatus: String = "plac
             Text("\u20B9%.2f".format(total), fontSize = 18.sp, color = Color(0xFF8FDDBE))
             Spacer(modifier = Modifier.height(10.dp))
             Surface(shape = RoundedCornerShape(20.dp), color = statusColor.copy(alpha = 0.18f)) { Text(text = statusLabel, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = statusColor, modifier = Modifier.padding(horizontal = 14.dp, vertical = 5.dp)) }
+        }
+    }
+}
+
+@Composable
+fun RecommendationCard(
+    rec: com.demo.butler_voice_app.api.ProductRecommendation,
+    isBest: Boolean
+) {
+    val borderColor = if (isBest) Color(0xFF00E5A0) else Color(0xFF1A2530)
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = CardColor,
+        border = androidx.compose.foundation.BorderStroke(
+            width = if (isBest) 1.5.dp else 0.5.dp,
+            color = borderColor
+        ),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                if (isBest) {
+                    Text(
+                        text = "BEST VALUE",
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AccentGreen,
+                        letterSpacing = 1.sp
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                }
+                Text(text = rec.productName, fontSize = 13.sp,
+                    color = TextPrimary, fontWeight = FontWeight.W500, maxLines = 2)
+                Text(text = rec.unit, fontSize = 11.sp, color = TextMuted)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(text = rec.storeName, fontSize = 11.sp, color = TextSub)
+                Text(text = rec.distanceLabel, fontSize = 10.sp, color = TextMuted)
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text(text = rec.priceLabel, fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold, color = AccentGreen)
+                Spacer(modifier = Modifier.height(6.dp))
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = Color(0xFF1A2A1A)
+                ) {
+                    Text(
+                        text = "Say \"${rec.voiceShortcut}\"",
+                        fontSize = 10.sp,
+                        color = Color(0xFF4DDFB0),
+                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
         }
     }
 }
