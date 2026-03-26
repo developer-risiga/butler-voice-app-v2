@@ -203,7 +203,9 @@ class MainActivity : ComponentActivity() {
                     val transcript = text.trim()
                     Log.d("Butler", "Transcript: $transcript")
                     val detectedLang = LanguageDetector.detect(transcript)
-                    LanguageManager.setLanguage(detectedLang)
+                    if (transcript.length > 3) {
+                        LanguageManager.setLanguage(detectedLang)
+                    }
                     Log.d("LANG_DEBUG", "Detected=$detectedLang | Session=${LanguageManager.getLanguage()}")
 
                     if (transcript.isBlank()) {
@@ -554,14 +556,17 @@ class MainActivity : ComponentActivity() {
             // Number-based selection — most reliable
             lower.contains("1") || lower.contains("one") ||
                     lower.contains("पहला") || lower.contains("pahla") ||
+                    lower.contains("एक") || lower.contains("ek") ||
                     lower.contains("first") -> recs.getOrNull(0)
 
             lower.contains("2") || lower.contains("two") ||
                     lower.contains("दूसरा") || lower.contains("doosra") ||
+                    lower.contains("दो") || lower.contains("do") ||
                     lower.contains("second") -> recs.getOrNull(1)
 
             lower.contains("3") || lower.contains("three") ||
                     lower.contains("तीसरा") || lower.contains("teesra") ||
+                    lower.contains("तीन") || lower.contains("teen") ||
                     lower.contains("third") -> recs.getOrNull(2)
 
             // Yes/confirm — pick best value
