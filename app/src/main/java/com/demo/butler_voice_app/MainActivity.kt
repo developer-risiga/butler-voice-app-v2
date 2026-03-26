@@ -1,8 +1,7 @@
 package com.demo.butler_voice_app
 
 
-private var userLocation: android.location.Location? = null
-private lateinit var locationManager: android.location.LocationManager
+
 import com.demo.butler_voice_app.api.SmartProductRepository
 import com.demo.butler_voice_app.api.SupabaseClient
 import okhttp3.MediaType.Companion.toMediaType
@@ -43,7 +42,8 @@ enum class AssistantState {
 class MainActivity : ComponentActivity() {
 
 
-
+    private var userLocation: android.location.Location? = null
+    private lateinit var locationManager: android.location.LocationManager
     private val productRepo = SmartProductRepository(SupabaseClient)
     private val uiState       = mutableStateOf<ButlerUiState>(ButlerUiState.Idle)
     private var tempName      = ""
