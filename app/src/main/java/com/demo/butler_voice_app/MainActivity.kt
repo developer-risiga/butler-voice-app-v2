@@ -1,7 +1,5 @@
 package com.demo.butler_voice_app
 
-
-
 import com.demo.butler_voice_app.api.SmartProductRepository
 import com.demo.butler_voice_app.api.SupabaseClient
 import okhttp3.MediaType.Companion.toMediaType
@@ -41,10 +39,9 @@ enum class AssistantState {
 
 class MainActivity : ComponentActivity() {
 
-
     private var userLocation: android.location.Location? = null
     private lateinit var locationManager: android.location.LocationManager
-    private val productRepo = SmartProductRepository(SupabaseClient)
+    private val productRepo   = SmartProductRepository(SupabaseClient)
     private val uiState       = mutableStateOf<ButlerUiState>(ButlerUiState.Idle)
     private var tempName      = ""
     private var tempEmail     = ""
@@ -79,6 +76,7 @@ class MainActivity : ComponentActivity() {
         audioManager.isSpeakerphoneOn = true
 
         SessionStore.init(this)
+        startLocationUpdates()
 
         sarvamSTT = SarvamSTTManager(this, BuildConfig.SARVAM_API_KEY)
 
@@ -104,13 +102,38 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() { super.onDestroy(); porcupine.stop(); sarvamSTT.stop(); ttsManager.shutdown() }
     override fun onResume()  { super.onResume();  try { startLockTask() } catch (_: Exception) {} }
 
+    // ─── LOCATION ─────────────────────────────────────────────
+
+    private fun startLocationUpdates() {
+        try {
+            locationManager = getSystemService(LOCATION_SERVICE) as android.location.LocationManager
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
+                == PackageManager.PERMISSION_GRANTED) {
+                locationManager.requestLocationUpdates(
+                    android.location.LocationManager.GPS_PROVIDER, 30000L, 50f
+                ) { location -> userLocation = location }
+                userLocation = locationManager.getLastKnownLocation(
+                    android.location.LocationManager.GPS_PROVIDER
+                ) ?: locationManager.getLastKnownLocation(
+                    android.location.LocationManager.NETWORK_PROVIDER
+                )
+            }
+        } catch (e: Exception) {
+            Log.e("Butler", "Location error: ${e.message}")
+        }
+    }
+
     // ─── PERMISSIONS ──────────────────────────────────────────
 
     private fun checkMicPermission() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
             != PackageManager.PERMISSION_GRANTED
         ) {
-            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.RECORD_AUDIO), recordRequestCode)
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.ACCESS_FINE_LOCATION),
+                recordRequestCode
+            )
         } else {
             startWakeWordListening()
         }
@@ -120,7 +143,10 @@ class MainActivity : ComponentActivity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == recordRequestCode && grantResults.isNotEmpty() &&
             grantResults[0] == PackageManager.PERMISSION_GRANTED
-        ) startWakeWordListening()
+        ) {
+            startLocationUpdates()
+            startWakeWordListening()
+        }
     }
 
     // ─── WAKE WORD ────────────────────────────────────────────
@@ -137,27 +163,6 @@ class MainActivity : ComponentActivity() {
         Log.d("Butler", "Waiting for wake word...")
         try { porcupine.stop() } catch (_: Exception) {}
         porcupine.start()
-    }
-
-
-    private fun startLocationUpdates() {
-        try {
-            locationManager = getSystemService(LOCATION_SERVICE) as android.location.LocationManager
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
-                == PackageManager.PERMISSION_GRANTED) {
-                locationManager.requestLocationUpdates(
-                    android.location.LocationManager.GPS_PROVIDER, 30000L, 50f
-                ) { location -> userLocation = location }
-                // Get last known immediately
-                userLocation = locationManager.getLastKnownLocation(
-                    android.location.LocationManager.GPS_PROVIDER
-                ) ?: locationManager.getLastKnownLocation(
-                    android.location.LocationManager.NETWORK_PROVIDER
-                )
-            }
-        } catch (e: Exception) {
-            Log.e("Butler", "Location error: ${e.message}")
-        }
     }
 
     private fun onWakeWordDetected() {
@@ -235,14 +240,14 @@ class MainActivity : ComponentActivity() {
             AssistantState.ASKING_IS_NEW_USER -> {
                 when {
                     cleaned.contains("new")      || cleaned.contains("first")   ||
-                    cleaned.contains("register") || cleaned.contains("नया")     ||
-                    cleaned.contains("नई") -> {
+                            cleaned.contains("register") || cleaned.contains("नया")     ||
+                            cleaned.contains("नई") -> {
                         currentState = AssistantState.ASKING_NAME
                         speak("Great! What's your name?") { startListening() }
                     }
                     cleaned.contains("returning") || cleaned.contains("before") ||
-                    cleaned.contains("yes")       || cleaned.contains("have")   ||
-                    cleaned.contains("पहले")      || cleaned.contains("login")  -> {
+                            cleaned.contains("yes")       || cleaned.contains("have")   ||
+                            cleaned.contains("पहले")      || cleaned.contains("login")  -> {
                         currentState = AssistantState.ASKING_EMAIL
                         speak("Welcome back! Please say your email.") { startListening() }
                     }
@@ -346,19 +351,19 @@ class MainActivity : ComponentActivity() {
             AssistantState.CONFIRMING -> {
                 when {
                     cleaned.contains("yes")       || cleaned.contains("place")      ||
-                    cleaned.contains("confirm")   || cleaned.contains("ok")         ||
-                    cleaned.contains("haan")      || cleaned.contains("हाँ")        ||
-                    cleaned.contains("हां")       || cleaned.contains("theek")      ||
-                    cleaned.contains("kar do")    || cleaned.contains("karo")       ||
-                    cleaned.contains("order kar") || cleaned.contains("ऑर्डर कर")  ||
-                    cleaned.contains("bilkul")    || cleaned.contains("zaroor")     ||
-                    cleaned.contains("done")      || cleaned.contains("proceed")    ||
-                    cleaned.contains("चलो")       || cleaned.contains("हा")         -> placeOrder()
+                            cleaned.contains("confirm")   || cleaned.contains("ok")         ||
+                            cleaned.contains("haan")      || cleaned.contains("हाँ")        ||
+                            cleaned.contains("हां")       || cleaned.contains("theek")      ||
+                            cleaned.contains("kar do")    || cleaned.contains("karo")       ||
+                            cleaned.contains("order kar") || cleaned.contains("ऑर्डर कर")  ||
+                            cleaned.contains("bilkul")    || cleaned.contains("zaroor")     ||
+                            cleaned.contains("done")      || cleaned.contains("proceed")    ||
+                            cleaned.contains("चलो")       || cleaned.contains("हा")         -> placeOrder()
 
                     cleaned.contains("no")        || cleaned.contains("cancel")     ||
-                    cleaned.contains("nahi")      || cleaned.contains("नहीं")       ||
-                    cleaned.contains("mat")       || cleaned.contains("band kar")   ||
-                    cleaned.contains("ruk")       -> {
+                            cleaned.contains("nahi")      || cleaned.contains("नहीं")       ||
+                            cleaned.contains("mat")       || cleaned.contains("band kar")   ||
+                            cleaned.contains("ruk")       -> {
                         speak("Order cancelled. Goodbye!") {
                             cart.clear(); UserSessionManager.logout(); startWakeWordListening()
                         }
@@ -381,12 +386,11 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }
-            } // ← CONFIRMING closes here
+            }
 
             else -> {}
-
-        } // ← when(currentState) closes here
-    }     // ← handleCommand() closes here
+        }
+    }
 
     // ─── ORDER INTENT ─────────────────────────────────────────
 
@@ -436,9 +440,9 @@ class MainActivity : ComponentActivity() {
     private fun handleAskingMore(cleaned: String, originalText: String) {
         when {
             cleaned.contains("yes")  || cleaned.contains("add")   ||
-            cleaned.contains("more") || cleaned.contains("also")  ||
-            cleaned.contains("और")   || cleaned.contains("aur")   ||
-            cleaned.contains("हाँ")  || cleaned.contains("haan")  -> {
+                    cleaned.contains("more") || cleaned.contains("also")  ||
+                    cleaned.contains("और")   || cleaned.contains("aur")   ||
+                    cleaned.contains("हाँ")  || cleaned.contains("haan")  -> {
                 currentState = AssistantState.LISTENING
                 speakWithCart("What else would you like?") { startListening() }
             }
@@ -464,7 +468,163 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // ─── SMART PRODUCT PICKER ─────────────────────────────────
+
+    private fun searchAndAskQuantity(itemName: String, qty: Int = 0, unit: String? = null) {
+        lifecycleScope.launch {
+            val recs = productRepo.getTopRecommendations(itemName, userLocation)
+
+            if (recs.isNotEmpty()) {
+                runOnUiThread {
+                    setUiState(ButlerUiState.ShowingRecommendations(itemName, recs))
+                }
+
+                val readout = "I found ${recs.size} options for $itemName. " +
+                        recs.mapIndexed { i, r -> "${i + 1}: ${r.productName} at ${r.priceLabel}" }
+                            .joinToString(". ") +
+                        ". Say 1, 2, or 3 to pick."
+
+                // Keep recommendation cards visible while speaking
+                speakKeepingRecsVisible(readout) {
+                    sarvamSTT.startListening(
+                        onResult = { spoken ->
+                            runOnUiThread {
+                                val lower = spoken.lowercase().trim()
+
+                                // Silent — ask again, never auto-pick
+                                if (lower.isBlank()) {
+                                    speakKeepingRecsVisible("Please say 1, 2, or 3 to pick a product.") {
+                                        sarvamSTT.startListening(
+                                            onResult = { spoken2 ->
+                                                runOnUiThread { handleRecSelection(spoken2, recs, qty, itemName) }
+                                            },
+                                            onError = { runOnUiThread { speak("Sorry.") { startListening() } } }
+                                        )
+                                    }
+                                    return@runOnUiThread
+                                }
+
+                                handleRecSelection(lower, recs, qty, itemName)
+                            }
+                        },
+                        onError = {
+                            runOnUiThread { speak("Sorry, didn't catch that.") { startListening() } }
+                        }
+                    )
+                }
+            } else {
+                // No recommendations from dark stores — fall back to product cache
+                val product = apiClient.searchProduct(itemName)
+                runOnUiThread {
+                    if (product != null) {
+                        tempProduct = product
+                        if (qty > 0) {
+                            cart.add(CartItem(product, qty))
+                            val suggestion = suggestRelatedItem(product.name)
+                            val msg = if (suggestion != null && cart.size == 1)
+                                "Added $qty ${product.name}. Would you also like $suggestion?"
+                            else "Added $qty ${product.name}. Anything else?"
+                            speakWithCart(msg) { currentState = AssistantState.ASKING_MORE; startListening() }
+                        } else {
+                            currentState = AssistantState.ASKING_QUANTITY
+                            speak("How much ${product.name}?") { startListening() }
+                        }
+                    } else {
+                        speak("I couldn't find $itemName. What else would you like?") { startListening() }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Matches spoken confirmation to one of the 3 recommendation cards.
+     * Supports: number words (1/2/3, one/two/three, पहला/दूसरा/तीसरा)
+     *           and partial product name matching.
+     */
+    private fun handleRecSelection(
+        spoken: String,
+        recs: List<com.demo.butler_voice_app.api.ProductRecommendation>,
+        qty: Int,
+        itemName: String
+    ) {
+        val lower = spoken.lowercase().trim()
+
+        val pick: com.demo.butler_voice_app.api.ProductRecommendation? = when {
+            // Number-based selection — most reliable
+            lower.contains("1") || lower.contains("one") ||
+                    lower.contains("पहला") || lower.contains("pahla") ||
+                    lower.contains("first") -> recs.getOrNull(0)
+
+            lower.contains("2") || lower.contains("two") ||
+                    lower.contains("दूसरा") || lower.contains("doosra") ||
+                    lower.contains("second") -> recs.getOrNull(1)
+
+            lower.contains("3") || lower.contains("three") ||
+                    lower.contains("तीसरा") || lower.contains("teesra") ||
+                    lower.contains("third") -> recs.getOrNull(2)
+
+            // Yes/confirm — pick best value
+            lower.contains("yes") || lower.contains("haan") ||
+                    lower.contains("हाँ") || lower.contains("ok") ||
+                    lower.contains("theek") -> recs.first()
+
+            // Partial name match — split into words and compare
+            else -> recs.firstOrNull { rec ->
+                val recWords = rec.productName.lowercase().split(" ")
+                val spokenWords = lower.split(" ").filter { it.length > 2 }
+                spokenWords.any { sw -> recWords.any { rw -> rw.contains(sw) || sw.contains(rw) } }
+            }
+        }
+
+        if (pick != null) {
+            val finalQty = if (qty > 0) qty else 1
+            val product = ApiClient.Product(
+                id    = pick.productId,
+                name  = pick.productName,
+                price = pick.priceRs,
+                unit  = pick.unit
+            )
+            cart.add(CartItem(product, finalQty))
+            val suggestion = suggestRelatedItem(pick.productName)
+            val msg = if (suggestion != null && cart.size == 1)
+                "Added ${pick.productName} from ${pick.storeName}. Would you also like $suggestion?"
+            else "Added ${pick.productName} from ${pick.storeName}. Anything else?"
+            speakWithCart(msg) {
+                currentState = AssistantState.ASKING_MORE
+                startListening()
+            }
+        } else {
+            // No match — ask again with simple number prompt
+            speakKeepingRecsVisible("Sorry, say 1, 2, or 3 to pick.") {
+                sarvamSTT.startListening(
+                    onResult = { spoken2 ->
+                        runOnUiThread { handleRecSelection(spoken2, recs, qty, itemName) }
+                    },
+                    onError = { runOnUiThread { speak("Sorry.") { startListening() } } }
+                )
+            }
+        }
+    }
+
     // ─── HELPERS ──────────────────────────────────────────────
+
+    private suspend fun addMultipleItemsToCart(items: List<com.demo.butler_voice_app.ai.ParsedItem>) {
+        val found = mutableListOf<String>(); val notFound = mutableListOf<String>()
+        for (item in items) {
+            val product = apiClient.searchProduct(item.name)
+            if (product != null) {
+                cart.add(CartItem(product, item.quantity))
+                val u = item.unit ?: product.unit ?: ""
+                found.add("${if (u.isNotBlank()) "${item.quantity} $u" else item.quantity} ${product.name}")
+            } else { notFound.add(item.name); AnalyticsManager.logItemNotFound(item.name) }
+        }
+        runOnUiThread {
+            val msg = if (notFound.isEmpty()) "Added ${found.joinToString(", ")}. Anything else?"
+            else "Added ${found.joinToString(", ")}. Couldn't find ${notFound.joinToString(", ")}. Anything else?"
+            speakWithCart(msg) { currentState = AssistantState.ASKING_MORE; startListening() }
+        }
+    }
 
     private fun isNoMoreIntent(s: String): Boolean {
         val phrases = listOf(
@@ -482,7 +642,7 @@ class MainActivity : ComponentActivity() {
     private fun suggestRelatedItem(productName: String): String? = when {
         productName.lowercase().contains("rice")  -> "dal"
         productName.lowercase().contains("atta")  ||
-        productName.lowercase().contains("flour") -> "oil"
+                productName.lowercase().contains("flour") -> "oil"
         productName.lowercase().contains("dal")   -> "rice"
         productName.lowercase().contains("milk")  -> "sugar"
         productName.lowercase().contains("bread") -> "butter"
@@ -538,129 +698,6 @@ class MainActivity : ComponentActivity() {
         )
     }
 
-    private fun searchAndAskQuantity(itemName: String, qty: Int = 0, unit: String? = null) {
-        lifecycleScope.launch {
-            // Try smart recommendations first
-            val recs = productRepo.getTopRecommendations(itemName, null)
-
-            if (recs.isNotEmpty()) {
-                // Show top 3 cards on screen
-                runOnUiThread {
-                    setUiState(ButlerUiState.ShowingRecommendations(itemName, recs))
-                }
-
-                // Build voice readout
-                val readout = when (recs.size) {
-                    1 -> "I found ${recs[0].productName} at ${recs[0].priceLabel} from ${recs[0].storeName}, ${recs[0].distanceLabel}. Say yes to add it."
-                    else -> "I found ${recs.size} options. " +
-                            recs.mapIndexed { i, r -> "${i+1}: ${r.productName} at ${r.priceLabel}, ${r.distanceLabel}" }
-                                .joinToString(". ") +
-                            ". Say the product name to pick one."
-                }
-
-                speak(readout) {
-                    sarvamSTT.startListening(
-                        onResult = { spoken ->
-                            runOnUiThread {
-                                val lower = spoken.lowercase().trim()
-                                // If silent/empty — ask again, don't auto-pick
-                                if (lower.isBlank()) {
-                                    speak("Please say a product name to pick.") {
-                                        startListening()
-                                    }
-                                    return@runOnUiThread
-                                }
-                                val match = recs.firstOrNull {
-                                    it.productName.lowercase().contains(lower) ||
-                                            lower.contains(it.productName.lowercase().split(" ").first())
-                                } ?: if (lower.contains("yes") || lower.contains("haan") ||
-                                    lower.contains("हाँ") || lower.contains("add") ||
-                                    lower.isBlank()) {
-                                    recs.first() // Auto-pick best value on yes/blank
-                                } else null
-
-                                if (match != null) {
-                                    val finalQty = if (qty > 0) qty else 1
-                                    // ✅ FIXED: id is Int, no image_url field
-                                    val product = ApiClient.Product(
-                                        id    = match.productId,
-                                        name  = match.productName,
-                                        price = match.priceRs,
-                                        unit  = match.unit
-                                    )
-                                    cart.add(CartItem(product, finalQty))
-                                    val suggestion = suggestRelatedItem(match.productName)
-                                    val msg = if (suggestion != null && cart.size == 1)
-                                        "Added ${match.productName} from ${match.storeName}. Would you also like $suggestion?"
-                                    else "Added ${match.productName}. Anything else?"
-                                    speakWithCart(msg) {
-                                        currentState = AssistantState.ASKING_MORE
-                                        startListening()
-                                    }
-                                } else {
-                                    // Fallback to old search
-                                    lifecycleScope.launch {
-                                        val product = apiClient.searchProduct(itemName)
-                                        runOnUiThread {
-                                            if (product != null) {
-                                                tempProduct = product
-                                                currentState = AssistantState.ASKING_QUANTITY
-                                                speak("How much ${product.name}?") { startListening() }
-                                            } else {
-                                                speak("I couldn't find $itemName. What else would you like?") { startListening() }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        },
-                        onError = {
-                            runOnUiThread { speak("Sorry, didn't catch that.") { startListening() } }
-                        }
-                    )
-                }
-            } else {
-                // No recommendations — fallback to old search
-                val product = apiClient.searchProduct(itemName)
-                runOnUiThread {
-                    if (product != null) {
-                        tempProduct = product
-                        if (qty > 0) {
-                            cart.add(CartItem(product, qty))
-                            val suggestion = suggestRelatedItem(product.name)
-                            val msg = if (suggestion != null && cart.size == 1)
-                                "Added $qty ${product.name}. Would you also like $suggestion?"
-                            else "Added $qty ${product.name}. Anything else?"
-                            speakWithCart(msg) { currentState = AssistantState.ASKING_MORE; startListening() }
-                        } else {
-                            currentState = AssistantState.ASKING_QUANTITY
-                            speak("How much ${product.name}?") { startListening() }
-                        }
-                    } else {
-                        speak("I couldn't find $itemName. What else would you like?") { startListening() }
-                    }
-                }
-            }
-        }
-    }
-
-    private suspend fun addMultipleItemsToCart(items: List<com.demo.butler_voice_app.ai.ParsedItem>) {
-        val found = mutableListOf<String>(); val notFound = mutableListOf<String>()
-        for (item in items) {
-            val product = apiClient.searchProduct(item.name)
-            if (product != null) {
-                cart.add(CartItem(product, item.quantity))
-                val u = item.unit ?: product.unit ?: ""
-                found.add("${if (u.isNotBlank()) "${item.quantity} $u" else item.quantity} ${product.name}")
-            } else { notFound.add(item.name); AnalyticsManager.logItemNotFound(item.name) }
-        }
-        runOnUiThread {
-            val msg = if (notFound.isEmpty()) "Added ${found.joinToString(", ")}. Anything else?"
-                      else "Added ${found.joinToString(", ")}. Couldn't find ${notFound.joinToString(", ")}. Anything else?"
-            speakWithCart(msg) { currentState = AssistantState.ASKING_MORE; startListening() }
-        }
-    }
-
     private fun readOrderHistory() {
         val history = UserSessionManager.purchaseHistory
         if (history.isEmpty()) speak("You haven't ordered anything yet. What would you like?") { startListening() }
@@ -705,22 +742,21 @@ class MainActivity : ComponentActivity() {
                 }
                 val orderResult = apiClient.createOrder(cart, userId)
                 val shortId     = if (orderResult.public_id.isNotBlank()) orderResult.public_id
-                                  else orderResult.id.takeLast(6).uppercase()
+                else orderResult.id.takeLast(6).uppercase()
                 val firstName   = UserSessionManager.currentProfile?.full_name?.split(" ")?.first() ?: ""
                 Log.d("Butler", "Order placed: ${orderResult.id}")
                 AnalyticsManager.logOrderPlaced(orderResult.id, orderResult.total_amount, cart.size, LanguageManager.getLanguage())
                 setUiState(ButlerUiState.OrderDone(shortId, orderResult.total_amount, "placed"))
                 val farewell = if (firstName.isNotBlank()) "Order placed $firstName! Your ID is $shortId. Thank you, goodbye!"
-                              else "Order placed! Your ID is $shortId. Thank you!"
+                else "Order placed! Your ID is $shortId. Thank you!"
                 speak(farewell) {
                     cart.clear()
-                    UserSessionManager.logout()  // soft logout — keeps session on disk
+                    UserSessionManager.logout()
                     Handler(Looper.getMainLooper()).postDelayed({ startWakeWordListening() }, 2500)
                 }
             } catch (e: Exception) {
                 Log.e("Butler", "Order failed: ${e.message}")
                 runOnUiThread {
-                    // Keep cart intact — let user retry
                     currentState = AssistantState.CONFIRMING
                     speakWithCart("Sorry, there was a network issue. Say yes to try again or no to cancel.") { startListening() }
                 }
@@ -731,10 +767,12 @@ class MainActivity : ComponentActivity() {
     // ─── SPEAK HELPERS ────────────────────────────────────────
 
     private fun extractQuantity(text: String): Int {
-        val w = mapOf("one" to 1,"two" to 2,"three" to 3,"four" to 4,"five" to 5,
-            "six" to 6,"seven" to 7,"eight" to 8,"nine" to 9,"ten" to 10,
-            "एक" to 1,"दो" to 2,"तीन" to 3,"चार" to 4,"पाँच" to 5,
-            "ek" to 1,"do" to 2,"teen" to 3,"char" to 4,"paanch" to 5)
+        val w = mapOf(
+            "one" to 1, "two" to 2, "three" to 3, "four" to 4, "five" to 5,
+            "six" to 6, "seven" to 7, "eight" to 8, "nine" to 9, "ten" to 10,
+            "एक" to 1, "दो" to 2, "तीन" to 3, "चार" to 4, "पाँच" to 5,
+            "ek" to 1, "do" to 2, "teen" to 3, "char" to 4, "paanch" to 5
+        )
         return Regex("\\d+").find(text)?.value?.toIntOrNull()
             ?: w.entries.firstOrNull { text.lowercase().contains(it.key) }?.value ?: 1
     }
@@ -742,7 +780,8 @@ class MainActivity : ComponentActivity() {
     private fun setUiState(s: ButlerUiState) = runOnUiThread { uiState.value = s }
 
     /** Speak without showing cart */
-    private fun speak(text: String, onDone: (() -> Unit)? = null) = speakWithCart(text, showCart = false, onDone = onDone)
+    private fun speak(text: String, onDone: (() -> Unit)? = null) =
+        speakWithCart(text, showCart = false, onDone = onDone)
 
     /** Speak and show live cart on screen */
     private fun speakWithCart(text: String, showCart: Boolean = true, onDone: (() -> Unit)? = null) {
@@ -762,6 +801,24 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * Speak without changing UI state — keeps ShowingRecommendations cards visible on screen.
+     * Use this when reading out product options so cards don't disappear.
+     */
+    private fun speakKeepingRecsVisible(text: String, onDone: (() -> Unit)? = null) {
+        sarvamSTT.stop()
+        lifecycleScope.launch {
+            val lang      = LanguageManager.getLanguage()
+            val finalText = TranslationManager.translate(text, lang)
+            Log.d("Butler", "Original: $text")
+            Log.d("Butler", "Translated ($lang): $finalText")
+            runOnUiThread {
+                // ← No setUiState call here — recommendation cards stay visible
+                ttsManager.speak(text = finalText, language = lang, onDone = { onDone?.invoke() })
+            }
+        }
+    }
+
     private suspend fun translateToEnglish(text: String): String {
         return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             try {
@@ -773,7 +830,8 @@ class MainActivity : ComponentActivity() {
                             put("content", "Translate to English. Return ONLY the translated text, nothing else: $text")
                         })
                     })
-                    put("max_tokens", 50); put("temperature", 0.1)
+                    put("max_tokens", 50)
+                    put("temperature", 0.1)
                 }.toString().toRequestBody("application/json".toMediaType())
                 val request = okhttp3.Request.Builder()
                     .url("https://api.openai.com/v1/chat/completions")
@@ -782,9 +840,15 @@ class MainActivity : ComponentActivity() {
                     .post(body).build()
                 val response = okhttp3.OkHttpClient().newCall(request).execute()
                 val resBody  = response.body?.string() ?: return@withContext text
-                org.json.JSONObject(resBody).getJSONArray("choices")
-                    .getJSONObject(0).getJSONObject("message").getString("content").trim()
-            } catch (e: Exception) { Log.e("Butler", "translateToEnglish failed: ${e.message}"); text }
+                org.json.JSONObject(resBody)
+                    .getJSONArray("choices")
+                    .getJSONObject(0)
+                    .getJSONObject("message")
+                    .getString("content").trim()
+            } catch (e: Exception) {
+                Log.e("Butler", "translateToEnglish failed: ${e.message}")
+                text
+            }
         }
     }
 }
