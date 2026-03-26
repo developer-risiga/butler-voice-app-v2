@@ -1,245 +1,815 @@
 package com.demo.butler_voice_app.ui
 
-import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.*
 import androidx.compose.animation.core.*
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.foundation.background
+import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.scale
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import androidx.compose.ui.*
+import androidx.compose.ui.draw.*
+import androidx.compose.ui.geometry.*
+import androidx.compose.ui.graphics.*
+import androidx.compose.ui.graphics.drawscope.*
+import androidx.compose.ui.text.font.*
+import androidx.compose.ui.text.style.*
+import androidx.compose.ui.unit.*
+import kotlin.math.*
+import com.demo.butler_voice_app.api.ProductRecommendation
 
-data class CartDisplayItem(val name: String, val qty: Int, val price: Double)
+// ── Data classes ──────────────────────────────────────────────────────────────
+
+data class CartDisplayItem(val name: String, val quantity: Int, val price: Double)
+
+// ── UI State sealed class ─────────────────────────────────────────────────────
 
 sealed class ButlerUiState {
     object Idle : ButlerUiState()
     object Listening : ButlerUiState()
-    data class Thinking(val heard: String) : ButlerUiState()
-    data class Speaking(val text: String, val isFallback: Boolean = false, val cart: List<CartDisplayItem> = emptyList()) : ButlerUiState()
-    data class OrderDone(val shortId: String, val total: Double, val orderStatus: String = "placed") : ButlerUiState()
-    data class Error(val message: String) : ButlerUiState()
-
-
-    data class ShowingRecommendations(
-        val query: String,
-        val recs: List<com.demo.butler_voice_app.api.ProductRecommendation>
-    ) : ButlerUiState()
+    data class Thinking(val transcript: String = "") : ButlerUiState()
+    data class Speaking(val text: String, val cart: List<CartDisplayItem> = emptyList()) : ButlerUiState()
+    data class ShowingRecommendations(val query: String, val recs: List<ProductRecommendation>) : ButlerUiState()
+    data class OrderDone(val orderId: String, val total: Double, val status: String) : ButlerUiState()
 }
 
-private val BgColor = Color(0xFF080C10)
-private val SurfColor = Color(0xFF111820)
-private val CardColor = Color(0xFF0D1520)
-private val OrbIdle = Color(0xFF2A3540)
-private val OrbListen = Color(0xFF00E5A0)
-private val OrbThink = Color(0xFF9C7AFF)
-private val OrbSpeak = Color(0xFF3EAAFF)
-private val OrbSuccess = Color(0xFF00E5A0)
-private val OrbError = Color(0xFFFF4D6A)
-private val TextPrimary = Color(0xFFF0F4F8)
-private val TextMuted = Color(0xFF556070)
-private val TextSub = Color(0xFF8A9AAA)
-private val AccentGreen = Color(0xFF00E5A0)
+// ── Color palette ─────────────────────────────────────────────────────────────
+
+private val BgDeep      = Color(0xFF070B14)
+private val BgCard      = Color(0xFF0E1520)
+private val BgCardAlt   = Color(0xFF111A28)
+private val AccentTeal  = Color(0xFF00D4AA)
+private val AccentBlue  = Color(0xFF4F9EFF)
+private val AccentAmber = Color(0xFFFFB830)
+private val AccentRed   = Color(0xFFFF5C5C)
+private val TextPrimary = Color(0xFFF0F4FF)
+private val TextSecond  = Color(0xFF8899BB)
+private val BorderColor = Color(0xFF1E2D45)
+
+// ── Main Screen ───────────────────────────────────────────────────────────────
 
 @Composable
 fun ButlerScreen(state: ButlerUiState) {
-    val orbColor = when (state) {
-        is ButlerUiState.Idle -> OrbIdle
-        is ButlerUiState.Listening -> OrbListen
-        is ButlerUiState.Thinking -> OrbThink
-        is ButlerUiState.Speaking -> OrbSpeak
-        is ButlerUiState.OrderDone -> OrbSuccess
-        is ButlerUiState.Error -> OrbError
-        is ButlerUiState.ShowingRecommendations -> OrbThink
-    }
-    Box(modifier = Modifier.fillMaxSize().background(BgColor), contentAlignment = Alignment.Center) {
-        Box(modifier = Modifier.size(320.dp).background(brush = Brush.radialGradient(colors = listOf(orbColor.copy(alpha = 0.07f), Color.Transparent)), shape = CircleShape))
-        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center, modifier = Modifier.fillMaxSize().padding(horizontal = 28.dp)) {
-            Text(text = "BUTLER", fontSize = 11.sp, fontWeight = FontWeight.W600, color = TextMuted, letterSpacing = 6.sp)
-            Spacer(modifier = Modifier.height(40.dp))
-            PulsingOrb(state = state, orbColor = orbColor)
-            Spacer(modifier = Modifier.height(36.dp))
-            val headline: String = when (state) {
-                is ButlerUiState.Idle -> "Say \u201cHey Butler\u201d"
-                is ButlerUiState.Listening -> "Listening..."
-                is ButlerUiState.Thinking -> "Thinking..."
-                is ButlerUiState.Speaking -> ""
-                is ButlerUiState.OrderDone -> "Order Placed!"
-                is ButlerUiState.Error -> "Something went wrong"
-                is ButlerUiState.ShowingRecommendations -> "Pick a product"
-            }
-            if (headline.isNotBlank()) { Text(text = headline, fontSize = 24.sp, fontWeight = FontWeight.W500, color = TextPrimary, textAlign = TextAlign.Center) }
-            if (state is ButlerUiState.Thinking && state.heard.isNotBlank()) { Spacer(modifier = Modifier.height(12.dp)); Text(text = "\u201c${state.heard}\u201d", fontSize = 14.sp, color = TextSub, textAlign = TextAlign.Center, lineHeight = 20.sp) }
-            if (state is ButlerUiState.Speaking) {
-                if (state.text.isNotBlank()) { Spacer(modifier = Modifier.height(16.dp)); SpeakingBubble(text = state.text) }
-                AnimatedVisibility(visible = state.cart.isNotEmpty(), enter = fadeIn() + slideInVertically { it / 2 }, exit = fadeOut()) {
-                    Column { Spacer(modifier = Modifier.height(16.dp)); LiveCartCard(items = state.cart) }
-                }
-            }
-
-            if (state is ButlerUiState.ShowingRecommendations && state.recs.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(16.dp))
-                Text(
-                    text = "Top picks for \"${state.query}\"",
-                    fontSize = 12.sp,
-                    color = TextMuted,
-                    letterSpacing = 2.sp
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                state.recs.forEachIndexed { index, rec ->
-                    RecommendationCard(rec = rec, isBest = index == 0)
-                    Spacer(modifier = Modifier.height(8.dp))
-                }
-            }
-            if (state is ButlerUiState.OrderDone) { Spacer(modifier = Modifier.height(28.dp)); OrderSuccessCard(shortId = state.shortId, total = state.total, orderStatus = state.orderStatus) }
-            if (state is ButlerUiState.Error) { Spacer(modifier = Modifier.height(16.dp)); Text(text = state.message, fontSize = 14.sp, color = OrbError, textAlign = TextAlign.Center) }
-            if (state is ButlerUiState.Listening) { Spacer(modifier = Modifier.height(28.dp)); AudioWaveform() }
-        }
-    }
-}
-
-@Composable
-fun LiveCartCard(items: List<CartDisplayItem>) {
-    Surface(shape = RoundedCornerShape(16.dp), color = CardColor, modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text(text = "CART", fontSize = 10.sp, fontWeight = FontWeight.W600, color = TextMuted, letterSpacing = 2.sp)
-                Text(text = "${items.size} item${if (items.size > 1) "s" else ""}", fontSize = 11.sp, color = TextMuted)
-            }
-            Spacer(modifier = Modifier.height(10.dp))
-            items.forEach { item ->
-                Row(modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Surface(shape = RoundedCornerShape(6.dp), color = AccentGreen.copy(alpha = 0.15f)) { Text(text = "${item.qty}x", fontSize = 11.sp, color = AccentGreen, fontWeight = FontWeight.W600, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)) }
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(text = item.name, fontSize = 14.sp, color = TextPrimary, modifier = Modifier.weight(1f))
-                    }
-                    Text(text = "\u20B9%.0f".format(item.price * item.qty), fontSize = 14.sp, color = TextSub, fontWeight = FontWeight.W500)
-                }
-            }
-            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = Color(0xFF1A2530), thickness = 1.dp)
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(text = "Total", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
-                Text(text = "\u20B9%.0f".format(items.sumOf { it.price * it.qty }), fontSize = 15.sp, fontWeight = FontWeight.Bold, color = AccentGreen)
-            }
-        }
-    }
-}
-
-@Composable
-fun PulsingOrb(state: ButlerUiState, orbColor: Color) {
-    val pulseTarget = when (state) { is ButlerUiState.Listening -> 1.35f; is ButlerUiState.Speaking -> 1.18f; is ButlerUiState.Thinking -> 1.10f; else -> 1.03f }
-    val durationMs = when (state) { is ButlerUiState.Listening -> 550; is ButlerUiState.Speaking -> 750; is ButlerUiState.Thinking -> 900; else -> 2000 }
-    val infinite = rememberInfiniteTransition(label = "orb")
-    val scale by infinite.animateFloat(initialValue = 1f, targetValue = pulseTarget, animationSpec = infiniteRepeatable(animation = tween(durationMs, easing = FastOutSlowInEasing), repeatMode = RepeatMode.Reverse), label = "scale")
-    Box(contentAlignment = Alignment.Center) {
-        Box(modifier = Modifier.size(160.dp).scale(scale * 0.95f).background(orbColor.copy(alpha = 0.05f), CircleShape))
-        Box(modifier = Modifier.size(120.dp).scale(scale * 0.9f).background(orbColor.copy(alpha = 0.12f), CircleShape))
-        Box(modifier = Modifier.size(88.dp).scale(scale * 0.85f).background(orbColor.copy(alpha = 0.22f), CircleShape))
-        Box(modifier = Modifier.size(64.dp).background(brush = Brush.radialGradient(colors = listOf(orbColor.copy(alpha = 0.95f), orbColor.copy(alpha = 0.70f))), shape = CircleShape))
-    }
-}
-
-@Composable
-fun AudioWaveform() {
-    val infinite = rememberInfiniteTransition(label = "wave")
-    Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
-        repeat(7) { i ->
-            val height by infinite.animateFloat(initialValue = 6f, targetValue = 30f, animationSpec = infiniteRepeatable(animation = tween(300 + (i * 80), easing = FastOutSlowInEasing), repeatMode = RepeatMode.Reverse), label = "bar$i")
-            Box(modifier = Modifier.width(4.dp).height(height.dp).background(OrbListen.copy(alpha = 0.7f), RoundedCornerShape(2.dp)))
-        }
-    }
-}
-
-@Composable
-fun SpeakingBubble(text: String) {
-    Surface(shape = RoundedCornerShape(16.dp), color = SurfColor, modifier = Modifier.fillMaxWidth()) {
-        Text(text = text, fontSize = 16.sp, color = TextPrimary, textAlign = TextAlign.Center, lineHeight = 24.sp, modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp))
-    }
-}
-
-@Composable
-fun OrderSuccessCard(shortId: String, total: Double, orderStatus: String = "placed") {
-    val statusColor = when (orderStatus.lowercase()) { "placed" -> Color(0xFF378ADD); "confirmed" -> Color(0xFF1D9E75); "preparing" -> Color(0xFFFFB347); "out_for_delivery" -> Color(0xFF9C7AFF); "delivered" -> Color(0xFF00E5A0); "cancelled" -> Color(0xFFFF4D6A); else -> Color(0xFF8A9AAA) }
-    val statusLabel = when (orderStatus.lowercase()) { "placed" -> "ORDER PLACED"; "confirmed" -> "CONFIRMED \u2713"; "preparing" -> "PREPARING..."; "out_for_delivery" -> "ON THE WAY"; "delivered" -> "DELIVERED \u2713"; "cancelled" -> "CANCELLED"; else -> orderStatus.uppercase() }
-    Surface(shape = RoundedCornerShape(20.dp), color = Color(0xFF061A12), modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            Text("\u2713  Order confirmed", fontSize = 13.sp, fontWeight = FontWeight.W500, color = Color(0xFF4DDFB0))
-            Spacer(modifier = Modifier.height(8.dp))
-            Text("#$shortId", fontSize = 36.sp, fontWeight = FontWeight.Bold, color = OrbSuccess)
-            Spacer(modifier = Modifier.height(4.dp))
-            Text("\u20B9%.2f".format(total), fontSize = 18.sp, color = Color(0xFF8FDDBE))
-            Spacer(modifier = Modifier.height(10.dp))
-            Surface(shape = RoundedCornerShape(20.dp), color = statusColor.copy(alpha = 0.18f)) { Text(text = statusLabel, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = statusColor, modifier = Modifier.padding(horizontal = 14.dp, vertical = 5.dp)) }
-        }
-    }
-}
-
-@Composable
-fun RecommendationCard(
-    rec: com.demo.butler_voice_app.api.ProductRecommendation,
-    isBest: Boolean
-) {
-    val borderColor = if (isBest) Color(0xFF00E5A0) else Color(0xFF1A2530)
-    Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = CardColor,
-        border = androidx.compose.foundation.BorderStroke(
-            width = if (isBest) 1.5.dp else 0.5.dp,
-            color = borderColor
-        ),
-        modifier = Modifier.fillMaxWidth()
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(BgDeep),
+        contentAlignment = Alignment.Center
     ) {
+        // Ambient background glow
+        AmbientGlow(state)
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            when (state) {
+                is ButlerUiState.Idle            -> IdleView()
+                is ButlerUiState.Listening       -> ListeningView()
+                is ButlerUiState.Thinking        -> ThinkingView(state.transcript)
+                is ButlerUiState.Speaking        -> SpeakingView(state.text, state.cart)
+                is ButlerUiState.ShowingRecommendations -> RecommendationsView(state.query, state.recs)
+                is ButlerUiState.OrderDone       -> OrderDoneView(state.orderId, state.total)
+            }
+        }
+    }
+}
+
+// ── Ambient glow behind everything ───────────────────────────────────────────
+
+@Composable
+private fun AmbientGlow(state: ButlerUiState) {
+    val glowColor = when (state) {
+        is ButlerUiState.Idle            -> AccentTeal.copy(alpha = 0.04f)
+        is ButlerUiState.Listening       -> AccentBlue.copy(alpha = 0.08f)
+        is ButlerUiState.Thinking        -> AccentAmber.copy(alpha = 0.06f)
+        is ButlerUiState.Speaking        -> AccentTeal.copy(alpha = 0.07f)
+        is ButlerUiState.ShowingRecommendations -> AccentBlue.copy(alpha = 0.05f)
+        is ButlerUiState.OrderDone       -> AccentTeal.copy(alpha = 0.10f)
+    }
+    val animColor by animateColorAsState(glowColor, animationSpec = tween(800))
+    Canvas(modifier = Modifier.fillMaxSize()) {
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(animColor, Color.Transparent),
+                center = Offset(size.width / 2f, size.height * 0.35f),
+                radius = size.width * 0.8f
+            )
+        )
+    }
+}
+
+// ── IDLE ──────────────────────────────────────────────────────────────────────
+
+@Composable
+private fun IdleView() {
+    val pulse = rememberInfiniteTransition(label = "idle")
+    val scale by pulse.animateFloat(
+        initialValue = 0.95f, targetValue = 1.05f,
+        animationSpec = infiniteRepeatable(tween(2200, easing = EaseInOutSine), RepeatMode.Reverse),
+        label = "pulse"
+    )
+    val alpha by pulse.animateFloat(
+        initialValue = 0.3f, targetValue = 0.7f,
+        animationSpec = infiniteRepeatable(tween(2200, easing = EaseInOutSine), RepeatMode.Reverse),
+        label = "alpha"
+    )
+
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        // Orb
+        Box(contentAlignment = Alignment.Center) {
+            // Outer ring
+            Box(
+                modifier = Modifier
+                    .size(140.dp)
+                    .scale(scale)
+                    .background(
+                        brush = Brush.radialGradient(
+                            listOf(AccentTeal.copy(alpha = alpha * 0.3f), Color.Transparent)
+                        ),
+                        shape = CircleShape
+                    )
+            )
+            // Inner orb
+            Box(
+                modifier = Modifier
+                    .size(88.dp)
+                    .background(
+                        brush = Brush.radialGradient(
+                            listOf(AccentTeal.copy(alpha = 0.9f), Color(0xFF005F4B))
+                        ),
+                        shape = CircleShape
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("✦", fontSize = 28.sp, color = Color.White)
+            }
+        }
+
+        Spacer(Modifier.height(28.dp))
+
+        Text(
+            "Hey Butler",
+            fontSize = 26.sp,
+            fontWeight = FontWeight.Bold,
+            color = TextPrimary,
+            letterSpacing = 0.5.sp
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "Waiting for wake word...",
+            fontSize = 14.sp,
+            color = TextSecond
+        )
+    }
+}
+
+// ── LISTENING ─────────────────────────────────────────────────────────────────
+
+@Composable
+private fun ListeningView() {
+    val inf = rememberInfiniteTransition(label = "listen")
+
+    // 5 animated bars
+    val bars = (0..4).map { i ->
+        inf.animateFloat(
+            initialValue = 0.2f, targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                tween(400 + i * 80, easing = EaseInOutSine),
+                RepeatMode.Reverse
+            ),
+            label = "bar$i"
+        )
+    }
+
+    val ring by inf.animateFloat(
+        initialValue = 0.6f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(900, easing = EaseInOutSine), RepeatMode.Reverse),
+        label = "ring"
+    )
+
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(contentAlignment = Alignment.Center) {
+            // Pulsing ring
+            Box(
+                modifier = Modifier
+                    .size(130.dp)
+                    .scale(ring)
+                    .border(2.dp, AccentBlue.copy(alpha = 1f - ring + 0.1f), CircleShape)
+            )
+            Box(
+                modifier = Modifier
+                    .size(90.dp)
+                    .background(
+                        brush = Brush.radialGradient(
+                            listOf(AccentBlue.copy(alpha = 0.85f), Color(0xFF1A3A6E))
+                        ),
+                        shape = CircleShape
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                // Mic icon
+                Text("🎤", fontSize = 28.sp)
+            }
+        }
+
+        Spacer(Modifier.height(24.dp))
+
+        Text("Listening...", fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+        Spacer(Modifier.height(4.dp))
+        Text("Speak now", fontSize = 13.sp, color = TextSecond)
+
+        Spacer(Modifier.height(20.dp))
+
+        // Waveform bars
         Row(
-            modifier = Modifier.padding(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column(modifier = Modifier.weight(1f)) {
-                if (isBest) {
-                    Text(
-                        text = "BEST VALUE",
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = AccentGreen,
-                        letterSpacing = 1.sp
-                    )
-                    Spacer(modifier = Modifier.height(2.dp))
-                }
-                Text(text = rec.productName, fontSize = 13.sp,
-                    color = TextPrimary, fontWeight = FontWeight.W500, maxLines = 2)
-                Text(text = rec.unit, fontSize = 11.sp, color = TextMuted)
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(text = rec.storeName, fontSize = 11.sp, color = TextSub)
-                Text(text = rec.distanceLabel, fontSize = 10.sp, color = TextMuted)
+            bars.forEachIndexed { i, bar ->
+                val h by bar
+                Box(
+                    modifier = Modifier
+                        .width(6.dp)
+                        .height((8.dp + (h * 36).dp))
+                        .clip(RoundedCornerShape(3.dp))
+                        .background(
+                            brush = Brush.verticalGradient(
+                                listOf(AccentBlue, AccentBlue.copy(alpha = 0.3f))
+                            )
+                        )
+                )
             }
-            Column(horizontalAlignment = Alignment.End) {
-                Text(text = rec.priceLabel, fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold, color = AccentGreen)
-                Spacer(modifier = Modifier.height(6.dp))
-                Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = Color(0xFF1A2A1A)
+        }
+    }
+}
+
+// ── THINKING ──────────────────────────────────────────────────────────────────
+
+@Composable
+private fun ThinkingView(transcript: String) {
+    val inf = rememberInfiniteTransition(label = "think")
+    val rotation by inf.animateFloat(
+        initialValue = 0f, targetValue = 360f,
+        animationSpec = infiniteRepeatable(tween(1200, easing = LinearEasing)),
+        label = "spin"
+    )
+    val dot1 by inf.animateFloat(
+        initialValue = 0.3f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(600, easing = EaseInOutSine), RepeatMode.Reverse),
+        label = "d1"
+    )
+    val dot2 by inf.animateFloat(
+        initialValue = 0.3f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(600, delayMillis = 200, easing = EaseInOutSine), RepeatMode.Reverse),
+        label = "d2"
+    )
+    val dot3 by inf.animateFloat(
+        initialValue = 0.3f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(600, delayMillis = 400, easing = EaseInOutSine), RepeatMode.Reverse),
+        label = "d3"
+    )
+
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        // Spinner orb
+        Box(contentAlignment = Alignment.Center) {
+            Canvas(modifier = Modifier.size(100.dp)) {
+                drawArc(
+                    brush = Brush.sweepGradient(
+                        listOf(AccentAmber, AccentAmber.copy(alpha = 0f))
+                    ),
+                    startAngle = rotation,
+                    sweepAngle = 270f,
+                    useCenter = false,
+                    style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round)
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .size(80.dp)
+                    .background(
+                        brush = Brush.radialGradient(
+                            listOf(AccentAmber.copy(alpha = 0.7f), Color(0xFF3D2800))
+                        ),
+                        shape = CircleShape
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("⚡", fontSize = 26.sp)
+            }
+        }
+
+        Spacer(Modifier.height(20.dp))
+
+        // Transcript bubble
+        if (transcript.isNotBlank()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(BgCard)
+                    .border(1.dp, BorderColor, RoundedCornerShape(12.dp))
+                    .padding(12.dp)
+            ) {
+                Text(
+                    "\"$transcript\"",
+                    fontSize = 14.sp,
+                    color = TextSecond,
+                    fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+            Spacer(Modifier.height(14.dp))
+        }
+
+        Text("Processing", fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+        Spacer(Modifier.height(8.dp))
+
+        // Dot loader
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf(dot1, dot2, dot3).forEach { a ->
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .alpha(a)
+                        .background(AccentAmber, CircleShape)
+                )
+            }
+        }
+    }
+}
+
+// ── SPEAKING ──────────────────────────────────────────────────────────────────
+
+@Composable
+private fun SpeakingView(text: String, cart: List<CartDisplayItem>) {
+    val inf = rememberInfiniteTransition(label = "speak")
+    val waveBars = (0..6).map { i ->
+        inf.animateFloat(
+            initialValue = 0.15f, targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                tween(300 + i * 60, easing = EaseInOutSine),
+                RepeatMode.Reverse
+            ),
+            label = "wave$i"
+        )
+    }
+
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        // Speaking orb with soundwaves
+        Box(contentAlignment = Alignment.Center) {
+            // Outer rings
+            listOf(130.dp, 110.dp).forEachIndexed { i, size ->
+                val ringAlpha by inf.animateFloat(
+                    initialValue = 0.1f, targetValue = 0.4f,
+                    animationSpec = infiniteRepeatable(
+                        tween(800 + i * 200, easing = EaseInOutSine), RepeatMode.Reverse
+                    ), label = "ringa$i"
+                )
+                Box(
+                    modifier = Modifier
+                        .size(size)
+                        .border(1.5.dp, AccentTeal.copy(alpha = ringAlpha), CircleShape)
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .size(88.dp)
+                    .background(
+                        brush = Brush.radialGradient(
+                            listOf(AccentTeal.copy(alpha = 0.9f), Color(0xFF004A37))
+                        ),
+                        shape = CircleShape
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("🔊", fontSize = 26.sp)
+            }
+        }
+
+        Spacer(Modifier.height(18.dp))
+
+        // Sound wave bars
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            waveBars.forEach { bar ->
+                val h by bar
+                Box(
+                    modifier = Modifier
+                        .width(5.dp)
+                        .height((6.dp + (h * 30).dp))
+                        .clip(RoundedCornerShape(3.dp))
+                        .background(
+                            brush = Brush.verticalGradient(
+                                listOf(AccentTeal, AccentTeal.copy(alpha = 0.2f))
+                            )
+                        )
+                )
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        // Speech bubble
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(BgCard)
+                .border(1.dp, AccentTeal.copy(alpha = 0.3f), RoundedCornerShape(16.dp))
+                .padding(16.dp)
+        ) {
+            Text(
+                text,
+                fontSize = 15.sp,
+                color = TextPrimary,
+                lineHeight = 22.sp,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+
+        // Cart overlay
+        if (cart.isNotEmpty()) {
+            Spacer(Modifier.height(16.dp))
+            CartOverlay(cart)
+        }
+    }
+}
+
+// ── CART OVERLAY ──────────────────────────────────────────────────────────────
+
+@Composable
+private fun CartOverlay(cart: List<CartDisplayItem>) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(BgCardAlt)
+            .border(1.dp, AccentAmber.copy(alpha = 0.3f), RoundedCornerShape(14.dp))
+            .padding(14.dp)
+    ) {
+        Column {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("🛒  Cart", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = AccentAmber)
+                Text(
+                    "${cart.size} item${if (cart.size > 1) "s" else ""}",
+                    fontSize = 12.sp, color = TextSecond
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            cart.take(3).forEach { item ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 3.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text(
-                        text = "Say \"${rec.voiceShortcut}\"",
-                        fontSize = 10.sp,
-                        color = Color(0xFF4DDFB0),
-                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        "× ${item.quantity}  ${item.name.take(24)}${if (item.name.length > 24) "…" else ""}",
+                        fontSize = 12.sp, color = TextPrimary, modifier = Modifier.weight(1f)
                     )
+                    Text(
+                        "₹%.0f".format(item.price * item.quantity),
+                        fontSize = 12.sp, color = AccentAmber, fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+            if (cart.size > 3) {
+                Text("+${cart.size - 3} more", fontSize = 11.sp, color = TextSecond)
+            }
+            Divider(color = BorderColor, modifier = Modifier.padding(vertical = 6.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Total", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+                Text(
+                    "₹%.0f".format(cart.sumOf { it.price * it.quantity }),
+                    fontSize = 13.sp, fontWeight = FontWeight.Bold, color = AccentTeal
+                )
+            }
+        }
+    }
+}
+
+// ── RECOMMENDATIONS ───────────────────────────────────────────────────────────
+
+@Composable
+private fun RecommendationsView(query: String, recs: List<ProductRecommendation>) {
+    val inf = rememberInfiniteTransition(label = "recs")
+    val shimmer by inf.animateFloat(
+        initialValue = 0f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(1800, easing = LinearEasing)),
+        label = "shimmer"
+    )
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState()),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        // Header
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .background(AccentBlue, CircleShape)
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                "Top picks for \"$query\"",
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = TextPrimary
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+        Text("Say 1, 2 or 3 to add", fontSize = 12.sp, color = TextSecond)
+        Spacer(Modifier.height(16.dp))
+
+        // Cards
+        recs.take(3).forEachIndexed { index, rec ->
+            val isBest = index == 0
+            val cardBorder = if (isBest) AccentTeal else BorderColor
+            val cardBg = if (isBest) Color(0xFF0A1F18) else BgCard
+
+            Box(modifier = Modifier.padding(bottom = 10.dp)) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(cardBg)
+                        .border(
+                            width = if (isBest) 1.5.dp else 1.dp,
+                            color = cardBorder,
+                            shape = RoundedCornerShape(14.dp)
+                        )
+                        .padding(14.dp)
+                ) {
+                    Column {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.Top
+                        ) {
+                            // Left: number + name
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    // Number badge
+                                    Box(
+                                        modifier = Modifier
+                                            .size(26.dp)
+                                            .background(
+                                                if (isBest) AccentTeal else BorderColor,
+                                                CircleShape
+                                            ),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            "${index + 1}",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (isBest) Color.Black else TextSecond
+                                        )
+                                    }
+                                    if (isBest) {
+                                        Spacer(Modifier.width(6.dp))
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(4.dp))
+                                                .background(AccentTeal.copy(alpha = 0.15f))
+                                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                                        ) {
+                                            Text(
+                                                "BEST VALUE",
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color = AccentTeal,
+                                                letterSpacing = 0.8.sp
+                                            )
+                                        }
+                                    }
+                                }
+                                Spacer(Modifier.height(8.dp))
+                                Text(
+                                    rec.productName,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = TextPrimary,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    rec.storeName,
+                                    fontSize = 12.sp,
+                                    color = TextSecond
+                                )
+                            }
+
+                            Spacer(Modifier.width(12.dp))
+
+                            // Right: price + distance
+                            Column(horizontalAlignment = Alignment.End) {
+                                Text(
+                                    "₹%.0f".format(rec.priceRs),
+                                    fontSize = 22.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = if (isBest) AccentTeal else AccentBlue
+                                )
+                                Spacer(Modifier.height(4.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text("📍", fontSize = 10.sp)
+                                    Spacer(Modifier.width(2.dp))
+                                    Text(
+                                        rec.distanceLabel,
+                                        fontSize = 11.sp,
+                                        color = TextSecond
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
     }
+}
+
+// ── ORDER DONE ────────────────────────────────────────────────────────────────
+
+@Composable
+private fun OrderDoneView(orderId: String, total: Double) {
+    val inf = rememberInfiniteTransition(label = "done")
+
+    // Entrance animation
+    var visible by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { visible = true }
+
+    val checkScale by animateFloatAsState(
+        targetValue = if (visible) 1f else 0f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium),
+        label = "checkScale"
+    )
+
+    val pulse by inf.animateFloat(
+        initialValue = 0.95f, targetValue = 1.05f,
+        animationSpec = infiniteRepeatable(tween(1500, easing = EaseInOutSine), RepeatMode.Reverse),
+        label = "pulse"
+    )
+
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        // Success orb
+        Box(
+            modifier = Modifier
+                .size(110.dp)
+                .scale(checkScale * pulse),
+            contentAlignment = Alignment.Center
+        ) {
+            // Glow
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        brush = Brush.radialGradient(
+                            listOf(AccentTeal.copy(alpha = 0.25f), Color.Transparent)
+                        ),
+                        shape = CircleShape
+                    )
+            )
+            Box(
+                modifier = Modifier
+                    .size(80.dp)
+                    .background(
+                        brush = Brush.radialGradient(
+                            listOf(AccentTeal, Color(0xFF005F4B))
+                        ),
+                        shape = CircleShape
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("✓", fontSize = 34.sp, fontWeight = FontWeight.ExtraBold, color = Color.White)
+            }
+        }
+
+        Spacer(Modifier.height(20.dp))
+
+        Text(
+            "Order Placed!",
+            fontSize = 26.sp,
+            fontWeight = FontWeight.ExtraBold,
+            color = TextPrimary
+        )
+
+        Spacer(Modifier.height(4.dp))
+
+        // Order ID pill
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(20.dp))
+                .background(AccentTeal.copy(alpha = 0.12f))
+                .border(1.dp, AccentTeal.copy(alpha = 0.4f), RoundedCornerShape(20.dp))
+                .padding(horizontal = 16.dp, vertical = 6.dp)
+        ) {
+            Text(
+                orderId,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                color = AccentTeal,
+                letterSpacing = 1.sp
+            )
+        }
+
+        Spacer(Modifier.height(20.dp))
+
+        // Receipt card
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(BgCard)
+                .border(1.dp, BorderColor, RoundedCornerShape(16.dp))
+                .padding(20.dp)
+        ) {
+            Column {
+                ReceiptRow("Subtotal", "₹%.0f".format(total))
+                ReceiptRow("Delivery", "FREE")
+                ReceiptRow("Platform fee", "₹0")
+                Divider(color = BorderColor, modifier = Modifier.padding(vertical = 10.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("TOTAL", fontSize = 16.sp, fontWeight = FontWeight.ExtraBold, color = TextPrimary)
+                    Text("₹%.0f".format(total), fontSize = 16.sp, fontWeight = FontWeight.ExtraBold, color = AccentTeal)
+                }
+                Spacer(Modifier.height(14.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column {
+                        Text("Delivery", fontSize = 11.sp, color = TextSecond)
+                        Text("Estimated", fontSize = 12.sp, color = TextPrimary)
+                    }
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text("Time", fontSize = 11.sp, color = TextSecond)
+                        Text("10–15 min ⚡", fontSize = 12.sp, color = AccentAmber, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        Text(
+            "Say \"Hey Butler\" for another order",
+            fontSize = 13.sp,
+            color = TextSecond,
+            textAlign = TextAlign.Center
+        )
+    }
+}
+
+@Composable
+private fun ReceiptRow(label: String, value: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(label, fontSize = 13.sp, color = TextSecond)
+        Text(
+            value,
+            fontSize = 13.sp,
+            color = if (value == "FREE") AccentTeal else TextPrimary,
+            fontWeight = if (value == "FREE") FontWeight.SemiBold else FontWeight.Normal
+        )
+    }
+}
+
+// ── Extensions on ProductRecommendation ─────────────────────────────────────
+
+val ProductRecommendation.priceLabel: String get() = "₹%.0f".format(priceRs)
+val ProductRecommendation.distanceLabel: String get() {
+    return if (distanceKm < 1.0) "${(distanceKm * 1000).toInt()} m"
+    else "%.1f km".format(distanceKm)
 }
