@@ -127,21 +127,20 @@ class MainActivity : ComponentActivity() {
                 }
             }
             RESULT_GOOGLE_AUTH -> {
-                val idToken = result.data?.getStringExtra(EXTRA_GOOGLE_TOKEN) ?: return@registerForActivityResult
-                val gEmail  = result.data?.getStringExtra(EXTRA_GOOGLE_EMAIL) ?: ""
-                val gName   = result.data?.getStringExtra(EXTRA_GOOGLE_NAME) ?: ""
+                val gEmail = result.data?.getStringExtra(EXTRA_GOOGLE_EMAIL) ?: ""
+                val gName  = result.data?.getStringExtra(EXTRA_GOOGLE_NAME) ?: ""
+                if (gEmail.isBlank()) return@registerForActivityResult
                 lifecycleScope.launch {
-                    UserSessionManager.loginWithGoogle(idToken, gEmail, gName).fold(
+                    val googlePass = "Butler_G_${gEmail.hashCode().toString().takeLast(8)}"
+                    val displayName = gName.ifBlank { gEmail.substringBefore("@").replaceFirstChar { it.uppercase() } }
+                    UserSessionManager.signup(gEmail, googlePass, displayName, "").fold(
                         onSuccess = { profile ->
                             currentState = AssistantState.LISTENING
-                            val firstName = profile.full_name?.split(" ")?.first() ?: gName.split(" ").first()
+                            val firstName = profile.full_name?.split(" ")?.first() ?: displayName.split(" ").first()
                             AnalyticsManager.logUserAuth("google", LanguageManager.getLanguage())
-                            val greeting = IndianLanguageProcessor.getWelcomeGreeting(
-                                LanguageManager.getLanguage(), firstName
-                            )
-                            speak(greeting) { startListening() }
+                            speak(IndianLanguageProcessor.getWelcomeGreeting(LanguageManager.getLanguage(), firstName)) { startListening() }
                         },
-                        onFailure = { speak("Google sign-in failed. Please try again.") { startWakeWordListening() } }
+                        onFailure = { doLogin(gEmail, googlePass) }
                     )
                 }
             }

@@ -23,48 +23,40 @@ import androidx.compose.ui.text.style.*
 import androidx.compose.ui.unit.*
 
 // ── Colors ────────────────────────────────────────────────────────────────────
-private val BgDeep      = Color(0xFF070B14)
-private val BgCard      = Color(0xFF0E1520)
-private val AccentTeal  = Color(0xFF00D4AA)
-private val AccentBlue  = Color(0xFF4F9EFF)
-private val AccentAmber = Color(0xFFFFB830)
-private val AccentRed   = Color(0xFFFF5C5C)
-private val TextPrimary = Color(0xFFF0F4FF)
-private val TextSecond  = Color(0xFF8899BB)
-private val BorderColor = Color(0xFF1E2D45)
+private val LoginBgDeep      = Color(0xFF070B14)
+private val LoginBgCard      = Color(0xFF0E1520)
+private val LoginAccentTeal  = Color(0xFF00D4AA)
+private val LoginAccentBlue  = Color(0xFF4F9EFF)
+private val LoginAccentRed   = Color(0xFFFF5C5C)
+private val LoginTextPrimary = Color(0xFFF0F4FF)
+private val LoginTextSecond  = Color(0xFF8899BB)
+private val LoginBorderColor = Color(0xFF1E2D45)
 
-const val RESULT_MANUAL_LOGIN  = 200
-const val RESULT_USE_VOICE     = 201
-const val EXTRA_EMAIL          = "email"
-const val EXTRA_PASSWORD       = "password"
-const val EXTRA_IS_NEW_USER    = "is_new_user"
+// NOTE: All constants (RESULT_MANUAL_LOGIN, RESULT_USE_VOICE, EXTRA_EMAIL, etc.)
+// are defined in Constants.kt — do NOT redeclare them here.
 
 /**
- * LoginActivity — shown when user wants to sign up or log in manually.
- * Also has a "Use Voice Instead" button that returns to the voice flow.
+ * LoginActivity — legacy auth screen (kept for compatibility).
+ * New installs use AuthActivity instead.
  */
 class LoginActivity : ComponentActivity() {
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val activity = this
         setContent {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(BgDeep)
-            ) {
+            Box(modifier = Modifier.fillMaxSize().background(LoginBgDeep)) {
                 LoginScreen(
                     onManualAuth = { email, password, isNew ->
-                        setResult(RESULT_MANUAL_LOGIN, Intent().apply {
+                        activity.setResult(RESULT_MANUAL_LOGIN, Intent().apply {
                             putExtra(EXTRA_EMAIL, email)
                             putExtra(EXTRA_PASSWORD, password)
                             putExtra(EXTRA_IS_NEW_USER, isNew)
                         })
-                        finish()
+                        activity.finish()
                     },
                     onUseVoice = {
-                        setResult(RESULT_USE_VOICE)
-                        finish()
+                        activity.setResult(RESULT_USE_VOICE)
+                        activity.finish()
                     }
                 )
             }
@@ -72,19 +64,17 @@ class LoginActivity : ComponentActivity() {
     }
 }
 
-// ── Login Screen ──────────────────────────────────────────────────────────────
-
 @Composable
 private fun LoginScreen(
     onManualAuth: (email: String, password: String, isNew: Boolean) -> Unit,
     onUseVoice: () -> Unit
 ) {
-    var isNewUser  by remember { mutableStateOf(true) }
-    var email      by remember { mutableStateOf("") }
-    var password   by remember { mutableStateOf("") }
-    var name       by remember { mutableStateOf("") }
-    var showPass   by remember { mutableStateOf(false) }
-    var error      by remember { mutableStateOf("") }
+    var isNewUser by remember { mutableStateOf(true) }
+    var email     by remember { mutableStateOf("") }
+    var password  by remember { mutableStateOf("") }
+    var name      by remember { mutableStateOf("") }
+    var showPass  by remember { mutableStateOf(false) }
+    var error     by remember { mutableStateOf("") }
 
     val inf = rememberInfiniteTransition(label = "login_bg")
     val glowAlpha by inf.animateFloat(
@@ -94,11 +84,10 @@ private fun LoginScreen(
     )
 
     Box(modifier = Modifier.fillMaxSize()) {
-        // Background glow
         Canvas(modifier = Modifier.fillMaxSize()) {
             drawCircle(
                 brush = Brush.radialGradient(
-                    colors = listOf(AccentTeal.copy(alpha = glowAlpha), Color.Transparent),
+                    colors = listOf(LoginAccentTeal.copy(alpha = glowAlpha), Color.Transparent),
                     center = androidx.compose.ui.geometry.Offset(size.width / 2, size.height * 0.2f),
                     radius = size.width * 0.7f
                 )
@@ -106,129 +95,64 @@ private fun LoginScreen(
         }
 
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(24.dp)
-                .verticalScroll(rememberScrollState()),
+            modifier = Modifier.fillMaxSize().padding(24.dp).verticalScroll(rememberScrollState()),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Spacer(Modifier.height(48.dp))
 
-            // Logo orb
             Box(
-                modifier = Modifier
-                    .size(72.dp)
-                    .background(
-                        brush = Brush.radialGradient(
-                            listOf(AccentTeal.copy(0.9f), Color(0xFF004A37))
-                        ),
-                        shape = CircleShape
-                    ),
+                modifier = Modifier.size(72.dp).background(
+                    brush = Brush.radialGradient(listOf(LoginAccentTeal.copy(0.9f), Color(0xFF004A37))),
+                    shape = CircleShape
+                ),
                 contentAlignment = Alignment.Center
-            ) {
-                Text("✦", fontSize = 28.sp, color = Color.White)
-            }
+            ) { Text("✦", fontSize = 28.sp, color = Color.White) }
 
             Spacer(Modifier.height(16.dp))
-
-            Text(
-                "Butler",
-                fontSize = 32.sp,
-                fontWeight = FontWeight.ExtraBold,
-                color = TextPrimary,
-                letterSpacing = 1.sp
-            )
-            Text(
-                "Voice-first grocery ordering",
-                fontSize = 13.sp,
-                color = TextSecond
-            )
-
+            Text("Butler", fontSize = 32.sp, fontWeight = FontWeight.ExtraBold, color = LoginTextPrimary, letterSpacing = 1.sp)
+            Text("Voice-first grocery ordering", fontSize = 13.sp, color = LoginTextSecond)
             Spacer(Modifier.height(32.dp))
 
-            // Tab selector
             Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(BgCard)
-                    .border(1.dp, BorderColor, RoundedCornerShape(12.dp))
-                    .padding(4.dp)
+                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                    .background(LoginBgCard).border(1.dp, LoginBorderColor, RoundedCornerShape(12.dp)).padding(4.dp)
             ) {
                 Row {
-                    TabOption(
-                        text = "New Customer",
-                        selected = isNewUser,
-                        onClick = { isNewUser = true; error = "" },
-                        modifier = Modifier.weight(1f)
-                    )
-                    TabOption(
-                        text = "Returning",
-                        selected = !isNewUser,
-                        onClick = { isNewUser = false; error = "" },
-                        modifier = Modifier.weight(1f)
-                    )
+                    LoginTabOption("New Customer", isNewUser, { isNewUser = true; error = "" }, Modifier.weight(1f))
+                    LoginTabOption("Returning",    !isNewUser, { isNewUser = false; error = "" }, Modifier.weight(1f))
                 }
             }
 
             Spacer(Modifier.height(20.dp))
 
-            // Form fields
             AnimatedVisibility(visible = isNewUser) {
                 Column {
-                    AuthField(
-                        label = "Full Name",
-                        value = name,
-                        placeholder = "Your name",
-                        keyboardType = KeyboardType.Text,
-                        onValueChange = { name = it }
-                    )
+                    LoginField("Full Name", name, "Your name", KeyboardType.Text) { name = it }
                     Spacer(Modifier.height(12.dp))
                 }
             }
 
-            AuthField(
-                label = "Email Address",
-                value = email,
-                placeholder = "you@example.com",
-                keyboardType = KeyboardType.Email,
-                onValueChange = { email = it.trim() }
-            )
-
+            LoginField("Email Address", email, "you@example.com", KeyboardType.Email) { email = it.trim() }
             Spacer(Modifier.height(12.dp))
 
-            // Password field
             Column {
-                Text("Password", fontSize = 12.sp, color = TextSecond, modifier = Modifier.padding(bottom = 6.dp))
+                Text("Password", fontSize = 12.sp, color = LoginTextSecond, modifier = Modifier.padding(bottom = 6.dp))
                 BasicTextField(
-                    value = password,
-                    onValueChange = { password = it },
-                    singleLine = true,
+                    value = password, onValueChange = { password = it }, singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                     visualTransformation = if (showPass) VisualTransformation.None else PasswordVisualTransformation(),
-                    textStyle = TextStyle(fontSize = 16.sp, color = TextPrimary),
+                    textStyle = TextStyle(fontSize = 16.sp, color = LoginTextPrimary),
                     decorationBox = { inner ->
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(BgCard)
-                                .border(1.dp, BorderColor, RoundedCornerShape(12.dp))
-                                .padding(horizontal = 16.dp, vertical = 14.dp)
+                        Box(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                            .background(LoginBgCard).border(1.dp, LoginBorderColor, RoundedCornerShape(12.dp))
+                            .padding(horizontal = 16.dp, vertical = 14.dp)
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(modifier = Modifier.weight(1f)) {
-                                    if (password.isEmpty()) {
-                                        Text("Min 8 characters", fontSize = 15.sp, color = TextSecond.copy(0.5f))
-                                    }
+                                Box(Modifier.weight(1f)) {
+                                    if (password.isEmpty()) Text("Min 8 characters", fontSize = 15.sp, color = LoginTextSecond.copy(0.5f))
                                     inner()
                                 }
-                                Text(
-                                    if (showPass) "Hide" else "Show",
-                                    fontSize = 12.sp,
-                                    color = AccentBlue,
-                                    modifier = Modifier.clickable { showPass = !showPass }
-                                )
+                                Text(if (showPass) "Hide" else "Show", fontSize = 12.sp, color = LoginAccentBlue, modifier = Modifier.clickable { showPass = !showPass })
                             }
                         }
                     }
@@ -237,25 +161,11 @@ private fun LoginScreen(
 
             if (error.isNotBlank()) {
                 Spacer(Modifier.height(8.dp))
-                Text(error, fontSize = 13.sp, color = AccentRed, textAlign = TextAlign.Center)
-            }
-
-            if (isNewUser) {
-                Spacer(Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("🔒", fontSize = 11.sp)
-                    Spacer(Modifier.width(4.dp))
-                    Text(
-                        "Your data is encrypted and never shared",
-                        fontSize = 11.sp,
-                        color = TextSecond
-                    )
-                }
+                Text(error, fontSize = 13.sp, color = LoginAccentRed, textAlign = TextAlign.Center)
             }
 
             Spacer(Modifier.height(24.dp))
 
-            // Primary button
             Button(
                 onClick = {
                     error = ""
@@ -268,121 +178,67 @@ private fun LoginScreen(
                 },
                 modifier = Modifier.fillMaxWidth().height(54.dp),
                 shape = RoundedCornerShape(14.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = AccentTeal)
+                colors = ButtonDefaults.buttonColors(containerColor = LoginAccentTeal)
             ) {
-                Text(
-                    if (isNewUser) "Create Account" else "Log In",
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = Color.Black
-                )
+                Text(if (isNewUser) "Create Account" else "Log In", fontSize = 16.sp, fontWeight = FontWeight.ExtraBold, color = Color.Black)
             }
 
             Spacer(Modifier.height(16.dp))
-
-            // Divider
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Divider(modifier = Modifier.weight(1f), color = BorderColor)
-                Text("  or  ", fontSize = 12.sp, color = TextSecond)
-                Divider(modifier = Modifier.weight(1f), color = BorderColor)
+                Divider(modifier = Modifier.weight(1f), color = LoginBorderColor)
+                Text(" or ", fontSize = 12.sp, color = LoginTextSecond)
+                Divider(modifier = Modifier.weight(1f), color = LoginBorderColor)
             }
-
             Spacer(Modifier.height(16.dp))
 
-            // Voice signup button
             OutlinedButton(
                 onClick = onUseVoice,
                 modifier = Modifier.fillMaxWidth().height(54.dp),
                 shape = RoundedCornerShape(14.dp),
-                border = BorderStroke(1.5.dp, AccentBlue)
+                border = BorderStroke(1.5.dp, LoginAccentBlue)
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("🎤", fontSize = 18.sp)
                     Spacer(Modifier.width(8.dp))
                     Column {
-                        Text(
-                            "Use Voice Instead",
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = AccentBlue
-                        )
-                        Text(
-                            "Say your details to Butler",
-                            fontSize = 11.sp,
-                            color = TextSecond
-                        )
+                        Text("Use Voice Instead", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = LoginAccentBlue)
+                        Text("Say your details to Butler", fontSize = 11.sp, color = LoginTextSecond)
                     }
                 }
             }
-
-            Spacer(Modifier.height(24.dp))
-
-            // Privacy note
-            Text(
-                "By continuing, you agree to Butler's Terms of Service and Privacy Policy. We use bank-grade AES-256 encryption to protect your data.",
-                fontSize = 11.sp,
-                color = TextSecond,
-                textAlign = TextAlign.Center,
-                lineHeight = 16.sp
-            )
-
             Spacer(Modifier.height(24.dp))
         }
     }
 }
 
 @Composable
-private fun TabOption(text: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier) {
+private fun LoginTabOption(text: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier) {
     Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(10.dp))
-            .background(if (selected) AccentTeal.copy(alpha = 0.15f) else Color.Transparent)
-            .border(
-                width = if (selected) 1.dp else 0.dp,
-                color = if (selected) AccentTeal.copy(0.5f) else Color.Transparent,
-                shape = RoundedCornerShape(10.dp)
-            )
-            .clickable(onClick = onClick)
-            .padding(vertical = 10.dp),
+        modifier = modifier.clip(RoundedCornerShape(10.dp))
+            .background(if (selected) LoginAccentTeal.copy(0.15f) else Color.Transparent)
+            .border(if (selected) 1.dp else 0.dp, if (selected) LoginAccentTeal.copy(0.5f) else Color.Transparent, RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick).padding(vertical = 10.dp),
         contentAlignment = Alignment.Center
     ) {
-        Text(
-            text,
-            fontSize = 13.sp,
-            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-            color = if (selected) AccentTeal else TextSecond
-        )
+        Text(text, fontSize = 13.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+            color = if (selected) LoginAccentTeal else LoginTextSecond)
     }
 }
 
 @Composable
-private fun AuthField(
-    label: String,
-    value: String,
-    placeholder: String,
-    keyboardType: KeyboardType,
-    onValueChange: (String) -> Unit
-) {
+private fun LoginField(label: String, value: String, placeholder: String, keyboardType: KeyboardType, onValueChange: (String) -> Unit) {
     Column {
-        Text(label, fontSize = 12.sp, color = TextSecond, modifier = Modifier.padding(bottom = 6.dp))
+        Text(label, fontSize = 12.sp, color = LoginTextSecond, modifier = Modifier.padding(bottom = 6.dp))
         BasicTextField(
-            value = value,
-            onValueChange = onValueChange,
-            singleLine = true,
+            value = value, onValueChange = onValueChange, singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
-            textStyle = TextStyle(fontSize = 16.sp, color = TextPrimary),
+            textStyle = TextStyle(fontSize = 16.sp, color = LoginTextPrimary),
             decorationBox = { inner ->
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(BgCard)
-                        .border(1.dp, BorderColor, RoundedCornerShape(12.dp))
-                        .padding(horizontal = 16.dp, vertical = 14.dp)
+                Box(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                    .background(LoginBgCard).border(1.dp, LoginBorderColor, RoundedCornerShape(12.dp))
+                    .padding(horizontal = 16.dp, vertical = 14.dp)
                 ) {
-                    if (value.isEmpty()) {
-                        Text(placeholder, fontSize = 15.sp, color = TextSecond.copy(0.5f))
-                    }
+                    if (value.isEmpty()) Text(placeholder, fontSize = 15.sp, color = LoginTextSecond.copy(0.5f))
                     inner()
                 }
             }
