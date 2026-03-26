@@ -141,6 +141,8 @@ dependencies {
 
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
 
+    implementation("com.google.android.gms:play-services-auth:21.0.0")
+
     // KTOR
     implementation("io.ktor:ktor-client-android:2.3.7")
 
