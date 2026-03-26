@@ -192,7 +192,7 @@ class SarvamSTTManager(
                     "file", "audio.wav",
                     audioBytes.toRequestBody("audio/wav".toMediaType())
                 )
-                .addFormDataPart("model", "saarika:v1")
+                .addFormDataPart("model", "saarika:v2.5")
                 .build()
 
             val req = Request.Builder()
