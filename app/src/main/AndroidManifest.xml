@@ -55,5 +55,6 @@
 
         <activity android:name=".ui.QRPaymentActivity" android:exported="false" android:windowSoftInputMode="adjustResize"/>
 
+        <activity android:name=".ui.DeliveryTrackingActivity" android:exported="false"/>
     </application>
 </manifest>
