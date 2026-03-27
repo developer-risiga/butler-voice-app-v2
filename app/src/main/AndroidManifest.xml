@@ -59,5 +59,10 @@
             android:exported="false"
             android:windowSoftInputMode="adjustResize"/>
         <activity android:name=".ui.DeliveryTrackingActivity" android:exported="false"/>
+
+        <activity
+            android:name=".ui.ServiceActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize"/>
     </application>
 </manifest>
