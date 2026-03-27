@@ -84,8 +84,8 @@ class MainActivity : ComponentActivity() {
     private var sttRetryCount = 0
 
     private var pendingReorderSuggestions: List<ReorderSuggestion> = emptyList()
-    private var lastOrderId   = ""
-    private var lastPublicId  = ""
+    private var lastOrderId    = ""
+    private var lastPublicId   = ""
     private var lastOrderTotal = 0.0
 
     private lateinit var ttsManager : TTSManager
@@ -109,7 +109,6 @@ class MainActivity : ComponentActivity() {
                 val pass  = result.data?.getStringExtra(EXTRA_PASSWORD) ?: return@registerForActivityResult
                 val name  = result.data?.getStringExtra(EXTRA_NAME) ?: ""
                 val isNew = result.data?.getBooleanExtra(EXTRA_IS_NEW_USER, true) ?: true
-                // ✅ Re-enter kiosk mode BEFORE speaking
                 try { startLockTask() } catch (_: Exception) {}
                 lifecycleScope.launch {
                     if (isNew) {
@@ -139,7 +138,6 @@ class MainActivity : ComponentActivity() {
                 val gEmail = result.data?.getStringExtra(EXTRA_GOOGLE_EMAIL) ?: ""
                 val gName  = result.data?.getStringExtra(EXTRA_GOOGLE_NAME) ?: ""
                 if (gEmail.isBlank()) return@registerForActivityResult
-                // ✅ Re-enter kiosk mode BEFORE speaking
                 try { startLockTask() } catch (_: Exception) {}
                 lifecycleScope.launch {
                     val googlePass  = "Butler_G_${gEmail.hashCode().toString().takeLast(8)}"
@@ -156,24 +154,21 @@ class MainActivity : ComponentActivity() {
                 }
             }
             RESULT_USE_VOICE -> {
-                // ✅ Re-enter kiosk mode BEFORE speaking
+                // ✅ Re-lock + 300ms delay so lock task settles before TTS speaks
                 try { startLockTask() } catch (_: Exception) {}
                 currentState = AssistantState.ASKING_IS_NEW_USER
-                // ✅ 300ms delay lets lock task settle so TTS audio is not cut off
                 Handler(Looper.getMainLooper()).postDelayed({
                     speak("Welcome! Are you a new customer, or have you ordered before?") { startListening() }
                 }, 300)
             }
         }
-        // ❌ NO startLockTask() here at the bottom — already done per-branch above
     }
 
     private val paymentLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        // ✅ Re-enter kiosk mode when returning from PaymentActivity
+        // ✅ Re-lock + delay so TTS is not cut off on return from PaymentActivity
         try { startLockTask() } catch (_: Exception) {}
-        // ✅ Small delay so lock task settles before TTS speaks
         Handler(Looper.getMainLooper()).postDelayed({
             when (result.resultCode) {
                 RESULT_PAY_CARD -> {
@@ -185,12 +180,12 @@ class MainActivity : ComponentActivity() {
                     } else placeOrder()
                 }
                 RESULT_PAY_QR -> {
+                    // ✅ Stop lock task before launching QRPaymentActivity
+                    try { stopLockTask() } catch (_: Exception) {}
                     val intent = Intent(this, QRPaymentActivity::class.java).apply {
                         putExtra(EXTRA_ORDER_TOTAL, pendingOrderTotal)
                         putExtra(EXTRA_ORDER_SUMMARY, pendingOrderSummary)
                     }
-                    // ✅ Stop lock task before launching QRPaymentActivity
-                    try { stopLockTask() } catch (_: Exception) {}
                     qrLauncher.launch(intent)
                 }
                 RESULT_PAY_CANCEL -> {
@@ -204,9 +199,8 @@ class MainActivity : ComponentActivity() {
     private val qrLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        // ✅ Re-enter kiosk mode when returning from QRPaymentActivity
+        // ✅ Re-lock + delay so TTS is not cut off on return from QRPaymentActivity
         try { startLockTask() } catch (_: Exception) {}
-        // ✅ Small delay so lock task settles before TTS speaks
         Handler(Looper.getMainLooper()).postDelayed({
             when (result.resultCode) {
                 RESULT_QR_PAID -> speak("Payment received! Placing your order now.") { placeOrder() }
@@ -306,11 +300,11 @@ class MainActivity : ComponentActivity() {
     // ─── WAKE WORD ────────────────────────────────────────────────────────────
 
     private fun startWakeWordListening() {
-        currentState  = AssistantState.IDLE
-        sttRetryCount = 0
+        currentState    = AssistantState.IDLE
+        sttRetryCount   = 0
         emailRetryCount = 0
         cart.clear()
-        tempName = ""; tempEmail = ""
+        tempName  = ""; tempEmail = ""
         pendingReorderSuggestions = emptyList()
         LanguageManager.reset()
         apiClient.clearProductCache()
@@ -323,6 +317,15 @@ class MainActivity : ComponentActivity() {
     // ─── WAKE WORD DETECTED ───────────────────────────────────────────────────
 
     private fun onWakeWordDetected() {
+        // ✅ FIX Bug 2: Stop porcupine IMMEDIATELY — prevents re-triggering mid-session
+        try { porcupine.stop() } catch (_: Exception) {}
+
+        // ✅ FIX Bug 2: Ignore if already in an active session
+        if (currentState != AssistantState.IDLE) {
+            Log.d("Butler", "⚠️ Wake word ignored — currently in state: $currentState")
+            return
+        }
+
         currentState = AssistantState.CHECKING_AUTH
         setUiState(ButlerUiState.Thinking("Checking..."))
         lifecycleScope.launch {
@@ -346,7 +349,12 @@ class MainActivity : ComponentActivity() {
                                     speak(smartMsg) { startListening() }
                                 } else {
                                     currentState = AssistantState.LISTENING
-                                    val greeting = "Welcome back $name! Last time you ordered ${history.first().product_name}. What would you like today?"
+                                    // ✅ FIX Bug 1: safe null check — never say "null" aloud
+                                    val lastProduct = history.firstOrNull()?.product_name?.takeIf { it.isNotBlank() }
+                                    val greeting = if (lastProduct != null)
+                                        "Welcome back $name! Last time you ordered $lastProduct. What would you like today?"
+                                    else
+                                        IndianLanguageProcessor.getWelcomeGreeting(LanguageManager.getLanguage(), name)
                                     speak(greeting) { startListening() }
                                 }
                             }
@@ -519,7 +527,6 @@ class MainActivity : ComponentActivity() {
                         } else {
                             emailRetryCount = 0
                             speak("Let's try a different way. Showing sign-in screen.") {
-                                // ✅ Stop lock task before launching AuthActivity from voice flow
                                 try { stopLockTask() } catch (_: Exception) {}
                                 authLauncher.launch(Intent(this@MainActivity, AuthActivity::class.java))
                             }
@@ -942,11 +949,12 @@ class MainActivity : ComponentActivity() {
                     val firstName = profile.full_name?.split(" ")?.first() ?: "there"
                     val history   = UserSessionManager.purchaseHistory
                     AnalyticsManager.logUserAuth("login", LanguageManager.getLanguage())
-                    val greeting  = if (history.isNotEmpty()) {
-                        "Welcome back $firstName! Last time you ordered ${history.first().product_name}. What would you like?"
-                    } else {
+                    // ✅ FIX Bug 1: safe null check — never say "null" aloud
+                    val lastProduct = history.firstOrNull()?.product_name?.takeIf { it.isNotBlank() }
+                    val greeting = if (lastProduct != null)
+                        "Welcome back $firstName! Last time you ordered $lastProduct. What would you like?"
+                    else
                         IndianLanguageProcessor.getWelcomeGreeting(LanguageManager.getLanguage(), firstName)
-                    }
                     speak(greeting) { startListening() }
                 }
             },
@@ -959,7 +967,7 @@ class MainActivity : ComponentActivity() {
     private fun readOrderHistory() {
         val history = UserSessionManager.purchaseHistory
         if (history.isEmpty()) speak("You haven't ordered anything yet. What would you like?") { startListening() }
-        else speak("Your recent orders include ${history.take(3).joinToString(", ") { it.product_name }}. Would you like to order any?") { startListening() }
+        else speak("Your recent orders include ${history.take(3).joinToString(", ") { it.product_name ?: "unknown" }}. Would you like to order any?") { startListening() }
     }
 
     private fun repeatLastOrder() {
@@ -995,7 +1003,7 @@ class MainActivity : ComponentActivity() {
     private fun placeOrderWithPayment() {
         pendingOrderTotal   = cart.sumOf { it.product.price * it.quantity }
         pendingOrderSummary = cart.joinToString(", ") { "${it.quantity} ${it.product.name}" }
-        // ✅ Stop lock task before launching PaymentActivity
+        // ✅ Stop lock task BEFORE launching PaymentActivity
         try { stopLockTask() } catch (_: Exception) {}
         val intent = Intent(this, PaymentActivity::class.java).apply {
             putExtra(EXTRA_ORDER_TOTAL,   pendingOrderTotal)
@@ -1040,7 +1048,7 @@ class MainActivity : ComponentActivity() {
                     startActivity(trackIntent)
                     cart.clear()
                     UserSessionManager.logout()
-                    // ✅ 6 second delay gives delivery screen time to show before resetting
+                    // ✅ 6s delay so delivery screen shows before resetting to idle
                     Handler(Looper.getMainLooper()).postDelayed({
                         startWakeWordListening()
                     }, 6000)
