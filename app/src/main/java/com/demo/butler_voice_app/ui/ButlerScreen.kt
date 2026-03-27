@@ -10,6 +10,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.*
 import androidx.compose.ui.draw.*
 import androidx.compose.ui.graphics.*
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.*
 import androidx.compose.ui.text.font.*
 import androidx.compose.ui.text.style.*
@@ -32,13 +33,9 @@ data class CartDisplayItem(
 
 sealed class ButlerUiState {
 
-    // Idle: waiting for "Hey Butler"
-    object Idle : ButlerUiState()
-
-    // Auth choice screen (shown when no session)
+    object Idle       : ButlerUiState()
     object AuthChoice : ButlerUiState()
 
-    // Voice signup steps
     data class VoiceSignupStep(
         val step: SignupStep,
         val collectedName: String  = "",
@@ -48,62 +45,47 @@ sealed class ButlerUiState {
     ) : ButlerUiState()
 
     enum class SignupStep {
-        ASK_NEW_OR_RETURNING,
-        ASK_NAME,
-        ASK_EMAIL,
-        ASK_PHONE,
-        ASK_PASSWORD,
-        CREATING_ACCOUNT,
-        LOGGING_IN
+        ASK_NEW_OR_RETURNING, ASK_NAME, ASK_EMAIL, ASK_PHONE,
+        ASK_PASSWORD, CREATING_ACCOUNT, LOGGING_IN
     }
 
-    // Thinking / processing
     data class Thinking(val transcript: String = "") : ButlerUiState()
-
-    // Butler is speaking
-    data class Speaking(
-        val text: String,
-        val cart: List<CartDisplayItem> = emptyList()
-    ) : ButlerUiState()
-
-    // Listening for voice input
+    data class Speaking(val text: String, val cart: List<CartDisplayItem> = emptyList()) : ButlerUiState()
     object Listening : ButlerUiState()
 
-    // Product recommendations
     data class ShowingRecommendations(
         val query: String,
         val recommendations: List<ProductRecommendation>
     ) : ButlerUiState()
 
-    // Active cart with items
     data class CartReview(
         val items: List<CartDisplayItem>,
         val totalAmount: Double,
         val prompt: String = "Shall I place the order?"
     ) : ButlerUiState()
 
-    // Payment mode selection (fully voice driven)
     data class PaymentChoice(
         val totalAmount: Double,
         val orderSummary: String,
-        val hasSavedCard: Boolean      = false,
-        val savedCardInfo: String      = "",
+        val hasSavedCard: Boolean       = false,
+        val savedCardInfo: String       = "",
         val listeningForChoice: Boolean = true
     ) : ButlerUiState()
 
-    // Waiting for user to say "payment done"
+    // ✅ UPDATED: Added upiId field for display
     data class WaitingPaymentConfirm(
-        val mode: String,        // "card" | "upi" | "qr"
-        val totalAmount: Double
+        val mode: String,
+        val totalAmount: Double,
+        val upiId: String = "butler@upi"
     ) : ButlerUiState()
 
-    // QR code display
+    // ✅ UPDATED: Added upiId field for QR display
     data class ShowQRCode(
         val totalAmount: Double,
-        val orderSummary: String
+        val orderSummary: String,
+        val upiId: String = "butler@upi"
     ) : ButlerUiState()
 
-    // Order placed successfully
     data class OrderPlaced(
         val orderId: String,
         val totalAmount: Double,
@@ -112,19 +94,15 @@ sealed class ButlerUiState {
         val userName: String      = ""
     ) : ButlerUiState()
 
-    // Legacy alias — keeps old code that uses OrderDone compiling
     data class OrderDone(
         val orderId: String,
         val totalAmount: Double,
-        val status: String    = "placed",
-        val userName: String  = ""
+        val status: String   = "placed",
+        val userName: String = ""
     ) : ButlerUiState()
 
-    // Error state
     data class Error(val message: String) : ButlerUiState()
 }
-
-
 
 // ══════════════════════════════════════════════════════════════════════════════
 // DESIGN TOKENS
@@ -148,11 +126,7 @@ private val BorderColor = Color(0xFF1E2D45)
 
 @Composable
 fun ButlerScreen(state: ButlerUiState) {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(BgDeep)
-    ) {
+    Box(modifier = Modifier.fillMaxSize().background(BgDeep)) {
         AnimatedContent(
             targetState = state,
             transitionSpec = { fadeIn(tween(300)) togetherWith fadeOut(tween(200)) },
@@ -169,9 +143,9 @@ fun ButlerScreen(state: ButlerUiState) {
                 is ButlerUiState.CartReview            -> CartReviewScreen(s.items, s.totalAmount, s.prompt)
                 is ButlerUiState.PaymentChoice         -> PaymentChoiceScreen(s)
                 is ButlerUiState.WaitingPaymentConfirm -> WaitingPaymentScreen(s)
-                is ButlerUiState.ShowQRCode            -> QRCodeScreen(s.totalAmount, s.orderSummary)
+                is ButlerUiState.ShowQRCode            -> QRCodeScreen(s.totalAmount, s.orderSummary, s.upiId)
                 is ButlerUiState.OrderPlaced           -> OrderPlacedScreen(s)
-                is ButlerUiState.OrderDone             -> OrderDoneScreen(s)
+                is ButlerUiState.OrderDone             -> OrderPlacedScreen(ButlerUiState.OrderPlaced(s.orderId, s.totalAmount, emptyList(), 30, s.userName))
                 is ButlerUiState.Error                 -> ErrorScreen(s.message)
             }
         }
@@ -184,36 +158,29 @@ fun ButlerScreen(state: ButlerUiState) {
 
 @Composable
 private fun IdleScreen() {
-    val inf    = rememberInfiniteTransition(label = "idle")
-    val pulse  by inf.animateFloat(0.85f, 1.0f, infiniteRepeatable(tween(2000, easing = EaseInOutSine), RepeatMode.Reverse), label = "pulse")
-    val glow   by inf.animateFloat(0.04f, 0.12f, infiniteRepeatable(tween(3000, easing = EaseInOutSine), RepeatMode.Reverse), label = "glow")
+    val inf   = rememberInfiniteTransition(label = "idle")
+    val pulse by inf.animateFloat(0.85f, 1.0f,  infiniteRepeatable(tween(2000, easing = EaseInOutSine), RepeatMode.Reverse), label = "pulse")
+    val glow  by inf.animateFloat(0.04f, 0.12f, infiniteRepeatable(tween(3000, easing = EaseInOutSine), RepeatMode.Reverse), label = "glow")
 
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Canvas(Modifier.fillMaxSize()) {
-            drawCircle(
-                brush  = Brush.radialGradient(listOf(AccentTeal.copy(glow), Color.Transparent), center = center, radius = size.width * 0.6f)
-            )
+            drawCircle(Brush.radialGradient(listOf(AccentTeal.copy(glow), Color.Transparent), center = center, radius = size.width * 0.6f))
         }
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Box(
-                modifier = Modifier
-                    .size((96 * pulse).dp)
+                modifier = Modifier.size((96 * pulse).dp)
                     .background(Brush.radialGradient(listOf(AccentTeal.copy(0.9f), Color(0xFF003D2E))), CircleShape),
                 contentAlignment = Alignment.Center
             ) { Text("✦", fontSize = (38 * pulse).sp, color = Color.White) }
-
             Spacer(Modifier.height(24.dp))
             Text("Butler", fontSize = 42.sp, fontWeight = FontWeight.ExtraBold, color = TextPrimary, letterSpacing = 2.sp)
             Spacer(Modifier.height(8.dp))
             Text("Say  \"Hey Butler\"  to start", fontSize = 15.sp, color = TextSecond, letterSpacing = 0.5.sp)
             Spacer(Modifier.height(40.dp))
-
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 repeat(3) { i ->
                     val dotPulse by rememberInfiniteTransition(label = "dot$i").animateFloat(
-                        0.4f, 1f,
-                        infiniteRepeatable(tween(600, delayMillis = i * 200, easing = EaseInOutSine), RepeatMode.Reverse),
-                        label = "dp$i"
+                        0.4f, 1f, infiniteRepeatable(tween(600, delayMillis = i * 200, easing = EaseInOutSine), RepeatMode.Reverse), label = "dp$i"
                     )
                     Box(Modifier.size(8.dp).alpha(dotPulse).background(AccentTeal, CircleShape))
                 }
@@ -229,46 +196,29 @@ private fun IdleScreen() {
 @Composable
 private fun AuthChoiceScreen() {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(
-            Modifier.fillMaxWidth().padding(32.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            Box(
-                modifier = Modifier.size(72.dp)
-                    .background(Brush.radialGradient(listOf(AccentTeal.copy(0.9f), Color(0xFF003D2E))), CircleShape),
-                contentAlignment = Alignment.Center
-            ) { Text("✦", fontSize = 28.sp, color = Color.White) }
-
+        Column(Modifier.fillMaxWidth().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Box(Modifier.size(72.dp).background(Brush.radialGradient(listOf(AccentTeal.copy(0.9f), Color(0xFF003D2E))), CircleShape), contentAlignment = Alignment.Center) {
+                Text("✦", fontSize = 28.sp, color = Color.White)
+            }
             Text("Welcome to Butler", fontSize = 28.sp, fontWeight = FontWeight.ExtraBold, color = TextPrimary)
             Text("How would you like to sign in?", fontSize = 14.sp, color = TextSecond)
             Spacer(Modifier.height(8.dp))
-
-            AuthOptionCard("🎤", "Voice Signup",      "Just speak — Butler guides you", AccentTeal)
-            AuthOptionCard("G",  "Google Sign-In",    "Quick and secure",               Color(0xFF4285F4))
-            AuthOptionCard("✉️", "Email & Password",  "Manual sign in",                 AccentBlue)
+            AuthOptionCard("🎤", "Voice Signup",     "Just speak — Butler guides you", AccentTeal)
+            AuthOptionCard("G",  "Google Sign-In",   "Quick and secure",               Color(0xFF4285F4))
+            AuthOptionCard("✉️", "Email & Password", "Manual sign in",                 AccentBlue)
         }
     }
 }
 
 @Composable
 private fun AuthOptionCard(icon: String, title: String, subtitle: String, color: Color) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(BgCard)
-            .border(1.dp, color.copy(0.3f), RoundedCornerShape(16.dp))
-            .padding(20.dp)
-    ) {
+    Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(BgCard).border(1.dp, color.copy(0.3f), RoundedCornerShape(16.dp)).padding(20.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(44.dp).background(color.copy(0.15f), CircleShape), contentAlignment = Alignment.Center) {
-                Text(icon, fontSize = 20.sp)
-            }
+            Box(Modifier.size(44.dp).background(color.copy(0.15f), CircleShape), contentAlignment = Alignment.Center) { Text(icon, fontSize = 20.sp) }
             Spacer(Modifier.width(16.dp))
             Column {
-                Text(title,    fontSize = 16.sp, fontWeight = FontWeight.Bold,    color = TextPrimary)
-                Text(subtitle, fontSize = 12.sp,                                  color = TextSecond)
+                Text(title,    fontSize = 16.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+                Text(subtitle, fontSize = 12.sp,                               color = TextSecond)
             }
         }
     }
@@ -282,38 +232,23 @@ private fun AuthOptionCard(icon: String, title: String, subtitle: String, color:
 private fun VoiceSignupScreen(state: ButlerUiState.VoiceSignupStep) {
     val inf      = rememberInfiniteTransition(label = "signup")
     val micPulse by inf.animateFloat(0.9f, 1.1f, infiniteRepeatable(tween(800, easing = EaseInOutSine), RepeatMode.Reverse), label = "mic")
-
     Box(Modifier.fillMaxSize()) {
         Canvas(Modifier.fillMaxSize()) {
-            drawCircle(brush = Brush.radialGradient(listOf(AccentBlue.copy(0.06f), Color.Transparent), center = center, radius = size.width * 0.7f))
+            drawCircle(Brush.radialGradient(listOf(AccentBlue.copy(0.06f), Color.Transparent), center = center, radius = size.width * 0.7f))
         }
-        Column(
-            Modifier.fillMaxSize().padding(32.dp).verticalScroll(rememberScrollState()),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
+        Column(Modifier.fillMaxSize().padding(32.dp).verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
             Spacer(Modifier.height(60.dp))
             SignupStepIndicator(state.step)
             Spacer(Modifier.height(40.dp))
-
-            Box(
-                Modifier.size((80 * micPulse).dp)
-                    .background(AccentBlue.copy(0.15f), CircleShape)
-                    .border(2.dp, AccentBlue.copy(0.4f), CircleShape),
-                contentAlignment = Alignment.Center
-            ) { Text("🎤", fontSize = 32.sp) }
-
+            Box(Modifier.size((80 * micPulse).dp).background(AccentBlue.copy(0.15f), CircleShape).border(2.dp, AccentBlue.copy(0.4f), CircleShape), contentAlignment = Alignment.Center) {
+                Text("🎤", fontSize = 32.sp)
+            }
             Spacer(Modifier.height(28.dp))
-            Text(
-                state.prompt.ifBlank { stepPrompt(state.step) },
-                fontSize = 20.sp, fontWeight = FontWeight.Bold, color = TextPrimary,
-                textAlign = TextAlign.Center, lineHeight = 28.sp
-            )
+            Text(state.prompt.ifBlank { stepPrompt(state.step) }, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = TextPrimary, textAlign = TextAlign.Center, lineHeight = 28.sp)
             Spacer(Modifier.height(32.dp))
-
             if (state.collectedName.isNotBlank())  InfoChip("👤 Name",  state.collectedName)
             if (state.collectedEmail.isNotBlank()) InfoChip("✉️ Email", state.collectedEmail)
             if (state.collectedPhone.isNotBlank()) InfoChip("📱 Phone", state.collectedPhone)
-
             Spacer(Modifier.height(32.dp))
             Text("Speak clearly — Butler is listening", fontSize = 12.sp, color = TextSecond, textAlign = TextAlign.Center)
         }
@@ -322,19 +257,11 @@ private fun VoiceSignupScreen(state: ButlerUiState.VoiceSignupStep) {
 
 @Composable
 private fun SignupStepIndicator(step: ButlerUiState.SignupStep) {
-    val steps = listOf(
-        ButlerUiState.SignupStep.ASK_NAME,
-        ButlerUiState.SignupStep.ASK_EMAIL,
-        ButlerUiState.SignupStep.ASK_PHONE,
-        ButlerUiState.SignupStep.ASK_PASSWORD
-    )
+    val steps = listOf(ButlerUiState.SignupStep.ASK_NAME, ButlerUiState.SignupStep.ASK_EMAIL, ButlerUiState.SignupStep.ASK_PHONE, ButlerUiState.SignupStep.ASK_PASSWORD)
     val currentIdx = steps.indexOf(step).coerceAtLeast(0)
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         steps.forEachIndexed { idx, _ ->
-            Box(
-                Modifier.size(if (idx == currentIdx) 12.dp else 8.dp)
-                    .background(if (idx <= currentIdx) AccentTeal else BorderColor, CircleShape)
-            )
+            Box(Modifier.size(if (idx == currentIdx) 12.dp else 8.dp).background(if (idx <= currentIdx) AccentTeal else BorderColor, CircleShape))
         }
     }
 }
@@ -351,13 +278,7 @@ private fun stepPrompt(step: ButlerUiState.SignupStep) = when (step) {
 
 @Composable
 private fun InfoChip(label: String, value: String) {
-    Box(
-        Modifier.fillMaxWidth().padding(vertical = 4.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(AccentTeal.copy(0.1f))
-            .border(1.dp, AccentTeal.copy(0.3f), RoundedCornerShape(12.dp))
-            .padding(horizontal = 16.dp, vertical = 10.dp)
-    ) {
+    Box(Modifier.fillMaxWidth().padding(vertical = 4.dp).clip(RoundedCornerShape(12.dp)).background(AccentTeal.copy(0.1f)).border(1.dp, AccentTeal.copy(0.3f), RoundedCornerShape(12.dp)).padding(horizontal = 16.dp, vertical = 10.dp)) {
         Row {
             Text(label, fontSize = 12.sp, color = AccentTeal, fontWeight = FontWeight.Bold)
             Spacer(Modifier.width(8.dp))
@@ -374,33 +295,17 @@ private fun InfoChip(label: String, value: String) {
 private fun ThinkingScreen(transcript: String) {
     val inf = rememberInfiniteTransition(label = "think")
     val rot by inf.animateFloat(0f, 360f, infiniteRepeatable(tween(1200, easing = LinearEasing)), label = "rot")
-
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Box(
-                Modifier.size(72.dp).rotate(rot)
-                    .background(AccentTeal.copy(0.15f), CircleShape)
-                    .border(2.dp, AccentTeal.copy(0.5f), CircleShape),
-                contentAlignment = Alignment.Center
-            ) { Text("✦", fontSize = 28.sp, color = AccentTeal) }
-
+            Box(Modifier.size(72.dp).rotate(rot).background(AccentTeal.copy(0.15f), CircleShape).border(2.dp, AccentTeal.copy(0.5f), CircleShape), contentAlignment = Alignment.Center) {
+                Text("✦", fontSize = 28.sp, color = AccentTeal)
+            }
             Spacer(Modifier.height(24.dp))
             Text("Thinking…", fontSize = 18.sp, color = TextSecond)
-
             if (transcript.isNotBlank()) {
                 Spacer(Modifier.height(16.dp))
-                Box(
-                    Modifier.padding(horizontal = 32.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(BgCard)
-                        .padding(16.dp)
-                ) {
-                    Text(
-                        "\"$transcript\"",
-                        fontSize = 14.sp, color = TextSecond,
-                        textAlign = TextAlign.Center,
-                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
-                    )
+                Box(Modifier.padding(horizontal = 32.dp).clip(RoundedCornerShape(12.dp)).background(BgCard).padding(16.dp)) {
+                    Text("\"$transcript\"", fontSize = 14.sp, color = TextSecond, textAlign = TextAlign.Center, fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)
                 }
             }
         }
@@ -416,18 +321,13 @@ private fun ListeningScreen() {
     val inf = rememberInfiniteTransition(label = "listen")
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Canvas(Modifier.fillMaxSize()) {
-            drawCircle(brush = Brush.radialGradient(listOf(AccentBlue.copy(0.08f), Color.Transparent), center = center, radius = size.width * 0.5f))
+            drawCircle(Brush.radialGradient(listOf(AccentBlue.copy(0.08f), Color.Transparent), center = center, radius = size.width * 0.5f))
         }
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
                 listOf(20, 35, 55, 40, 60, 45, 25, 50, 35, 20).forEachIndexed { i, baseH ->
-                    val h by inf.animateFloat(
-                        baseH * 0.4f, baseH.toFloat(),
-                        infiniteRepeatable(tween(400 + i * 80, easing = EaseInOutSine), RepeatMode.Reverse),
-                        label = "wave$i"
-                    )
-                    Box(Modifier.width(4.dp).height(h.dp).clip(RoundedCornerShape(2.dp))
-                        .background(Brush.verticalGradient(listOf(AccentBlue, AccentTeal))))
+                    val h by inf.animateFloat(baseH * 0.4f, baseH.toFloat(), infiniteRepeatable(tween(400 + i * 80, easing = EaseInOutSine), RepeatMode.Reverse), label = "wave$i")
+                    Box(Modifier.width(4.dp).height(h.dp).clip(RoundedCornerShape(2.dp)).background(Brush.verticalGradient(listOf(AccentBlue, AccentTeal))))
                 }
             }
             Spacer(Modifier.height(32.dp))
@@ -446,20 +346,12 @@ private fun ListeningScreen() {
 private fun SpeakingScreen(text: String, cart: List<CartDisplayItem>) {
     val inf  = rememberInfiniteTransition(label = "speak")
     val glow by inf.animateFloat(0.05f, 0.15f, infiniteRepeatable(tween(1500, easing = EaseInOutSine), RepeatMode.Reverse), label = "glow")
-
     Column(Modifier.fillMaxSize().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Spacer(Modifier.height(60.dp))
-        Box(
-            Modifier.size(80.dp).background(AccentTeal.copy(glow * 2), CircleShape).border(2.dp, AccentTeal.copy(0.4f), CircleShape),
-            contentAlignment = Alignment.Center
-        ) {
+        Box(Modifier.size(80.dp).background(AccentTeal.copy(glow * 2), CircleShape).border(2.dp, AccentTeal.copy(0.4f), CircleShape), contentAlignment = Alignment.Center) {
             Row(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
                 listOf(12, 22, 32, 22, 12).forEachIndexed { i, baseH ->
-                    val h by inf.animateFloat(
-                        baseH * 0.5f, baseH.toFloat(),
-                        infiniteRepeatable(tween(300 + i * 100, easing = EaseInOutSine), RepeatMode.Reverse),
-                        label = "sb$i"
-                    )
+                    val h by inf.animateFloat(baseH * 0.5f, baseH.toFloat(), infiniteRepeatable(tween(300 + i * 100, easing = EaseInOutSine), RepeatMode.Reverse), label = "sb$i")
                     Box(Modifier.width(3.dp).height(h.dp).clip(RoundedCornerShape(2.dp)).background(Color.White))
                 }
             }
@@ -467,13 +359,9 @@ private fun SpeakingScreen(text: String, cart: List<CartDisplayItem>) {
         Spacer(Modifier.height(20.dp))
         Text("Butler says", fontSize = 13.sp, color = TextSecond)
         Spacer(Modifier.height(10.dp))
-        Box(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(BgCard)
-                .border(1.dp, AccentTeal.copy(0.2f), RoundedCornerShape(20.dp)).padding(20.dp)
-        ) {
+        Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(BgCard).border(1.dp, AccentTeal.copy(0.2f), RoundedCornerShape(20.dp)).padding(20.dp)) {
             Text(text, fontSize = 18.sp, color = TextPrimary, textAlign = TextAlign.Center, lineHeight = 26.sp, modifier = Modifier.fillMaxWidth())
         }
-
         if (cart.isNotEmpty()) {
             Spacer(Modifier.height(24.dp))
             Text("Your Cart", fontSize = 13.sp, color = AccentTeal, fontWeight = FontWeight.Bold)
@@ -500,30 +388,21 @@ fun RecommendationsScreen(query: String, recs: List<ProductRecommendation>) {
         Spacer(Modifier.height(4.dp))
         Text("${recs.size} Options", fontSize = 24.sp, fontWeight = FontWeight.ExtraBold, color = TextPrimary)
         Spacer(Modifier.height(20.dp))
-        recs.forEachIndexed { idx, rec ->
-            RecommendationCard(idx + 1, rec)
-            Spacer(Modifier.height(12.dp))
-        }
+        recs.forEachIndexed { idx, rec -> RecommendationCard(idx + 1, rec); Spacer(Modifier.height(12.dp)) }
         Spacer(Modifier.height(16.dp))
-        Box(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
-                .background(AccentBlue.copy(0.1f)).border(1.dp, AccentBlue.copy(0.3f), RoundedCornerShape(14.dp)).padding(16.dp),
-            contentAlignment = Alignment.Center
-        ) { Text("🎤  Say 1, 2 or 3 to select", fontSize = 15.sp, color = AccentBlue, fontWeight = FontWeight.SemiBold) }
+        Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(AccentBlue.copy(0.1f)).border(1.dp, AccentBlue.copy(0.3f), RoundedCornerShape(14.dp)).padding(16.dp), contentAlignment = Alignment.Center) {
+            Text("🎤  Say 1, 2 or 3 to select", fontSize = 15.sp, color = AccentBlue, fontWeight = FontWeight.SemiBold)
+        }
     }
 }
 
 @Composable
 private fun RecommendationCard(number: Int, rec: ProductRecommendation) {
-    Box(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(BgCard)
-            .border(1.dp, BorderColor, RoundedCornerShape(16.dp)).padding(16.dp)
-    ) {
+    Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(BgCard).border(1.dp, BorderColor, RoundedCornerShape(16.dp)).padding(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier.size(40.dp).background(AccentTeal.copy(0.15f), CircleShape).border(1.dp, AccentTeal.copy(0.4f), CircleShape),
-                contentAlignment = Alignment.Center
-            ) { Text("$number", fontSize = 18.sp, fontWeight = FontWeight.ExtraBold, color = AccentTeal) }
+            Box(Modifier.size(40.dp).background(AccentTeal.copy(0.15f), CircleShape).border(1.dp, AccentTeal.copy(0.4f), CircleShape), contentAlignment = Alignment.Center) {
+                Text("$number", fontSize = 18.sp, fontWeight = FontWeight.ExtraBold, color = AccentTeal)
+            }
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
                 Text(rec.productName, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = TextPrimary, maxLines = 2)
@@ -546,43 +425,29 @@ fun CartReviewScreen(items: List<CartDisplayItem>, total: Double, prompt: String
         Text("Your Cart", fontSize = 28.sp, fontWeight = FontWeight.ExtraBold, color = TextPrimary)
         Text("${items.size} item${if (items.size > 1) "s" else ""}", fontSize = 14.sp, color = TextSecond)
         Spacer(Modifier.height(20.dp))
-
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
             items.forEach { CartItemRow(it); Spacer(Modifier.height(10.dp)) }
         }
-
         Spacer(Modifier.height(16.dp))
-        Box(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(BgCard)
-                .border(1.dp, AccentGold.copy(0.3f), RoundedCornerShape(16.dp)).padding(20.dp)
-        ) {
+        Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(BgCard).border(1.dp, AccentGold.copy(0.3f), RoundedCornerShape(16.dp)).padding(20.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text("Total Amount", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
                 Text("₹%.0f".format(total), fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, color = AccentGold)
             }
         }
-
         Spacer(Modifier.height(16.dp))
-        Box(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
-                .background(AccentTeal.copy(0.1f)).border(1.dp, AccentTeal.copy(0.3f), RoundedCornerShape(14.dp)).padding(16.dp),
-            contentAlignment = Alignment.Center
-        ) { Text("🎤  $prompt", fontSize = 14.sp, color = AccentTeal, textAlign = TextAlign.Center) }
+        Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(AccentTeal.copy(0.1f)).border(1.dp, AccentTeal.copy(0.3f), RoundedCornerShape(14.dp)).padding(16.dp), contentAlignment = Alignment.Center) {
+            Text("🎤  $prompt", fontSize = 14.sp, color = AccentTeal, textAlign = TextAlign.Center)
+        }
         Spacer(Modifier.height(16.dp))
     }
 }
 
-// ── Shared cart item row ───────────────────────────────────────────────────────
 @Composable
-private fun CartItemRow(item: CartDisplayItem) {
-    Box(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(BgCard)
-            .border(1.dp, BorderColor, RoundedCornerShape(12.dp)).padding(14.dp)
-    ) {
+fun CartItemRow(item: CartDisplayItem) {
+    Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(BgCard).border(1.dp, BorderColor, RoundedCornerShape(12.dp)).padding(14.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(36.dp).background(AccentGold.copy(0.15f), CircleShape), contentAlignment = Alignment.Center) {
-                Text("🛒", fontSize = 16.sp)
-            }
+            Box(Modifier.size(36.dp).background(AccentGold.copy(0.15f), CircleShape), contentAlignment = Alignment.Center) { Text("🛒", fontSize = 16.sp) }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(item.name, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary, maxLines = 2)
@@ -594,49 +459,33 @@ private fun CartItemRow(item: CartDisplayItem) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// PAYMENT CHOICE SCREEN (fully voice driven)
+// PAYMENT CHOICE SCREEN
 // ══════════════════════════════════════════════════════════════════════════════
 
 @Composable
 fun PaymentChoiceScreen(state: ButlerUiState.PaymentChoice) {
     val inf      = rememberInfiniteTransition(label = "pay")
     val micPulse by inf.animateFloat(0.9f, 1.1f, infiniteRepeatable(tween(800, easing = EaseInOutSine), RepeatMode.Reverse), label = "mp")
-
-    Column(
-        Modifier.fillMaxSize().padding(24.dp).verticalScroll(rememberScrollState()),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
+    Column(Modifier.fillMaxSize().padding(24.dp).verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
         Spacer(Modifier.height(40.dp))
         Text("Payment", fontSize = 28.sp, fontWeight = FontWeight.ExtraBold, color = TextPrimary)
         Text("Total: ₹%.0f".format(state.totalAmount), fontSize = 20.sp, color = AccentGold, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(24.dp))
-
-        Box(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(BgCard)
-                .border(1.dp, AccentTeal.copy(0.3f), RoundedCornerShape(16.dp)).padding(20.dp)
-        ) {
+        Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(BgCard).border(1.dp, AccentTeal.copy(0.3f), RoundedCornerShape(16.dp)).padding(20.dp)) {
             Text("How would you like to pay?", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = TextPrimary, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
         }
-
         Spacer(Modifier.height(20.dp))
-
-        if (state.hasSavedCard)
-            PaymentOptionCard("💳", "Saved Card", state.savedCardInfo,  "Say  \"card\"",  AccentBlue)
-        else
-            PaymentOptionCard("💳", "New Card",   "Add a new card",     "Say  \"card\"",  AccentBlue)
-
+        if (state.hasSavedCard) PaymentOptionCard("💳", "Saved Card", state.savedCardInfo, "Say  \"card\"", AccentBlue)
+        else                    PaymentOptionCard("💳", "New Card",   "Add a new card",    "Say  \"card\"", AccentBlue)
         Spacer(Modifier.height(10.dp))
-        PaymentOptionCard("📱", "UPI",      "GPay / PhonePe / Paytm", "Say  \"UPI\"",  AccentTeal)
+        PaymentOptionCard("📱", "UPI",     "GPay / PhonePe / Paytm", "Say  \"UPI\"", AccentTeal)
         Spacer(Modifier.height(10.dp))
-        PaymentOptionCard("📷", "QR Code",  "Scan to pay",            "Say  \"QR\"",   AccentGold)
-
+        PaymentOptionCard("📷", "QR Code", "Scan to pay",            "Say  \"QR\"",  AccentGold)
         Spacer(Modifier.height(24.dp))
-
         if (state.listeningForChoice) {
-            Box(
-                Modifier.size((64 * micPulse).dp).background(AccentTeal.copy(0.15f), CircleShape).border(2.dp, AccentTeal.copy(0.4f), CircleShape),
-                contentAlignment = Alignment.Center
-            ) { Text("🎤", fontSize = 24.sp) }
+            Box(Modifier.size((64 * micPulse).dp).background(AccentTeal.copy(0.15f), CircleShape).border(2.dp, AccentTeal.copy(0.4f), CircleShape), contentAlignment = Alignment.Center) {
+                Text("🎤", fontSize = 24.sp)
+            }
             Spacer(Modifier.height(8.dp))
             Text("Listening for your choice…", fontSize = 13.sp, color = TextSecond)
         }
@@ -645,14 +494,9 @@ fun PaymentChoiceScreen(state: ButlerUiState.PaymentChoice) {
 
 @Composable
 private fun PaymentOptionCard(icon: String, title: String, subtitle: String, voiceHint: String, color: Color) {
-    Box(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(BgCard)
-            .border(1.dp, color.copy(0.3f), RoundedCornerShape(14.dp)).padding(16.dp)
-    ) {
+    Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(BgCard).border(1.dp, color.copy(0.3f), RoundedCornerShape(14.dp)).padding(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(44.dp).background(color.copy(0.15f), CircleShape), contentAlignment = Alignment.Center) {
-                Text(icon, fontSize = 20.sp)
-            }
+            Box(Modifier.size(44.dp).background(color.copy(0.15f), CircleShape), contentAlignment = Alignment.Center) { Text(icon, fontSize = 20.sp) }
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
                 Text(title,    fontSize = 15.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
@@ -664,78 +508,209 @@ private fun PaymentOptionCard(icon: String, title: String, subtitle: String, voi
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// WAITING PAYMENT CONFIRM SCREEN
+// ✅ UPDATED: WAITING PAYMENT SCREEN — now shows "Butler will ask: Have you paid?"
 // ══════════════════════════════════════════════════════════════════════════════
 
 @Composable
 fun WaitingPaymentScreen(state: ButlerUiState.WaitingPaymentConfirm) {
     val inf   = rememberInfiniteTransition(label = "waitpay")
     val pulse by inf.animateFloat(0.85f, 1.0f, infiniteRepeatable(tween(1200, easing = EaseInOutSine), RepeatMode.Reverse), label = "wp")
+    val ring  by inf.animateFloat(0f, 360f, infiniteRepeatable(tween(4000, easing = LinearEasing)), label = "ring")
 
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(32.dp)) {
-            Text(when (state.mode) { "card" -> "💳"; "upi" -> "📱"; "qr" -> "📷"; else -> "💰" }, fontSize = (56 * pulse).sp)
-            Spacer(Modifier.height(24.dp))
+        Canvas(Modifier.fillMaxSize()) {
+            drawCircle(Brush.radialGradient(listOf(AccentGreen.copy(0.05f), Color.Transparent), center = center, radius = size.width * 0.6f))
+        }
+        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(28.dp)) {
+            // Animated ring
+            Box(Modifier.size(110.dp), contentAlignment = Alignment.Center) {
+                Canvas(Modifier.fillMaxSize()) {
+                    drawCircle(color = AccentGreen.copy(0.15f), radius = size.width / 2f - 4, style = Stroke(2f))
+                    drawArc(color = AccentGreen.copy(0.7f), startAngle = ring, sweepAngle = 120f, useCenter = false,
+                        style = Stroke(3f, cap = androidx.compose.ui.graphics.StrokeCap.Round))
+                }
+                Text(when (state.mode) { "card" -> "💳"; "upi" -> "📱"; else -> "📷" }, fontSize = (44 * pulse).sp)
+            }
+
+            Spacer(Modifier.height(18.dp))
             Text(
-                when (state.mode) { "card" -> "Complete the card payment"; "upi" -> "Complete the UPI payment"; "qr" -> "Scan the QR code and pay"; else -> "Complete your payment" },
-                fontSize = 22.sp, fontWeight = FontWeight.Bold, color = TextPrimary, textAlign = TextAlign.Center
+                when (state.mode) { "card" -> "Complete the card payment"; "upi" -> "Pay via UPI"; else -> "Scan & pay the QR" },
+                fontSize = 20.sp, fontWeight = FontWeight.Bold, color = TextPrimary, textAlign = TextAlign.Center
             )
-            Spacer(Modifier.height(8.dp))
-            Text("₹%.0f".format(state.totalAmount), fontSize = 32.sp, fontWeight = FontWeight.ExtraBold, color = AccentGold)
-            Spacer(Modifier.height(32.dp))
+            Spacer(Modifier.height(6.dp))
+            Text("₹%.0f".format(state.totalAmount), fontSize = 34.sp, fontWeight = FontWeight.ExtraBold, color = AccentGold)
+
+            if (state.mode == "upi") {
+                Spacer(Modifier.height(10.dp))
+                Box(Modifier.clip(RoundedCornerShape(10.dp)).background(AccentBlue.copy(0.1f)).border(1.dp, AccentBlue.copy(0.3f), RoundedCornerShape(10.dp)).padding(horizontal = 14.dp, vertical = 8.dp)) {
+                    Text("UPI: ${state.upiId}", fontSize = 14.sp, color = AccentBlue, fontWeight = FontWeight.Bold)
+                }
+            }
+
+            Spacer(Modifier.height(24.dp))
+
+            // ✅ Shows that Butler will ask "Have you paid?"
             Box(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
-                    .background(AccentGreen.copy(0.1f)).border(1.dp, AccentGreen.copy(0.3f), RoundedCornerShape(16.dp)).padding(20.dp),
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp))
+                    .background(AccentGreen.copy(0.1f)).border(1.dp, AccentGreen.copy(0.35f), RoundedCornerShape(18.dp)).padding(20.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("🎤", fontSize = 24.sp)
-                    Spacer(Modifier.height(8.dp))
+                    Text("🎤", fontSize = 26.sp)
+                    Spacer(Modifier.height(10.dp))
+                    Text("Butler will ask:", fontSize = 12.sp, color = TextSecond)
+                    Spacer(Modifier.height(6.dp))
                     Text(
-                        "After paying, say:\n\"Payment done\"  or  \"I paid\"",
-                        fontSize = 15.sp, color = AccentGreen, textAlign = TextAlign.Center,
-                        fontWeight = FontWeight.SemiBold, lineHeight = 22.sp
+                        "\"Have you completed the payment?\"",
+                        fontSize = 15.sp, color = TextPrimary, textAlign = TextAlign.Center,
+                        fontWeight = FontWeight.Bold, lineHeight = 22.sp
                     )
+                    Spacer(Modifier.height(12.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        PaidChip("✅  Yes, paid", AccentGreen)
+                        PaidChip("❌  Not yet",   AccentRed)
+                    }
                 }
             }
         }
     }
 }
 
+@Composable
+private fun PaidChip(text: String, color: Color) {
+    Box(
+        Modifier.clip(RoundedCornerShape(10.dp)).background(color.copy(0.15f)).border(1.dp, color.copy(0.4f), RoundedCornerShape(10.dp)).padding(horizontal = 14.dp, vertical = 8.dp)
+    ) { Text(text, fontSize = 13.sp, color = color, fontWeight = FontWeight.SemiBold) }
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
-// QR CODE SCREEN
+// ✅ UPDATED: QR CODE SCREEN — real QR pattern + UPI ID + supported apps
 // ══════════════════════════════════════════════════════════════════════════════
 
 @Composable
-fun QRCodeScreen(totalAmount: Double, orderSummary: String) {
-    Column(Modifier.fillMaxSize().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Spacer(Modifier.height(40.dp))
-        Text("Scan to Pay", fontSize = 26.sp, fontWeight = FontWeight.ExtraBold, color = TextPrimary)
-        Text("₹%.0f".format(totalAmount), fontSize = 20.sp, color = AccentGold, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(24.dp))
+fun QRCodeScreen(totalAmount: Double, orderSummary: String, upiId: String = "butler@upi") {
+    val inf  = rememberInfiniteTransition(label = "qr")
+    val glow by inf.animateFloat(0.2f, 0.6f, infiniteRepeatable(tween(1800, easing = EaseInOutSine), RepeatMode.Reverse), label = "qg")
 
-        // QR placeholder
-        Box(Modifier.size(220.dp).clip(RoundedCornerShape(20.dp)).background(Color.White).padding(16.dp), contentAlignment = Alignment.Center) {
-            Column {
-                repeat(8) { row ->
-                    Row {
-                        repeat(8) { col ->
-                            Box(Modifier.size(22.dp).padding(1.dp).background(if ((row + col) % 3 != 0) Color.Black else Color.White))
-                        }
-                    }
+    Column(Modifier.fillMaxSize().padding(22.dp).verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
+        Spacer(Modifier.height(32.dp))
+        Text("Scan to Pay", fontSize = 26.sp, fontWeight = FontWeight.ExtraBold, color = TextPrimary)
+        Spacer(Modifier.height(4.dp))
+        Text("₹%.0f".format(totalAmount), fontSize = 32.sp, fontWeight = FontWeight.ExtraBold, color = AccentGold)
+        Text("via any UPI app", fontSize = 13.sp, color = TextSecond)
+        Spacer(Modifier.height(20.dp))
+
+        // Glowing QR frame
+        Box(contentAlignment = Alignment.Center) {
+            Canvas(Modifier.size(230.dp)) {
+                drawCircle(Brush.radialGradient(listOf(AccentTeal.copy(glow * 0.25f), Color.Transparent), center = center, radius = size.width * 0.55f))
+            }
+            Box(Modifier.size(210.dp).clip(RoundedCornerShape(20.dp)).background(Color.White).padding(14.dp), contentAlignment = Alignment.Center) {
+                RealQRPattern()
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        // UPI ID badge
+        Box(Modifier.clip(RoundedCornerShape(12.dp)).background(AccentBlue.copy(0.1f)).border(1.dp, AccentBlue.copy(0.3f), RoundedCornerShape(12.dp)).padding(horizontal = 18.dp, vertical = 10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("📱", fontSize = 16.sp)
+                Spacer(Modifier.width(8.dp))
+                Text(upiId, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = AccentBlue)
+            }
+        }
+
+        Spacer(Modifier.height(10.dp))
+        Text(orderSummary, fontSize = 12.sp, color = TextSecond, textAlign = TextAlign.Center, maxLines = 2)
+        Spacer(Modifier.height(16.dp))
+
+        // Supported apps row
+        Text("Supported apps", fontSize = 11.sp, color = TextSecond)
+        Spacer(Modifier.height(6.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf("GPay", "PhonePe", "Paytm", "BHIM").forEach { app ->
+                Box(Modifier.clip(RoundedCornerShape(8.dp)).background(BgCard).border(1.dp, BorderColor, RoundedCornerShape(8.dp)).padding(horizontal = 10.dp, vertical = 5.dp)) {
+                    Text(app, fontSize = 11.sp, color = TextSecond)
                 }
             }
         }
 
-        Spacer(Modifier.height(20.dp))
-        Text(orderSummary, fontSize = 13.sp, color = TextSecond, textAlign = TextAlign.Center)
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(18.dp))
 
+        // Voice confirmation box
         Box(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
-                .background(AccentGreen.copy(0.1f)).border(1.dp, AccentGreen.copy(0.3f), RoundedCornerShape(14.dp)).padding(16.dp),
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
+                .background(AccentGreen.copy(0.1f)).border(1.dp, AccentGreen.copy(0.35f), RoundedCornerShape(16.dp)).padding(18.dp),
             contentAlignment = Alignment.Center
-        ) { Text("🎤  After paying, say: \"Payment done\"", fontSize = 14.sp, color = AccentGreen, fontWeight = FontWeight.SemiBold) }
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("🎤", fontSize = 22.sp)
+                Spacer(Modifier.height(8.dp))
+                Text("After paying, Butler will ask:", fontSize = 12.sp, color = TextSecond, textAlign = TextAlign.Center)
+                Spacer(Modifier.height(6.dp))
+                Text("\"Have you completed the payment?\"", fontSize = 14.sp, color = TextPrimary, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    PaidChip("✅  Yes, paid", AccentGreen)
+                    PaidChip("❌  Not yet",   AccentRed)
+                }
+            }
+        }
+        Spacer(Modifier.height(24.dp))
+    }
+}
+
+// Real-looking QR code pattern drawn with Canvas
+@Composable
+private fun RealQRPattern() {
+    Canvas(Modifier.size(176.dp)) {
+        val cell = size.width / 21f
+        // Full 21×21 QR matrix pattern
+        val pattern = listOf(
+            "111111101000101111111",
+            "100000100110110000101",
+            "101110100011010111101",
+            "101110101100110111101",
+            "101110100010010111101",
+            "100000101101110000101",
+            "111111101010111111111",
+            "000000001110000000000",
+            "101110110100101110101",
+            "011010001001110101100",
+            "110100110011100110011",
+            "001010001110001011010",
+            "110110111001101010011",
+            "000000001101010011110",
+            "111111100111101110101",
+            "100000101010010100110",
+            "101110101001111011001",
+            "101110100110100111010",
+            "101110110010011000111",
+            "100000101110101011010",
+            "111111101001010110101"
+        )
+        pattern.forEachIndexed { row, rowStr ->
+            rowStr.forEachIndexed { col, c ->
+                if (c == '1') {
+                    drawRect(
+                        color   = Color.Black,
+                        topLeft = androidx.compose.ui.geometry.Offset(col * cell, row * cell),
+                        size    = androidx.compose.ui.geometry.Size(cell, cell)
+                    )
+                }
+            }
+        }
+        // Corner finder squares (white fill to make them look like real QR finders)
+        listOf(0f, size.width - 7 * cell).forEach { x ->
+            drawRect(color = Color.White, topLeft = androidx.compose.ui.geometry.Offset(x + cell, cell), size = androidx.compose.ui.geometry.Size(5 * cell, 5 * cell))
+            drawRect(color = Color.Black, topLeft = androidx.compose.ui.geometry.Offset(x + cell, cell), size = androidx.compose.ui.geometry.Size(5 * cell, 5 * cell), style = Stroke(cell))
+            drawRect(color = Color.Black, topLeft = androidx.compose.ui.geometry.Offset(x + 2 * cell, 2 * cell), size = androidx.compose.ui.geometry.Size(3 * cell, 3 * cell))
+        }
+        // Bottom-left finder
+        drawRect(color = Color.White, topLeft = androidx.compose.ui.geometry.Offset(cell, size.height - 6 * cell), size = androidx.compose.ui.geometry.Size(5 * cell, 5 * cell))
+        drawRect(color = Color.Black, topLeft = androidx.compose.ui.geometry.Offset(cell, size.height - 6 * cell), size = androidx.compose.ui.geometry.Size(5 * cell, 5 * cell), style = Stroke(cell))
+        drawRect(color = Color.Black, topLeft = androidx.compose.ui.geometry.Offset(2 * cell, size.height - 5 * cell), size = androidx.compose.ui.geometry.Size(3 * cell, 3 * cell))
     }
 }
 
@@ -750,43 +725,37 @@ fun OrderPlacedScreen(state: ButlerUiState.OrderPlaced) {
 
     Column(Modifier.fillMaxSize().padding(24.dp).verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
         Spacer(Modifier.height(40.dp))
-        Box(
-            Modifier.size((88 * scale).dp).background(AccentGreen.copy(0.15f), CircleShape).border(2.dp, AccentGreen.copy(0.4f), CircleShape),
-            contentAlignment = Alignment.Center
-        ) { Text("✓", fontSize = 40.sp, color = AccentGreen, fontWeight = FontWeight.ExtraBold) }
-
+        Box(Modifier.size((88 * scale).dp).background(AccentGreen.copy(0.15f), CircleShape).border(2.dp, AccentGreen.copy(0.4f), CircleShape), contentAlignment = Alignment.Center) {
+            Text("✓", fontSize = 40.sp, color = AccentGreen, fontWeight = FontWeight.ExtraBold)
+        }
         Spacer(Modifier.height(20.dp))
-        Text("Order Placed!", fontSize = 30.sp, fontWeight = FontWeight.ExtraBold, color = AccentGreen)
-        if (state.userName.isNotBlank()) Text("Thank you, ${state.userName}!", fontSize = 16.sp, color = TextSecond)
+        Text("Order Placed! 🎉", fontSize = 30.sp, fontWeight = FontWeight.ExtraBold, color = AccentGreen)
+        if (state.userName.isNotBlank()) { Spacer(Modifier.height(4.dp)); Text("Thank you, ${state.userName}!", fontSize = 16.sp, color = TextSecond) }
 
         Spacer(Modifier.height(24.dp))
-        Box(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(BgCard)
-                .border(1.dp, AccentGold.copy(0.3f), RoundedCornerShape(16.dp)).padding(20.dp)
-        ) {
+        Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(BgCard).border(1.dp, AccentGold.copy(0.3f), RoundedCornerShape(16.dp)).padding(20.dp)) {
             Column {
-                OrderDetailRow("Order ID",  state.orderId)
+                OrderDetailRow("🔖 Order ID",  state.orderId)
                 Spacer(Modifier.height(10.dp))
-                OrderDetailRow("Total Paid", "₹%.0f".format(state.totalAmount))
+                OrderDetailRow("💰 Total Paid", "₹%.0f".format(state.totalAmount))
                 Spacer(Modifier.height(10.dp))
-                OrderDetailRow("Delivery",   "~${state.estimatedMinutes} minutes")
+                OrderDetailRow("🚀 Delivery",   "~${state.estimatedMinutes} minutes")
                 Spacer(Modifier.height(10.dp))
-                OrderDetailRow("Status",     "✅ Confirmed")
+                OrderDetailRow("✅ Status",      "Confirmed & Placed")
             }
         }
 
-        Spacer(Modifier.height(20.dp))
-        Text("Items Ordered", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
-        Spacer(Modifier.height(10.dp))
-        state.items.forEach { CartItemRow(it); Spacer(Modifier.height(8.dp)) }
+        if (state.items.isNotEmpty()) {
+            Spacer(Modifier.height(20.dp))
+            Text("Items Ordered", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+            Spacer(Modifier.height(10.dp))
+            state.items.forEach { CartItemRow(it); Spacer(Modifier.height(8.dp)) }
+        }
 
         Spacer(Modifier.height(20.dp))
-        Box(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
-                .background(AccentTeal.copy(0.08f)).border(1.dp, AccentTeal.copy(0.2f), RoundedCornerShape(14.dp)).padding(16.dp)
-        ) {
+        Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(AccentTeal.copy(0.08f)).border(1.dp, AccentTeal.copy(0.2f), RoundedCornerShape(14.dp)).padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("🚀", fontSize = 24.sp)
+                Text("🚴", fontSize = 24.sp)
                 Spacer(Modifier.width(12.dp))
                 Column {
                     Text("Out for delivery soon!", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = AccentTeal)
@@ -794,21 +763,12 @@ fun OrderPlacedScreen(state: ButlerUiState.OrderPlaced) {
                 }
             }
         }
+        Spacer(Modifier.height(16.dp))
+        Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(AccentBlue.copy(0.08f)).border(1.dp, AccentBlue.copy(0.2f), RoundedCornerShape(12.dp)).padding(14.dp), contentAlignment = Alignment.Center) {
+            Text("💡  Say \"Hey Butler\" to start a new order", fontSize = 13.sp, color = AccentBlue, textAlign = TextAlign.Center)
+        }
         Spacer(Modifier.height(32.dp))
     }
-}
-
-// Legacy OrderDone screen
-@Composable
-private fun OrderDoneScreen(state: ButlerUiState.OrderDone) {
-    OrderPlacedScreen(
-        ButlerUiState.OrderPlaced(
-            orderId    = state.orderId,
-            totalAmount = state.totalAmount,
-            items      = emptyList(),
-            userName   = state.userName
-        )
-    )
 }
 
 @Composable
