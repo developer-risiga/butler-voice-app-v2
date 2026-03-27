@@ -10,10 +10,11 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import com.demo.butler_voice_app.BuildConfig
+import com.demo.butler_voice_app.api.SupabaseClient
 import java.util.concurrent.TimeUnit
 
 // ══════════════════════════════════════════════════════════════════════════════
-// SERVICE MANAGER — Real Supabase + GPT-4V prescription RAG
+// SERVICE MANAGER — Uses existing SupabaseClient.rpc() + GPT-4V prescription
 // ══════════════════════════════════════════════════════════════════════════════
 
 object ServiceManager {
@@ -53,7 +54,7 @@ object ServiceManager {
         return ServiceIntent(sector = bestSector, query = transcript, budget = budget)
     }
 
-    // ── 2. Search providers — REAL Supabase RPC ───────────────────────────────
+    // ── 2. Search providers using SupabaseClient.rpc() ────────────────────────
     suspend fun searchProviders(
         intent: ServiceIntent,
         userLat: Double?,
@@ -72,27 +73,20 @@ object ServiceManager {
                 else                  -> "rating"
             }
 
-            val bodyJson = JSONObject().apply {
+            // ✅ Use existing SupabaseClient.rpc() — no duplicate HTTP setup needed
+            val params = JSONObject().apply {
                 put("user_lat",    lat)
                 put("user_lng",    lng)
                 if (intent.sector != null) put("sector_name", intent.sector.name)
                 put("radius_km",   filter.maxDistanceKm)
                 put("sort_by",     sortBy)
                 put("max_results", 5)
-            }.toString().toRequestBody("application/json".toMediaType())
+            }
 
-            val request = Request.Builder()
-                .url("${BuildConfig.SUPABASE_URL}/rest/v1/rpc/get_nearby_providers")
-                .addHeader("apikey",        BuildConfig.SUPABASE_ANON_KEY)
-                .addHeader("Authorization", "Bearer ${BuildConfig.SUPABASE_ANON_KEY}")
-                .addHeader("Content-Type",  "application/json")
-                .post(bodyJson).build()
+            val resBody = SupabaseClient.rpc("get_nearby_providers", params)
+            Log.d(TAG, "Supabase providers: ${resBody.take(300)}")
 
-            val response = http.newCall(request).execute()
-            val resBody  = response.body?.string() ?: ""
-            Log.d(TAG, "Supabase providers (${response.code}): ${resBody.take(300)}")
-
-            if (!response.isSuccessful || resBody.isBlank() || resBody == "[]") {
+            if (resBody.isBlank() || resBody == "[]" || resBody == "null") {
                 Log.w(TAG, "Supabase returned no data — using fallback")
                 return@withContext fallbackProviders(intent, lat, lng, filter)
             }
@@ -133,7 +127,7 @@ object ServiceManager {
         return (0 until arr.length()).map { arr.optString(it) }
     }
 
-    // ── 3. Create booking in Supabase ─────────────────────────────────────────
+    // ── 3. Create booking using SupabaseClient.rpc() ──────────────────────────
     suspend fun createBooking(
         userId: String,
         provider: ServiceProvider,
@@ -141,25 +135,17 @@ object ServiceManager {
         notes: String = ""
     ): String = withContext(Dispatchers.IO) {
         try {
-            val bodyJson = JSONObject().apply {
+            val params = JSONObject().apply {
                 put("p_user_id",     userId)
                 put("p_provider_id", provider.id)
                 put("p_sector",      sector.name)
                 put("p_notes",       notes)
-            }.toString().toRequestBody("application/json".toMediaType())
+            }
 
-            val request = Request.Builder()
-                .url("${BuildConfig.SUPABASE_URL}/rest/v1/rpc/create_service_booking")
-                .addHeader("apikey",        BuildConfig.SUPABASE_ANON_KEY)
-                .addHeader("Authorization", "Bearer ${BuildConfig.SUPABASE_ANON_KEY}")
-                .addHeader("Content-Type",  "application/json")
-                .post(bodyJson).build()
+            val resBody = SupabaseClient.rpc("create_service_booking", params)
+            Log.d(TAG, "Booking response: $resBody")
 
-            val response = http.newCall(request).execute()
-            val resBody  = response.body?.string() ?: ""
-            Log.d(TAG, "Booking response (${response.code}): $resBody")
-
-            if (response.isSuccessful && resBody.isNotBlank()) {
+            if (resBody.isNotBlank() && resBody != "null") {
                 JSONObject(resBody).optString("booking_id", generateLocalBookingId())
             } else {
                 generateLocalBookingId()
@@ -198,7 +184,8 @@ object ServiceManager {
             }.toString().toRequestBody("application/json".toMediaType())
 
             val response = http.newCall(
-                Request.Builder().url("https://api.openai.com/v1/chat/completions")
+                Request.Builder()
+                    .url("https://api.openai.com/v1/chat/completions")
                     .addHeader("Authorization", "Bearer $openAiKey")
                     .addHeader("Content-Type", "application/json")
                     .post(bodyJson).build()
@@ -236,10 +223,10 @@ object ServiceManager {
     ): String {
         if (providers.isEmpty())
             return "I couldn't find any ${sector.displayName} providers near you. Say wider area to search more."
-        val top     = providers.first()
-        val count   = providers.size
+        val top      = providers.first()
+        val count    = providers.size
         val greeting = if (userName.isNotBlank()) "$userName, " else ""
-        val price   = if (top.priceMin > 0) ", charges ${top.priceMin} to ${top.priceMax} ${top.priceUnit}" else ""
+        val price    = if (top.priceMin > 0) ", charges ${top.priceMin} to ${top.priceMax} ${top.priceUnit}" else ""
         return when (sector) {
             ServiceSector.AMBULANCE ->
                 "EMERGENCY! Nearest is ${top.name}, ${top.distanceKm}km away, arriving in ${top.eta}. Calling now!"
@@ -259,22 +246,48 @@ object ServiceManager {
     ): List<ServiceProvider> {
         val sector = intent.sector ?: return emptyList()
         val templates = mapOf(
-            ServiceSector.PLUMBER     to listOf("Ramesh Plumbing" to 4.5, "Urban Company Pro" to 4.7, "Quick Fix" to 4.3, "Local Plumber" to 4.1, "HomeTriangle" to 4.4),
-            ServiceSector.ELECTRICIAN to listOf("Vijay Electricals" to 4.6, "Urban Electrician" to 4.8, "PowerFix" to 4.3, "Local Electrician" to 4.2, "HomeHelp" to 4.5),
-            ServiceSector.DOCTOR      to listOf("Dr. Sharma MBBS" to 4.8, "Dr. Patel Specialist" to 4.9, "Practo Online" to 4.5, "Apollo Clinic" to 4.7, "City Doctor" to 4.6),
-            ServiceSector.MEDICINE    to listOf("Apollo Pharmacy" to 4.7, "MedPlus" to 4.5, "Jan Aushadhi" to 4.3, "PharmEasy" to 4.6, "Wellness Forever" to 4.4),
-            ServiceSector.AMBULANCE   to listOf("108 Emergency" to 5.0, "Ziqitza" to 4.8, "StanPlus" to 4.7, "Apollo Ambulance" to 4.9),
-            ServiceSector.TAXI        to listOf("Ola Mini" to 4.3, "Uber Go" to 4.4, "Rapido" to 4.2, "InDrive" to 4.1),
-            ServiceSector.FOOD        to listOf("Swiggy Express" to 4.5, "Zomato Gold" to 4.6, "Local Tiffin" to 4.7),
-            ServiceSector.CLEANING    to listOf("Urban Cleaning" to 4.6, "Local Maid" to 4.3, "ZAP Cleaning" to 4.4),
-            ServiceSector.SALON       to listOf("Jawed Habib" to 4.5, "Green Trends" to 4.4, "Home Salon" to 4.6),
-            ServiceSector.AC_REPAIR   to listOf("CoolCare AC" to 4.5, "Urban AC" to 4.7, "FrostFix" to 4.3),
+            ServiceSector.PLUMBER      to listOf("Ramesh Plumbing" to 4.5, "Urban Company Pro" to 4.7, "Quick Fix" to 4.3, "Local Plumber" to 4.1, "HomeTriangle" to 4.4),
+            ServiceSector.ELECTRICIAN  to listOf("Vijay Electricals" to 4.6, "Urban Electrician" to 4.8, "PowerFix" to 4.3, "Local Electrician" to 4.2, "HomeHelp" to 4.5),
+            ServiceSector.DOCTOR       to listOf("Dr. Sharma MBBS" to 4.8, "Dr. Patel Specialist" to 4.9, "Practo Online" to 4.5, "Apollo Clinic" to 4.7, "City Doctor" to 4.6),
+            ServiceSector.MEDICINE     to listOf("Apollo Pharmacy" to 4.7, "MedPlus" to 4.5, "Jan Aushadhi" to 4.3, "PharmEasy" to 4.6, "Wellness Forever" to 4.4),
+            ServiceSector.AMBULANCE    to listOf("108 Emergency" to 5.0, "Ziqitza" to 4.8, "StanPlus" to 4.7, "Apollo Ambulance" to 4.9),
+            ServiceSector.TAXI         to listOf("Ola Mini" to 4.3, "Uber Go" to 4.4, "Rapido" to 4.2, "InDrive" to 4.1),
+            ServiceSector.FOOD         to listOf("Swiggy Express" to 4.5, "Zomato Gold" to 4.6, "Local Tiffin" to 4.7),
+            ServiceSector.CLEANING     to listOf("Urban Cleaning" to 4.6, "Local Maid" to 4.3, "ZAP Cleaning" to 4.4),
+            ServiceSector.SALON        to listOf("Jawed Habib" to 4.5, "Green Trends" to 4.4, "Home Salon" to 4.6),
+            ServiceSector.AC_REPAIR    to listOf("CoolCare AC" to 4.5, "Urban AC" to 4.7, "FrostFix" to 4.3),
+            ServiceSector.CARPENTER    to listOf("Mohan Carpenter" to 4.4, "Urban Carpenter" to 4.6, "WoodCraft" to 4.2),
+            ServiceSector.PAINTER      to listOf("Asian Paints Network" to 4.6, "Raj Painter" to 4.3),
+            ServiceSector.PEST_CONTROL to listOf("HiCare Pest" to 4.6, "Urban Pest" to 4.5, "BugFree" to 4.3),
+            ServiceSector.TUTOR        to listOf("Vedantu Online" to 4.7, "Local Tutor Amit" to 4.8, "Byjus Center" to 4.5),
+            ServiceSector.LEGAL        to listOf("Advocate Sharma" to 4.7, "Vakilsearch" to 4.5, "Notary Services" to 4.4),
+            ServiceSector.CA_SERVICES  to listOf("CA Amit Jain" to 4.8, "TaxBuddy" to 4.6, "ClearTax" to 4.5),
+            ServiceSector.HOME_NURSING to listOf("Portea Nursing" to 4.8, "CareEasy" to 4.6, "Nurse Point" to 4.4),
+            ServiceSector.COURIER      to listOf("Delhivery" to 4.4, "BlueDart" to 4.7, "DTDC" to 4.2),
+            ServiceSector.PANDIT       to listOf("Pandit Sharma Ji" to 4.9, "AstroSage" to 4.7),
+            ServiceSector.PET_CARE     to listOf("Dr. Pet Vet" to 4.8, "PetMojo Grooming" to 4.6),
+            ServiceSector.AGRICULTURE  to listOf("Kisan Seva Kendra" to 4.4, "AgroStar App" to 4.6),
+            ServiceSector.WATER_GAS    to listOf("Indore Jal Seva" to 4.3, "HP Gas" to 4.5),
+            ServiceSector.PHOTOGRAPHY  to listOf("PixelPerfect Studios" to 4.8, "QuickShot" to 4.5),
+            ServiceSector.SECURITY     to listOf("G4S Security" to 4.5, "Checkmate Security" to 4.3),
         )
         val priceRanges = mapOf(
-            ServiceSector.PLUMBER to Triple(200, 500, "per hour"), ServiceSector.ELECTRICIAN to Triple(200, 600, "per hour"),
-            ServiceSector.DOCTOR  to Triple(300, 800, "per consultation"), ServiceSector.TAXI to Triple(50, 500, "per trip"),
-            ServiceSector.CLEANING to Triple(500, 1500, "per session"), ServiceSector.SALON to Triple(100, 1000, "per service"),
-            ServiceSector.AC_REPAIR to Triple(300, 1500, "per service"),
+            ServiceSector.PLUMBER      to Triple(200, 500, "per hour"),
+            ServiceSector.ELECTRICIAN  to Triple(200, 600, "per hour"),
+            ServiceSector.CARPENTER    to Triple(300, 800, "per hour"),
+            ServiceSector.CLEANING     to Triple(500, 1500, "per session"),
+            ServiceSector.DOCTOR       to Triple(300, 800, "per consultation"),
+            ServiceSector.TAXI         to Triple(50, 500, "per trip"),
+            ServiceSector.SALON        to Triple(100, 1000, "per service"),
+            ServiceSector.AC_REPAIR    to Triple(300, 1500, "per service"),
+            ServiceSector.PAINTER      to Triple(10, 25, "per sq ft"),
+            ServiceSector.PEST_CONTROL to Triple(700, 3000, "per treatment"),
+            ServiceSector.TUTOR        to Triple(500, 2000, "per month"),
+            ServiceSector.LEGAL        to Triple(500, 5000, "per consultation"),
+            ServiceSector.CA_SERVICES  to Triple(300, 5000, "per filing"),
+            ServiceSector.HOME_NURSING to Triple(400, 2000, "per visit"),
+            ServiceSector.SECURITY     to Triple(6000, 15000, "per month"),
+            ServiceSector.COURIER      to Triple(40, 800, "per shipment"),
         )
         val names = templates[sector] ?: listOf("Top Provider" to 4.5, "Verified Pro" to 4.3, "Local Expert" to 4.1)
         val (pMin, pMax, pUnit) = priceRanges[sector] ?: Triple(0, 0, "varies")
