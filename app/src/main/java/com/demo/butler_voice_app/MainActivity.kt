@@ -157,6 +157,8 @@ class MainActivity : ComponentActivity() {
                 speak("Welcome! Are you a new customer or have you ordered before?") { startListening() }
             }
         }
+        // re-enter kiosk mode after auth screen closes
+        try { startLockTask() } catch (_: Exception) {}
     }
 
     private val paymentLauncher = registerForActivityResult(
@@ -327,6 +329,7 @@ class MainActivity : ComponentActivity() {
                         speak(IndianLanguageProcessor.getWelcomeGreeting(LanguageManager.getLanguage(), name)) { startListening() }
                     }
                 } else {
+                    try { stopLockTask() } catch (_: Exception) {}
                     authLauncher.launch(Intent(this@MainActivity, AuthActivity::class.java))
                 }
             }
@@ -491,6 +494,7 @@ class MainActivity : ComponentActivity() {
                         } else {
                             emailRetryCount = 0
                             speak("Let's try a different way. Showing sign-in screen.") {
+                                try { stopLockTask() } catch (_: Exception) {}
                                 authLauncher.launch(Intent(this@MainActivity, AuthActivity::class.java))
                             }
                         }
