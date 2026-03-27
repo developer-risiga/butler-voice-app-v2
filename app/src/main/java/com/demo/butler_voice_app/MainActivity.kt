@@ -65,8 +65,8 @@ enum class AssistantState {
     IDLE, CHECKING_AUTH,
     ASKING_IS_NEW_USER, ASKING_NAME, ASKING_EMAIL, ASKING_PASSWORD,
     LISTENING, ASKING_QUANTITY, ASKING_MORE, CONFIRMING,
-    REORDER_CONFIRM,    // ← NEW: Smart reorder confirmation
-    EDITING_CART        // ← NEW: Voice cart editing
+    REORDER_CONFIRM,
+    EDITING_CART
 }
 
 class MainActivity : ComponentActivity() {
@@ -83,7 +83,6 @@ class MainActivity : ComponentActivity() {
     private var tempEmail     = ""
     private var sttRetryCount = 0
 
-    // ── NEW: Smart Reorder ────────────────────────────────────────────────────
     private var pendingReorderSuggestions: List<ReorderSuggestion> = emptyList()
     private var lastOrderId   = ""
     private var lastPublicId  = ""
@@ -110,6 +109,8 @@ class MainActivity : ComponentActivity() {
                 val pass  = result.data?.getStringExtra(EXTRA_PASSWORD) ?: return@registerForActivityResult
                 val name  = result.data?.getStringExtra(EXTRA_NAME) ?: ""
                 val isNew = result.data?.getBooleanExtra(EXTRA_IS_NEW_USER, true) ?: true
+                // ✅ Re-enter kiosk mode BEFORE speaking
+                try { startLockTask() } catch (_: Exception) {}
                 lifecycleScope.launch {
                     if (isNew) {
                         val displayName = name.ifBlank {
@@ -138,6 +139,8 @@ class MainActivity : ComponentActivity() {
                 val gEmail = result.data?.getStringExtra(EXTRA_GOOGLE_EMAIL) ?: ""
                 val gName  = result.data?.getStringExtra(EXTRA_GOOGLE_NAME) ?: ""
                 if (gEmail.isBlank()) return@registerForActivityResult
+                // ✅ Re-enter kiosk mode BEFORE speaking
+                try { startLockTask() } catch (_: Exception) {}
                 lifecycleScope.launch {
                     val googlePass  = "Butler_G_${gEmail.hashCode().toString().takeLast(8)}"
                     val displayName = gName.ifBlank { gEmail.substringBefore("@").replaceFirstChar { it.uppercase() } }
@@ -153,47 +156,66 @@ class MainActivity : ComponentActivity() {
                 }
             }
             RESULT_USE_VOICE -> {
+                // ✅ Re-enter kiosk mode BEFORE speaking
+                try { startLockTask() } catch (_: Exception) {}
                 currentState = AssistantState.ASKING_IS_NEW_USER
-                speak("Welcome! Are you a new customer or have you ordered before?") { startListening() }
+                // ✅ 300ms delay lets lock task settle so TTS audio is not cut off
+                Handler(Looper.getMainLooper()).postDelayed({
+                    speak("Welcome! Are you a new customer, or have you ordered before?") { startListening() }
+                }, 300)
             }
         }
-        // re-enter kiosk mode after auth screen closes
-        try { startLockTask() } catch (_: Exception) {}
+        // ❌ NO startLockTask() here at the bottom — already done per-branch above
     }
 
     private val paymentLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        when (result.resultCode) {
-            RESULT_PAY_CARD -> {
-                val card = PaymentManager.getSavedCard(this)
-                if (card != null) {
-                    speak("Paying ₹%.0f with your ${card.network} card ending ${card.last4}. Placing order now.".format(pendingOrderTotal)) {
-                        placeOrder()
-                    }
-                } else placeOrder()
-            }
-            RESULT_PAY_QR -> {
-                val intent = Intent(this, QRPaymentActivity::class.java).apply {
-                    putExtra(EXTRA_ORDER_TOTAL, pendingOrderTotal)
-                    putExtra(EXTRA_ORDER_SUMMARY, pendingOrderSummary)
+        // ✅ Re-enter kiosk mode when returning from PaymentActivity
+        try { startLockTask() } catch (_: Exception) {}
+        // ✅ Small delay so lock task settles before TTS speaks
+        Handler(Looper.getMainLooper()).postDelayed({
+            when (result.resultCode) {
+                RESULT_PAY_CARD -> {
+                    val card = PaymentManager.getSavedCard(this)
+                    if (card != null) {
+                        speak("Paying ₹%.0f with your ${card.network} card ending ${card.last4}. Placing order now.".format(pendingOrderTotal)) {
+                            placeOrder()
+                        }
+                    } else placeOrder()
                 }
-                qrLauncher.launch(intent)
+                RESULT_PAY_QR -> {
+                    val intent = Intent(this, QRPaymentActivity::class.java).apply {
+                        putExtra(EXTRA_ORDER_TOTAL, pendingOrderTotal)
+                        putExtra(EXTRA_ORDER_SUMMARY, pendingOrderSummary)
+                    }
+                    // ✅ Stop lock task before launching QRPaymentActivity
+                    try { stopLockTask() } catch (_: Exception) {}
+                    qrLauncher.launch(intent)
+                }
+                RESULT_PAY_CANCEL -> {
+                    currentState = AssistantState.CONFIRMING
+                    speak("Payment cancelled. Say yes when ready to pay.") { startListening() }
+                }
             }
-            RESULT_PAY_CANCEL -> {
-                currentState = AssistantState.CONFIRMING
-                speak("Payment cancelled. Say yes when ready to pay.") { startListening() }
-            }
-        }
+        }, 300)
     }
 
     private val qrLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        when (result.resultCode) {
-            RESULT_QR_PAID   -> speak("Payment received! Placing your order now.") { placeOrder() }
-            RESULT_QR_CANCEL -> { currentState = AssistantState.CONFIRMING; speak("Payment cancelled. Say yes when ready to pay.") { startListening() } }
-        }
+        // ✅ Re-enter kiosk mode when returning from QRPaymentActivity
+        try { startLockTask() } catch (_: Exception) {}
+        // ✅ Small delay so lock task settles before TTS speaks
+        Handler(Looper.getMainLooper()).postDelayed({
+            when (result.resultCode) {
+                RESULT_QR_PAID -> speak("Payment received! Placing your order now.") { placeOrder() }
+                RESULT_QR_CANCEL -> {
+                    currentState = AssistantState.CONFIRMING
+                    speak("Payment cancelled. Say yes when ready to pay.") { startListening() }
+                }
+            }
+        }, 300)
     }
 
     // ─── LIFECYCLE ────────────────────────────────────────────────────────────
@@ -232,7 +254,14 @@ class MainActivity : ComponentActivity() {
 
     override fun onPause()   { super.onPause();   porcupine.stop(); sarvamSTT.stop() }
     override fun onDestroy() { super.onDestroy(); porcupine.stop(); sarvamSTT.stop(); ttsManager.shutdown() }
-    override fun onResume()  { super.onResume();  try { startLockTask() } catch (_: Exception) {} }
+
+    override fun onResume() {
+        super.onResume()
+        // ✅ Only lock task when truly idle — NOT when returning from auth/payment/delivery
+        if (currentState == AssistantState.IDLE) {
+            try { startLockTask() } catch (_: Exception) {}
+        }
+    }
 
     // ─── LOCATION ─────────────────────────────────────────────────────────────
 
@@ -291,7 +320,8 @@ class MainActivity : ComponentActivity() {
         porcupine.start()
     }
 
-    // ── NEW: Smart Reorder Detection on Wake Word ─────────────────────────────
+    // ─── WAKE WORD DETECTED ───────────────────────────────────────────────────
+
     private fun onWakeWordDetected() {
         currentState = AssistantState.CHECKING_AUTH
         setUiState(ButlerUiState.Thinking("Checking..."))
@@ -303,7 +333,6 @@ class MainActivity : ComponentActivity() {
                     val history = UserSessionManager.purchaseHistory
                     AnalyticsManager.logSessionStart(UserSessionManager.currentUserId(), LanguageManager.getLanguage())
 
-                    // ✅ Try smart reorder if user has history
                     if (history.isNotEmpty()) {
                         lifecycleScope.launch {
                             val userId      = UserSessionManager.currentUserId() ?: ""
@@ -312,12 +341,10 @@ class MainActivity : ComponentActivity() {
 
                             runOnUiThread {
                                 if (smartMsg != null && suggestions.isNotEmpty()) {
-                                    // Pre-load suggestions for reorder confirmation
                                     pendingReorderSuggestions = suggestions
                                     currentState = AssistantState.REORDER_CONFIRM
                                     speak(smartMsg) { startListening() }
                                 } else {
-                                    // Normal greeting with last order
                                     currentState = AssistantState.LISTENING
                                     val greeting = "Welcome back $name! Last time you ordered ${history.first().product_name}. What would you like today?"
                                     speak(greeting) { startListening() }
@@ -329,6 +356,7 @@ class MainActivity : ComponentActivity() {
                         speak(IndianLanguageProcessor.getWelcomeGreeting(LanguageManager.getLanguage(), name)) { startListening() }
                     }
                 } else {
+                    // ✅ Stop lock task BEFORE launching AuthActivity
                     try { stopLockTask() } catch (_: Exception) {}
                     authLauncher.launch(Intent(this@MainActivity, AuthActivity::class.java))
                 }
@@ -385,12 +413,10 @@ class MainActivity : ComponentActivity() {
 
         when (currentState) {
 
-            // ── NEW: Smart Reorder Confirmation state ─────────────────────────
             AssistantState.REORDER_CONFIRM -> {
                 when {
                     MultilingualMatcher.isYes(cleaned) ||
                             IndianLanguageProcessor.detectIntent(cleaned) == "confirm" -> {
-                        // Load reorder items into cart
                         lifecycleScope.launch {
                             for (suggestion in pendingReorderSuggestions) {
                                 val product = apiClient.searchProduct(suggestion.productName)
@@ -415,7 +441,6 @@ class MainActivity : ComponentActivity() {
                         speak("No problem! What would you like to order today?") { startListening() }
                     }
                     else -> {
-                        // User said something else — treat as a new order intent
                         pendingReorderSuggestions = emptyList()
                         currentState = AssistantState.LISTENING
                         handleOrderIntent(text, lower)
@@ -494,6 +519,7 @@ class MainActivity : ComponentActivity() {
                         } else {
                             emailRetryCount = 0
                             speak("Let's try a different way. Showing sign-in screen.") {
+                                // ✅ Stop lock task before launching AuthActivity from voice flow
                                 try { stopLockTask() } catch (_: Exception) {}
                                 authLauncher.launch(Intent(this@MainActivity, AuthActivity::class.java))
                             }
@@ -555,7 +581,6 @@ class MainActivity : ComponentActivity() {
 
             AssistantState.ASKING_MORE -> handleAskingMore(cleaned, text)
 
-            // ── NEW: Voice Cart Editing ────────────────────────────────────────
             AssistantState.EDITING_CART -> handleCartEdit(cleaned, text)
 
             AssistantState.CONFIRMING -> {
@@ -567,7 +592,6 @@ class MainActivity : ComponentActivity() {
                             cart.clear(); UserSessionManager.logout(); startWakeWordListening()
                         }
                     }
-                    // ✅ Allow cart editing from CONFIRMING state
                     isCartEditIntent(cleaned) -> {
                         currentState = AssistantState.EDITING_CART
                         handleCartEdit(cleaned, text)
@@ -596,7 +620,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // ─── NEW: VOICE CART EDITING ───────────────────────────────────────────────
+    // ─── VOICE CART EDITING ───────────────────────────────────────────────────
 
     private fun isCartEditIntent(s: String): Boolean {
         val editPhrases = listOf(
@@ -607,12 +631,6 @@ class MainActivity : ComponentActivity() {
         return editPhrases.any { s.contains(it) }
     }
 
-    /**
-     * Handles voice cart editing commands:
-     *  - "remove rice"       → removes rice from cart
-     *  - "change oil to 2"   → updates oil quantity to 2
-     *  - "add one more rice" → increases rice quantity by 1
-     */
     private fun handleCartEdit(cleaned: String, originalText: String) {
         if (cart.isEmpty()) {
             speak("Your cart is empty. What would you like to add?") {
@@ -621,19 +639,16 @@ class MainActivity : ComponentActivity() {
             return
         }
 
-        // ── REMOVE intent ────────────────────────────────────────────────────
         val isRemove = cleaned.contains("remove") || cleaned.contains("delete") ||
                 cleaned.contains("हटाओ") || cleaned.contains("हटा") ||
                 cleaned.contains("निकाल") || cleaned.contains("తొలగించు") ||
                 cleaned.contains("ತೆಗೆ") || cleaned.contains("वापस")
 
-        // ── CHANGE QUANTITY intent ────────────────────────────────────────────
         val isChange = cleaned.contains("change") || cleaned.contains("update") ||
                 cleaned.contains("बदलो") || cleaned.contains("make it") ||
                 cleaned.contains("instead") || cleaned.contains("మార్చు")
 
         if (isRemove) {
-            // Find which product to remove
             val removedItem = cart.firstOrNull { item ->
                 val words = item.product.name.lowercase().split(" ")
                 words.any { w -> cleaned.contains(w) && w.length > 3 }
@@ -656,7 +671,6 @@ class MainActivity : ComponentActivity() {
         }
 
         if (isChange) {
-            // Find item + new quantity
             val newQty = extractQuantity(cleaned)
             val changedItem = cart.firstOrNull { item ->
                 val words = item.product.name.lowercase().split(" ")
@@ -673,7 +687,6 @@ class MainActivity : ComponentActivity() {
             return
         }
 
-        // Default: go back to confirming
         currentState = AssistantState.CONFIRMING
         readCartAndConfirm()
     }
@@ -689,14 +702,12 @@ class MainActivity : ComponentActivity() {
             cleaned.contains("what did i order")) { readOrderHistory(); return }
         if (isNoMoreIntent(cleaned)) { readCartAndConfirm(); return }
 
-        // ✅ Cart edit intent while in LISTENING state
         if (cart.isNotEmpty() && isCartEditIntent(cleaned)) {
             currentState = AssistantState.EDITING_CART
             handleCartEdit(cleaned, text)
             return
         }
 
-        // ✅ Regional product name normalisation
         val regionalProduct = IndianLanguageProcessor.normalizeProduct(cleaned)
         if (regionalProduct != cleaned && regionalProduct.isNotBlank()) {
             Log.d("Butler", "Regional product: '$cleaned' → '$regionalProduct'")
@@ -748,7 +759,6 @@ class MainActivity : ComponentActivity() {
                 speakWithCart("What else would you like?") { startListening() }
             }
             isNoMoreIntent(cleaned) -> readCartAndConfirm()
-            // ✅ Cart edit from ASKING_MORE state too
             isCartEditIntent(cleaned) -> {
                 currentState = AssistantState.EDITING_CART
                 handleCartEdit(cleaned, originalText)
@@ -985,6 +995,8 @@ class MainActivity : ComponentActivity() {
     private fun placeOrderWithPayment() {
         pendingOrderTotal   = cart.sumOf { it.product.price * it.quantity }
         pendingOrderSummary = cart.joinToString(", ") { "${it.quantity} ${it.product.name}" }
+        // ✅ Stop lock task before launching PaymentActivity
+        try { stopLockTask() } catch (_: Exception) {}
         val intent = Intent(this, PaymentActivity::class.java).apply {
             putExtra(EXTRA_ORDER_TOTAL,   pendingOrderTotal)
             putExtra(EXTRA_ORDER_SUMMARY, pendingOrderSummary)
@@ -993,7 +1005,6 @@ class MainActivity : ComponentActivity() {
         paymentLauncher.launch(intent)
     }
 
-    // ── NEW: placeOrder → launches Delivery Tracking automatically ────────────
     private fun placeOrder() {
         lifecycleScope.launch {
             try {
@@ -1010,7 +1021,6 @@ class MainActivity : ComponentActivity() {
                 Log.d("Butler", "Order placed: ${orderResult.id}")
                 AnalyticsManager.logOrderPlaced(orderResult.id, orderResult.total_amount, cart.size, lang)
 
-                // Save for delivery tracking
                 lastOrderId    = orderResult.id
                 lastPublicId   = shortId
                 lastOrderTotal = orderResult.total_amount
@@ -1019,7 +1029,8 @@ class MainActivity : ComponentActivity() {
                 val farewell = IndianLanguageProcessor.getOrderConfirmation(lang, firstName, shortId)
 
                 speak(farewell) {
-                    // ✅ Launch Delivery Tracking screen automatically
+                    // ✅ Stop lock task BEFORE launching DeliveryTrackingActivity
+                    try { stopLockTask() } catch (_: Exception) {}
                     val trackIntent = Intent(this@MainActivity, DeliveryTrackingActivity::class.java).apply {
                         putExtra("order_id",  lastOrderId)
                         putExtra("public_id", lastPublicId)
@@ -1027,10 +1038,12 @@ class MainActivity : ComponentActivity() {
                         putExtra("summary",   pendingOrderSummary)
                     }
                     startActivity(trackIntent)
-
                     cart.clear()
                     UserSessionManager.logout()
-                    Handler(Looper.getMainLooper()).postDelayed({ startWakeWordListening() }, 3500)
+                    // ✅ 6 second delay gives delivery screen time to show before resetting
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        startWakeWordListening()
+                    }, 6000)
                 }
             } catch (e: Exception) {
                 Log.e("Butler", "Order failed: ${e.message}")
