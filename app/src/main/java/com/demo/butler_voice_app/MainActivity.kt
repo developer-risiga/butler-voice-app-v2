@@ -101,56 +101,42 @@ class MainActivity : ComponentActivity() {
     private var currentState = AssistantState.IDLE
     private val recordRequestCode = 101
 
-    // ── ₹ FIX: TTS says "48 rupees" not "₹48" ────────────────────────────────
+    // ── ₹ FIX ────────────────────────────────────────────────────────────────
     private fun toSpeakableAmount(amount: Double): String = "${amount.toInt()} rupees"
 
     // ══════════════════════════════════════════════════════════════════════════
-    // ✅ FIX: Extended number detection — all tones, languages, spellings
+    // ✅ CENTRAL ROUTER — called first before any state handling
+    // This ensures service requests ALWAYS win over grocery regardless of state
     // ══════════════════════════════════════════════════════════════════════════
 
-    private fun detectNumberFromSpeech(spoken: String): Int {
-        val s = spoken.lowercase().trim()
-            .replace(Regex("[,।.!?]"), "")
-            .replace(Regex("\\s+"), " ")
-            .trim()
-
-        // Direct digit
-        val digit = Regex("\\b([123])\\b").find(s)?.groupValues?.get(1)?.toIntOrNull()
-        if (digit != null) return digit
-
-        return when {
-            // ── 1 ─────────────────────────────────────────────────────────────
-            s == "1" ||
-                    s.contains("one") || s.contains("wan") || s.contains("won") ||
-                    s.contains("first") || s.contains("pehla") || s.contains("pehli") ||
-                    s.contains("ek") || s.contains("एक") || s.contains("ఒకటి") ||
-                    s.contains("ஒன்று") || s.contains("ಒಂದು") || s.contains("ഒന്ന്") ||
-                    s.contains("pahila") || s.contains("number one") || s.contains("no one") ||
-                    s.contains("option one") || s.contains("choice one") ||
-                    s.contains("pehla wala") || s.contains("pehli wali") -> 1
-
-            // ── 2 ─────────────────────────────────────────────────────────────
-            s == "2" ||
-                    s.contains("two") || s.contains("too") || s.contains("to ") ||
-                    s.contains("second") || s.contains("doosra") || s.contains("dusra") ||
-                    s.contains("do") || s.contains("दो") || s.contains("రెండు") ||
-                    s.contains("இரண்டு") || s.contains("ಎರಡು") || s.contains("രണ്ട്") ||
-                    s.contains("number two") || s.contains("no two") ||
-                    s.contains("option two") || s.contains("choice two") ||
-                    s.contains("doosra wala") || s.contains("dono") -> 2
-
-            // ── 3 ─────────────────────────────────────────────────────────────
-            s == "3" ||
-                    s.contains("three") || s.contains("tree") || s.contains("thre") ||
-                    s.contains("third") || s.contains("teesra") || s.contains("tisra") ||
-                    s.contains("teen") || s.contains("तीन") || s.contains("మూడు") ||
-                    s.contains("மூன்று") || s.contains("ಮೂರು") || s.contains("മൂന്ന്") ||
-                    s.contains("number three") || s.contains("no three") ||
-                    s.contains("option three") || s.contains("choice three") ||
-                    s.contains("teesra wala") -> 3
-
-            else -> -1
+    private fun routeTranscript(text: String, lower: String): Boolean {
+        // Emergency = absolute highest priority
+        if (ServiceVoiceHandler.isEmergency(lower)) {
+            speak("Emergency! Connecting to emergency services right away.") {
+                launchServiceFlow(text)
+            }
+            return true
         }
+        // Prescription
+        if (ServiceVoiceHandler.isPrescriptionRequest(lower)) {
+            speak("I will help you order from your prescription. Opening camera now.") {
+                launchServiceFlow(text)
+            }
+            return true
+        }
+        // Any service request — BUT only when not in grocery ordering flow
+        // (LISTENING, REORDER_CONFIRM are the only states where we check)
+        if (currentState == AssistantState.LISTENING || currentState == AssistantState.REORDER_CONFIRM) {
+            if (ServiceVoiceHandler.isServiceRequest(lower)) {
+                val intent     = ServiceManager.detectServiceIntent(text)
+                val sectorName = intent.sector?.displayName ?: "service"
+                speak("Finding $sectorName providers near you.") {
+                    launchServiceFlow(text)
+                }
+                return true
+            }
+        }
+        return false // not a service request — continue normal handling
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -217,6 +203,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // ── Service launcher ──────────────────────────────────────────────────────
     private val serviceLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -230,7 +217,11 @@ class MainActivity : ComponentActivity() {
                     startListening()
                 }
             } else {
-                startWakeWordListening()
+                // Return to LISTENING so user can order grocery OR another service
+                currentState = AssistantState.LISTENING
+                speak("Is there anything else you need? You can order groceries or book another service.") {
+                    startListening()
+                }
             }
         }, 500)
     }
@@ -245,11 +236,9 @@ class MainActivity : ComponentActivity() {
             override fun handleOnBackPressed() {}
         })
         setContent { val state by uiState; ButlerScreen(state = state) }
-
         val audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
         audioManager.mode             = AudioManager.MODE_NORMAL
         audioManager.isSpeakerphoneOn = true
-
         SessionStore.init(this)
         startLocationUpdates()
         sarvamSTT = SarvamSTTManager(this, BuildConfig.SARVAM_API_KEY)
@@ -270,7 +259,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onPause()   { super.onPause();   porcupine.stop(); sarvamSTT.stop() }
     override fun onDestroy() { super.onDestroy(); porcupine.stop(); sarvamSTT.stop(); ttsManager.shutdown() }
-    override fun onResume()  { super.onResume(); if (currentState == AssistantState.IDLE) { try { startLockTask() } catch (_: Exception) {} } }
+    override fun onResume()  {
+        super.onResume()
+        if (currentState == AssistantState.IDLE) { try { startLockTask() } catch (_: Exception) {} }
+    }
 
     // ══════════════════════════════════════════════════════════════════════════
     // LOCATION
@@ -326,7 +318,9 @@ class MainActivity : ComponentActivity() {
 
     private fun onWakeWordDetected() {
         try { porcupine.stop() } catch (_: Exception) {}
-        if (currentState != AssistantState.IDLE) { Log.d("Butler", "⚠️ Wake word ignored — state: $currentState"); return }
+        if (currentState != AssistantState.IDLE) {
+            Log.d("Butler", "⚠️ Wake word ignored — state: $currentState"); return
+        }
         currentState = AssistantState.CHECKING_AUTH
         setUiState(ButlerUiState.Thinking("Checking session…"))
         lifecycleScope.launch {
@@ -349,7 +343,7 @@ class MainActivity : ComponentActivity() {
                                     currentState = AssistantState.LISTENING
                                     val lastProduct = history.firstOrNull()?.product_name?.takeIf { it.isNotBlank() }
                                     val greeting = if (lastProduct != null)
-                                        "Welcome back $name! Last time you ordered $lastProduct. You can also book any service like plumber, doctor, or taxi. What would you like?"
+                                        "Welcome back $name! Last time you ordered $lastProduct. Say what you need — groceries, plumber, doctor, or any other service."
                                     else IndianLanguageProcessor.getWelcomeGreeting(LanguageManager.getLanguage(), name)
                                     speak(greeting) { startListening() }
                                 }
@@ -379,10 +373,9 @@ class MainActivity : ComponentActivity() {
     }
 
     // ══════════════════════════════════════════════════════════════════════════
-    // STT — with longer timeout for number selection
+    // STT
     // ══════════════════════════════════════════════════════════════════════════
 
-    // ✅ FIX: Standard listening — used for all general commands
     private fun startListening() {
         setUiState(ButlerUiState.Listening)
         Log.d("Butler", "Starting STT...")
@@ -411,62 +404,69 @@ class MainActivity : ComponentActivity() {
         )
     }
 
-    // ✅ NEW: Extended listening for number selection (1/2/3) — gives more time
-    // Called specifically when waiting for a product/provider selection
+    // Extended listening for number selection (1/2/3)
     private fun startListeningForSelection(
         onNumber: (Int) -> Unit,
         onOther: (String) -> Unit,
         retryPrompt: String = "Please say 1, 2, or 3."
     ) {
         setUiState(ButlerUiState.Listening)
-        Log.d("Butler", "Starting STT for selection...")
-
         sarvamSTT.startListening(
             onResult = { text ->
                 runOnUiThread {
                     val transcript = text.trim()
-                    Log.d("Butler", "Selection transcript: '$transcript'")
-
                     if (transcript.isBlank()) {
-                        // ✅ Give ONE more extra attempt with extra patience
                         speak("I didn't hear you. Please say 1, 2, or 3 clearly.") {
                             Handler(Looper.getMainLooper()).postDelayed({
                                 sarvamSTT.startListening(
                                     onResult = { t2 ->
                                         runOnUiThread {
-                                            val t = t2.trim()
+                                            val t   = t2.trim()
                                             val num = detectNumberFromSpeech(t)
-                                            if (num > 0) onNumber(num) else if (t.isNotBlank()) onOther(t) else speak(retryPrompt) { startListeningForSelection(onNumber, onOther, retryPrompt) }
+                                            when {
+                                                num > 0      -> onNumber(num)
+                                                t.isNotBlank() -> onOther(t)
+                                                else         -> speak(retryPrompt) { startListeningForSelection(onNumber, onOther, retryPrompt) }
+                                            }
                                         }
                                     },
                                     onError = { runOnUiThread { speak(retryPrompt) { startListeningForSelection(onNumber, onOther, retryPrompt) } } }
                                 )
-                            }, 500) // 500ms pause before re-listening
+                            }, 500)
                         }
                         return@runOnUiThread
                     }
-
                     val num = detectNumberFromSpeech(transcript)
-                    if (num > 0) {
-                        Log.d("Butler", "Number detected: $num from '$transcript'")
-                        onNumber(num)
-                    } else {
-                        onOther(transcript)
-                    }
+                    if (num > 0) onNumber(num) else onOther(transcript)
                 }
             },
-            onError = {
-                runOnUiThread {
-                    speak("Didn't catch that. Say 1, 2, or 3.") {
-                        startListeningForSelection(onNumber, onOther, retryPrompt)
-                    }
-                }
-            }
+            onError = { runOnUiThread { speak("Didn't catch that. Say 1, 2, or 3.") { startListeningForSelection(onNumber, onOther, retryPrompt) } } }
         )
     }
 
+    private fun detectNumberFromSpeech(spoken: String): Int {
+        val s = spoken.lowercase().trim().replace(Regex("[,।.!?]"), "").trim()
+        val digit = Regex("\\b([123])\\b").find(s)?.groupValues?.get(1)?.toIntOrNull()
+        if (digit != null) return digit
+        return when {
+            s.contains("one")   || s.contains("wan")    || s.contains("won")    || s.contains("first")  ||
+                    s.contains("pehla") || s.contains("ek")     || s.contains("एक")     || s.contains("ఒకటి")   ||
+                    s.contains("ஒன்று") || s.contains("option one") || s.contains("number one") -> 1
+
+            s.contains("two")   || s.contains("too")    || s.contains("second") || s.contains("doosra") ||
+                    s.contains("do")    || s.contains("दो")     || s.contains("రెండు")  || s.contains("இரண்டு") ||
+                    s.contains("option two") || s.contains("number two") -> 2
+
+            s.contains("three") || s.contains("tree")   || s.contains("third")  || s.contains("teesra") ||
+                    s.contains("teen")  || s.contains("तीन")    || s.contains("మూడు")   || s.contains("மூன்று") ||
+                    s.contains("option three") || s.contains("number three") -> 3
+
+            else -> -1
+        }
+    }
+
     // ══════════════════════════════════════════════════════════════════════════
-    // SERVICE FLOW
+    // SERVICE FLOW LAUNCHER
     // ══════════════════════════════════════════════════════════════════════════
 
     private fun launchServiceFlow(transcript: String) {
@@ -493,7 +493,12 @@ class MainActivity : ComponentActivity() {
         val cleaned = lower.replace(Regex("[,।.!?؟]"), "").trim()
         val lang    = LanguageManager.getLanguage()
 
+        // ✅ ROUTE FIRST — emergency/prescription always interrupt any state
+        if (routeTranscript(text, lower)) return
+
         when (currentState) {
+
+            // ── Voice signup ───────────────────────────────────────────────────
 
             AssistantState.ASKING_IS_NEW_USER -> {
                 when {
@@ -539,7 +544,6 @@ class MainActivity : ComponentActivity() {
                 val parsed = EmailPasswordParser.parseEmail(text)
                 if (parsed != null) {
                     tempEmail = parsed; emailRetryCount = 0
-                    Log.d("Butler", "Email: $tempEmail")
                     currentState = AssistantState.ASKING_PHONE
                     setUiState(ButlerUiState.VoiceSignupStep(ButlerUiState.SignupStep.ASK_PHONE, collectedName = tempName, collectedEmail = tempEmail,
                         prompt = "What is your 10-digit mobile number?"))
@@ -556,7 +560,7 @@ class MainActivity : ComponentActivity() {
                             speak("OK, I got $tempEmail. What is your mobile number?") { startListening() }
                         } else {
                             emailRetryCount = 0
-                            speak("I'm having trouble. Let me show you the sign-in screen.") {
+                            speak("I am having trouble. Let me show you the sign-in screen.") {
                                 try { stopLockTask() } catch (_: Exception) {}
                                 authLauncher.launch(Intent(this@MainActivity, AuthActivity::class.java))
                             }
@@ -576,25 +580,22 @@ class MainActivity : ComponentActivity() {
                 if (phone.length == 10) {
                     tempPhone = phone; phoneRetryCount = 0
                     currentState = AssistantState.ASKING_PASSWORD
-                    setUiState(ButlerUiState.VoiceSignupStep(ButlerUiState.SignupStep.ASK_PASSWORD, tempName, tempEmail, tempPhone,
-                        "Now choose a password. Spell each character clearly."))
+                    setUiState(ButlerUiState.VoiceSignupStep(ButlerUiState.SignupStep.ASK_PASSWORD, tempName, tempEmail, tempPhone, "Now choose a password. Spell each character clearly."))
                     speak("Got it — $tempPhone. Now choose a password. Spell each character clearly.") { startListening() }
                 } else {
                     phoneRetryCount++
-                    if (phoneRetryCount <= 2) speak("Please say your 10-digit mobile number again clearly, digit by digit.") { startListening() }
+                    if (phoneRetryCount <= 2) speak("Please say your 10-digit mobile number again, digit by digit.") { startListening() }
                     else {
                         phoneRetryCount = 0
                         currentState = AssistantState.ASKING_PASSWORD
-                        setUiState(ButlerUiState.VoiceSignupStep(ButlerUiState.SignupStep.ASK_PASSWORD, tempName, tempEmail,
-                            prompt = "Let's set your password. Spell each character clearly."))
-                        speak("No problem, let's skip phone. Please choose a password.") { startListening() }
+                        setUiState(ButlerUiState.VoiceSignupStep(ButlerUiState.SignupStep.ASK_PASSWORD, tempName, tempEmail, prompt = "Let us set your password. Spell each character clearly."))
+                        speak("No problem, let us skip phone. Please choose a password.") { startListening() }
                     }
                 }
             }
 
             AssistantState.ASKING_PASSWORD -> {
                 val password = EmailPasswordParser.parsePassword(text).ifBlank { text.trim().replace(" ", "").trimEnd('.', ',', '!') }
-                Log.d("Butler", "Password length: ${password.length}")
                 if (password.length < 6) { speak("Password must be at least 6 characters. Please try again.") { startListening() }; return }
                 lifecycleScope.launch {
                     if (tempName.isNotBlank()) {
@@ -611,7 +612,7 @@ class MainActivity : ComponentActivity() {
                                 if (error.message?.contains("user_already_exists") == true || error.message?.contains("already registered") == true)
                                     speak("Account already exists. Logging you in.") { lifecycleScope.launch { doLogin(tempEmail, password) } }
                                 else
-                                    speak("Sorry, couldn't create account. Please try again.") { startWakeWordListening() }
+                                    speak("Sorry, could not create account. Please try again.") { startWakeWordListening() }
                             }
                         )
                     } else {
@@ -621,7 +622,12 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
+            // ══════════════════════════════════════════════════════════════════
+            // ✅ REORDER CONFIRM — checks service first, then reorder
+            // ══════════════════════════════════════════════════════════════════
+
             AssistantState.REORDER_CONFIRM -> {
+                // routeTranscript already handled emergency/prescription/service above
                 when {
                     MultilingualMatcher.isYes(cleaned) || IndianLanguageProcessor.detectIntent(cleaned) == "confirm" -> {
                         lifecycleScope.launch {
@@ -633,36 +639,31 @@ class MainActivity : ComponentActivity() {
                                     showCartAndSpeak("Perfect! Added ${cart.joinToString(", ") { "${it.quantity} ${it.product.name}" }}. Shall I place the order?") { startListening() }
                                 } else {
                                     currentState = AssistantState.LISTENING
-                                    speak("Couldn't find those products. What would you like?") { startListening() }
+                                    speak("Could not find those products. What would you like?") { startListening() }
                                 }
                             }
                         }
                     }
                     MultilingualMatcher.isNo(cleaned) -> {
                         pendingReorderSuggestions = emptyList(); currentState = AssistantState.LISTENING
-                        speak("No problem! What would you like today?") { startListening() }
+                        speak("No problem! What would you like today? I can order groceries or book any service for you.") { startListening() }
                     }
-                    else -> { pendingReorderSuggestions = emptyList(); currentState = AssistantState.LISTENING; handleOrderIntent(text, lower) }
+                    else -> {
+                        // Could be a new grocery item OR a service request — treat as LISTENING
+                        pendingReorderSuggestions = emptyList()
+                        currentState = AssistantState.LISTENING
+                        handleOrderIntent(text, lower)
+                    }
                 }
             }
 
             // ══════════════════════════════════════════════════════════════════
-            // LISTENING — services OR grocery
+            // ✅ LISTENING — grocery only (services already routed above)
             // ══════════════════════════════════════════════════════════════════
 
-            AssistantState.LISTENING -> {
-                if (ServiceVoiceHandler.isEmergency(lower)) {
-                    speak("Emergency! Connecting to emergency services right away.") { launchServiceFlow(text) }; return
-                }
-                if (ServiceVoiceHandler.isPrescriptionRequest(lower)) {
-                    speak("I'll help you order from your prescription. Opening camera now.") { launchServiceFlow(text) }; return
-                }
-                if (ServiceVoiceHandler.isServiceRequest(lower)) {
-                    val intent = ServiceManager.detectServiceIntent(text)
-                    speak("Finding ${intent.sector?.displayName ?: "service"} providers near you.") { launchServiceFlow(text) }; return
-                }
-                handleOrderIntent(text, lower)
-            }
+            AssistantState.LISTENING -> handleOrderIntent(text, lower)
+
+            // ── Ordering states ────────────────────────────────────────────────
 
             AssistantState.ASKING_QUANTITY -> {
                 val qty = extractQuantity(text); val product = tempProduct
@@ -672,11 +673,11 @@ class MainActivity : ComponentActivity() {
                     showCartAndSpeak(if (suggestion != null && cart.size == 1)
                         "Added $qty ${product.name}. Would you also like $suggestion? Or say done to checkout."
                     else "Added $qty ${product.name}. More items or say done to checkout?") { startListening() }
-                } else speak("Let's try again. What would you like?") { currentState = AssistantState.LISTENING; startListening() }
+                } else speak("Let us try again. What would you like?") { currentState = AssistantState.LISTENING; startListening() }
             }
 
-            AssistantState.ASKING_MORE    -> handleAskingMore(cleaned, text)
-            AssistantState.EDITING_CART   -> handleCartEdit(cleaned, text)
+            AssistantState.ASKING_MORE  -> handleAskingMore(cleaned, text)
+            AssistantState.EDITING_CART -> handleCartEdit(cleaned, text)
 
             AssistantState.CONFIRMING -> {
                 val intentFromLang = IndianLanguageProcessor.detectIntent(cleaned)
@@ -699,6 +700,8 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+
+            // ── Payment states ─────────────────────────────────────────────────
 
             AssistantState.ASKING_PAYMENT_MODE  -> handlePaymentModeChoice(cleaned)
             AssistantState.WAITING_CARD_PAYMENT -> handlePaymentConfirmation(cleaned, "card")
@@ -733,11 +736,10 @@ class MainActivity : ComponentActivity() {
         when {
             cleaned.contains("card") || cleaned.contains("debit") || cleaned.contains("credit") ||
                     cleaned.contains("saved") || cleaned.contains("कार्ड") || cleaned.contains("కార్డ్") -> {
-                val card   = PaymentManager.getSavedCard(this)
-                val amount = toSpeakableAmount(pendingOrderTotal)
+                val card = PaymentManager.getSavedCard(this); val amount = toSpeakableAmount(pendingOrderTotal)
                 currentState = AssistantState.WAITING_CARD_PAYMENT
                 setUiState(ButlerUiState.WaitingPaymentConfirm("card", pendingOrderTotal))
-                speak(if (card != null) "I'll charge your ${card.network} card ending ${card.last4} for $amount. Please complete the payment."
+                speak(if (card != null) "I will charge your ${card.network} card ending ${card.last4} for $amount. Please complete the payment."
                 else "Please enter your card details and complete the payment for $amount.") {
                     Handler(Looper.getMainLooper()).postDelayed({ askIfPaid("card") }, 2000)
                 }
@@ -751,16 +753,15 @@ class MainActivity : ComponentActivity() {
                     Handler(Looper.getMainLooper()).postDelayed({ askIfPaid("upi") }, 3000)
                 }
             }
-            cleaned.contains("qr") || cleaned.contains("scan") || cleaned.contains("scanner") ||
-                    cleaned.contains("क्यूआर") || cleaned.contains("స్కాన్") -> {
+            cleaned.contains("qr") || cleaned.contains("scan") || cleaned.contains("क्यूआर") -> {
                 val amount = toSpeakableAmount(pendingOrderTotal)
                 currentState = AssistantState.WAITING_QR_PAYMENT
                 setUiState(ButlerUiState.ShowQRCode(pendingOrderTotal, pendingOrderSummary))
-                speak("I've shown a QR code on screen. Scan it with any UPI app to pay $amount. Take your time.") {
+                speak("I have shown a QR code on screen. Scan it with any UPI app to pay $amount.") {
                     Handler(Looper.getMainLooper()).postDelayed({ askIfPaid("qr") }, 5000)
                 }
             }
-            else -> speak("I didn't understand. Say card, UPI, or QR to choose.") { startListening() }
+            else -> speak("Say card, UPI, or QR to choose payment method.") { startListening() }
         }
     }
 
@@ -770,19 +771,19 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handlePaidOrNotPaid(cleaned: String, mode: String) {
-        val paid    = listOf("yes","paid","done","payment done","i paid","completed","successful","transferred","confirm","हाँ","हां","हो गया","पेमेंट हो गया","అవును","చేశాను","ஆம்","ha","kar diya","ho gaya")
-        val notPaid = listOf("no","not yet","haven't","didn't","wait","not done","failed","नहीं","अभी नहीं","నహీ","ఇంకా","nahi","abhi nahi","ruko")
+        val paid    = listOf("yes","paid","done","payment done","i paid","completed","transferred","confirm","हाँ","हां","हो गया","పేమెంట్ చేశాను","అవును","ஆம்","ha","kar diya","ho gaya")
+        val notPaid = listOf("no","not yet","haven't","wait","not done","failed","नहीं","अभी नहीं","లేదు","ఇంకా","nahi","abhi nahi")
         when {
             paid.any    { cleaned.contains(it) } -> speak("Great! Payment confirmed. Placing your order now.") { placeOrder() }
             notPaid.any { cleaned.contains(it) } -> {
                 val amount = toSpeakableAmount(pendingOrderTotal)
                 speak(when (mode) {
                     "card" -> "No problem! Please complete the card payment of $amount."
-                    "upi"  -> "No problem! Please pay $amount to butler at upi in your UPI app."
+                    "upi"  -> "No problem! Please pay $amount to butler at upi."
                     else   -> "No problem! Please scan the QR code and pay $amount."
                 }) { Handler(Looper.getMainLooper()).postDelayed({ askIfPaid(mode) }, 8000) }
             }
-            else -> speak("Say yes if you have paid, or no if you haven't.") { startListening() }
+            else -> speak("Say yes if you have paid, or no if you have not.") { startListening() }
         }
     }
 
@@ -793,7 +794,7 @@ class MainActivity : ComponentActivity() {
     // ══════════════════════════════════════════════════════════════════════════
 
     private fun isCartEditIntent(s: String): Boolean =
-        listOf("remove","delete","हटाओ","హటావో","ತೆಗೆ","change","update","बदलो","మార్చు","add more","increase","more").any { s.contains(it) }
+        listOf("remove","delete","हटाओ","హటావో","change","update","बदलो","మార్చు").any { s.contains(it) }
 
     private fun handleCartEdit(cleaned: String, originalText: String) {
         if (cart.isEmpty()) { speak("Cart is empty. What would you like?") { currentState = AssistantState.LISTENING; startListening() }; return }
@@ -803,9 +804,9 @@ class MainActivity : ComponentActivity() {
             val item = cart.firstOrNull { it.product.name.lowercase().split(" ").any { w -> cleaned.contains(w) && w.length > 3 } }
             if (item != null) {
                 cart.remove(item)
-                if (cart.isEmpty()) speak("Removed ${item.product.name}. Cart empty.") { currentState = AssistantState.LISTENING; startListening() }
+                if (cart.isEmpty()) speak("Removed ${item.product.name}. Cart empty. What would you like?") { currentState = AssistantState.LISTENING; startListening() }
                 else { currentState = AssistantState.CONFIRMING; showCartAndSpeak("Removed ${item.product.name}. Shall I proceed to payment?") { startListening() } }
-            } else speak("Couldn't find that. Which item to remove?") { startListening() }
+            } else speak("Could not find that. Which item to remove?") { startListening() }
             return
         }
         if (isChange) {
@@ -822,7 +823,7 @@ class MainActivity : ComponentActivity() {
     }
 
     // ══════════════════════════════════════════════════════════════════════════
-    // ORDER INTENT
+    // ORDER INTENT (grocery only)
     // ══════════════════════════════════════════════════════════════════════════
 
     private fun handleOrderIntent(text: String, lower: String) {
@@ -883,7 +884,7 @@ class MainActivity : ComponentActivity() {
     }
 
     // ══════════════════════════════════════════════════════════════════════════
-    // ✅ PRODUCT SEARCH — uses startListeningForSelection for 1/2/3
+    // PRODUCT SEARCH
     // ══════════════════════════════════════════════════════════════════════════
 
     private fun searchAndAskQuantity(itemName: String, qty: Int = 0, unit: String? = null) {
@@ -894,32 +895,21 @@ class MainActivity : ComponentActivity() {
                 val readout = "I found ${recs.size} options for $itemName. " +
                         recs.mapIndexed { i, r -> "${i + 1}: ${r.productName} at ${toSpeakableAmount(r.priceRs)}" }.joinToString(". ") +
                         ". Say 1, 2, or 3 to pick."
-
-                // ✅ Use extended selection listener — gives more time, handles all tones
                 speakKeepingRecsVisible(readout) {
                     startListeningForSelection(
-                        onNumber = { num ->
-                            handleRecSelectionByIndex(num - 1, recs, qty, itemName)
-                        },
-                        onOther = { spoken ->
-                            // Try name match
+                        onNumber = { num -> handleRecSelectionByIndex(num - 1, recs, qty, itemName) },
+                        onOther  = { spoken ->
                             val pick = recs.firstOrNull { r ->
                                 val rw = r.productName.lowercase().split(" ")
                                 val sw = spoken.lowercase().split(" ").filter { it.length > 2 }
                                 sw.any { s -> rw.any { w -> w.contains(s) || s.contains(w) } }
                             }
-                            if (pick != null) {
-                                handleRecSelectionByIndex(recs.indexOf(pick), recs, qty, itemName)
-                            } else {
-                                speakKeepingRecsVisible("Please say 1, 2, or 3 to select a product.") {
-                                    startListeningForSelection(
-                                        onNumber = { n -> handleRecSelectionByIndex(n - 1, recs, qty, itemName) },
-                                        onOther  = { _ -> speakKeepingRecsVisible("Please say 1, 2, or 3.") { startListeningForSelection(
-                                            onNumber = { n -> handleRecSelectionByIndex(n - 1, recs, qty, itemName) },
-                                            onOther  = { _ -> speak("Let's try again. What would you like?") { currentState = AssistantState.LISTENING; startListening() } }
-                                        ) } }
-                                    )
-                                }
+                            if (pick != null) handleRecSelectionByIndex(recs.indexOf(pick), recs, qty, itemName)
+                            else speakKeepingRecsVisible("Please say 1, 2, or 3.") {
+                                startListeningForSelection(
+                                    onNumber = { n -> handleRecSelectionByIndex(n - 1, recs, qty, itemName) },
+                                    onOther  = { _ -> speak("Let us try again. What would you like?") { currentState = AssistantState.LISTENING; startListening() } }
+                                )
                             }
                         },
                         retryPrompt = "Please say 1, 2, or 3 to choose a product."
@@ -934,43 +924,29 @@ class MainActivity : ComponentActivity() {
                             cart.add(CartItem(product, qty)); currentState = AssistantState.ASKING_MORE
                             showCartAndSpeak("Added $qty ${product.name}. More items or checkout?") { startListening() }
                         } else { currentState = AssistantState.ASKING_QUANTITY; speak("How many ${product.name} would you like?") { startListening() } }
-                    } else speak("Couldn't find $itemName. What else would you like?") { startListening() }
+                    } else speak("Could not find $itemName. What else would you like?") { startListening() }
                 }
             }
         }
     }
 
-    // ✅ FIX: uses index directly (0-based) — no more type mismatch
-    private fun handleRecSelectionByIndex(
-        index: Int,
-        recs: List<com.demo.butler_voice_app.api.ProductRecommendation>,
-        qty: Int,
-        itemName: String
-    ) {
+    private fun handleRecSelectionByIndex(index: Int, recs: List<com.demo.butler_voice_app.api.ProductRecommendation>, qty: Int, itemName: String) {
         val pick = recs.getOrNull(index)
         if (pick != null) {
             val finalQty = if (qty > 0) qty else 1
-            // ✅ BUILD FIX: correct named parameters for ApiClient.Product
-            val product = ApiClient.Product(
-                id    = pick.productId,
-                name  = pick.productName,
-                price = pick.priceRs,
-                unit  = pick.unit
-            )
-            cart.add(CartItem(product, finalQty))
+            cart.add(CartItem(ApiClient.Product(id = pick.productId, name = pick.productName, price = pick.priceRs, unit = pick.unit), finalQty))
             val suggestion = suggestRelatedItem(pick.productName)
             currentState   = AssistantState.ASKING_MORE
-            showCartAndSpeak(
-                if (suggestion != null && cart.size == 1) "Added ${pick.productName} from ${pick.storeName}. Would you also like $suggestion? Or say done to checkout."
-                else "Added ${pick.productName} from ${pick.storeName}. More items or say done to checkout?"
-            ) { startListening() }
+            showCartAndSpeak(if (suggestion != null && cart.size == 1)
+                "Added ${pick.productName} from ${pick.storeName}. Would you also like $suggestion? Or say done to checkout."
+            else "Added ${pick.productName} from ${pick.storeName}. More items or say done to checkout?") { startListening() }
         } else {
-            speakKeepingRecsVisible("Sorry, that option isn't available. Please say 1, 2, or 3.") {
+            speakKeepingRecsVisible("Sorry, that option is not available. Please say 1, 2, or 3.") {
                 startListeningForSelection(
                     onNumber = { n -> handleRecSelectionByIndex(n - 1, recs, qty, itemName) },
                     onOther  = { _ -> speak("Please say 1, 2, or 3.") { startListeningForSelection(
                         onNumber = { n -> handleRecSelectionByIndex(n - 1, recs, qty, itemName) },
-                        onOther  = { _ -> speak("Let's try again. What would you like?") { currentState = AssistantState.LISTENING; startListening() } }
+                        onOther  = { _ -> speak("Let us try again. What would you like?") { currentState = AssistantState.LISTENING; startListening() } }
                     ) } }
                 )
             }
@@ -1037,7 +1013,7 @@ class MainActivity : ComponentActivity() {
         if (cart.isEmpty()) { speak("Cart is empty. What would you like?") { currentState = AssistantState.LISTENING; startListening() }; return }
         currentState = AssistantState.CONFIRMING
         val total = cart.sumOf { it.product.price * it.quantity }
-        showCartAndSpeak("You have ${cart.joinToString(", ") { "${it.quantity} ${it.product.name}" }}. Total is ${toSpeakableAmount(total)}. Say yes to proceed to payment, or tell me what to change.") { startListening() }
+        showCartAndSpeak("You have ${cart.joinToString(", ") { "${it.quantity} ${it.product.name}" }}. Total is ${toSpeakableAmount(total)}. Say yes to proceed to payment.") { startListening() }
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -1055,7 +1031,7 @@ class MainActivity : ComponentActivity() {
         runOnUiThread {
             currentState = AssistantState.ASKING_MORE
             showCartAndSpeak(if (notFound.isEmpty()) "Added ${found.joinToString(", ")}. More or checkout?"
-            else "Added ${found.joinToString(", ")}. Couldn't find ${notFound.joinToString(", ")}. Anything else?") { startListening() }
+            else "Added ${found.joinToString(", ")}. Could not find ${notFound.joinToString(", ")}. Anything else?") { startListening() }
         }
     }
 
@@ -1123,7 +1099,7 @@ class MainActivity : ComponentActivity() {
             val orders = apiClient.getOrderHistory(userId)
             if (orders.isEmpty()) { runOnUiThread { speak("No previous orders.") { startListening() } }; return@launch }
             val items  = apiClient.getOrderItems(orders.first().id)
-            if (items.isEmpty()) { runOnUiThread { speak("Couldn't load last order.") { startListening() } }; return@launch }
+            if (items.isEmpty()) { runOnUiThread { speak("Could not load last order.") { startListening() } }; return@launch }
             for (item in items) { apiClient.searchProduct(item.product_name)?.let { cart.add(CartItem(it, item.quantity)) } }
             runOnUiThread { currentState = AssistantState.CONFIRMING; showCartAndSpeak("Repeating your last order. Say yes to pay.") { startListening() } }
         }
@@ -1170,17 +1146,17 @@ class MainActivity : ComponentActivity() {
             try {
                 val body = org.json.JSONObject().apply {
                     put("model", "gpt-4o-mini")
-                    put("messages", org.json.JSONArray().apply { put(org.json.JSONObject().apply { put("role", "user"); put("content", "Translate to English. Return ONLY the translated text: $text") }) })
+                    put("messages", org.json.JSONArray().apply { put(org.json.JSONObject().apply { put("role","user"); put("content","Translate to English. Return ONLY the translated text: $text") }) })
                     put("max_tokens", 50); put("temperature", 0.1)
                 }.toString().toRequestBody("application/json".toMediaType())
                 val response = okhttp3.OkHttpClient().newCall(
                     okhttp3.Request.Builder().url("https://api.openai.com/v1/chat/completions")
-                        .addHeader("Authorization", "Bearer ${BuildConfig.OPENAI_API_KEY}")
-                        .addHeader("Content-Type", "application/json").post(body).build()
+                        .addHeader("Authorization","Bearer ${BuildConfig.OPENAI_API_KEY}")
+                        .addHeader("Content-Type","application/json").post(body).build()
                 ).execute()
                 org.json.JSONObject(response.body?.string() ?: return@withContext text)
                     .getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content").trim()
-            } catch (e: Exception) { Log.e("Butler", "translateToEnglish failed: ${e.message}"); text }
+            } catch (e: Exception) { Log.e("Butler","translateToEnglish failed: ${e.message}"); text }
         }
     }
 }

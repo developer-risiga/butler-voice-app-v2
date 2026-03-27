@@ -1,8 +1,6 @@
 package com.demo.butler_voice_app.services
 
-import android.content.Context
 import android.util.Log
-import com.demo.butler_voice_app.api.SupabaseClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -11,124 +9,207 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
-import java.util.UUID
+import com.demo.butler_voice_app.BuildConfig
+import java.util.concurrent.TimeUnit
 
 // ══════════════════════════════════════════════════════════════════════════════
-// SERVICE MANAGER — Voice detection + search + RAG prescription
+// SERVICE MANAGER — Real Supabase + GPT-4V prescription RAG
 // ══════════════════════════════════════════════════════════════════════════════
 
 object ServiceManager {
 
-    private val http = OkHttpClient()
+    private val http = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .build()
     private const val TAG = "ServiceManager"
 
-    // ── 1. Detect service intent from voice transcript ────────────────────────
+    // ── 1. Detect service intent from voice ───────────────────────────────────
     fun detectServiceIntent(transcript: String): ServiceIntent {
         val lower = transcript.lowercase().trim()
 
-        // Emergency detection first
-        val emergencyWords = listOf("emergency", "accident", "ambulance", "hospital", "unconscious",
-            "bleeding", "heart attack", "stroke", "fire", "help", "bachao", "madad")
+        val emergencyWords = listOf("emergency","accident","ambulance","hospital","unconscious",
+            "bleeding","heart attack","stroke","fire","help","bachao","madad","108")
         if (emergencyWords.any { lower.contains(it) }) {
-            return ServiceIntent(
-                sector      = ServiceSector.AMBULANCE,
-                query       = transcript,
-                isEmergency = true
-            )
+            return ServiceIntent(sector = ServiceSector.AMBULANCE, query = transcript, isEmergency = true)
         }
 
-        // Prescription / medicine detection
-        val rxWords = listOf("prescription", "doctor ne likha", "parchee", "parchi", "dawai ki parchee",
-            "upload prescription", "prescription upload", "scan prescription", "medicine list")
+        val rxWords = listOf("prescription","parchi","parchee","dawai ki parchee",
+            "doctor ne likha","upload prescription","medicine list","scan prescription")
         if (rxWords.any { lower.contains(it) }) {
-            return ServiceIntent(
-                sector         = ServiceSector.MEDICINE,
-                query          = transcript,
-                isPrescription = true
-            )
+            return ServiceIntent(sector = ServiceSector.MEDICINE, query = transcript, isPrescription = true)
         }
 
-        // Match sector by keywords
         var bestSector: ServiceSector? = null
-        var bestScore = 0
+        var bestScore  = 0
         for (sector in ServiceSector.values()) {
             val score = sector.voiceKeywords.count { keyword -> lower.contains(keyword) }
             if (score > bestScore) { bestScore = score; bestSector = sector }
         }
 
-        // Extract budget if mentioned
-        val budgetMatch = Regex("(\\d{2,5})\\s*(rupees|rs|rupaye|rupe|₹)?").find(lower)
+        val budgetMatch = Regex("(\\d{2,5})\\s*(rupees|rs|rupaye|₹)?").find(lower)
         val budget = budgetMatch?.groupValues?.get(1)?.toIntOrNull() ?: 0
 
-        return ServiceIntent(
-            sector = bestSector,
-            query  = transcript,
-            budget = budget
-        )
+        return ServiceIntent(sector = bestSector, query = transcript, budget = budget)
     }
 
-    // ── 2. Search service providers near user ─────────────────────────────────
+    // ── 2. Search providers — REAL Supabase RPC ───────────────────────────────
     suspend fun searchProviders(
         intent: ServiceIntent,
         userLat: Double?,
         userLng: Double?,
         filter: ServiceFilter = ServiceFilter()
     ): List<ServiceProvider> = withContext(Dispatchers.IO) {
+        val lat = userLat ?: 22.7196
+        val lng = userLng ?: 75.8577
+
         try {
-            // In production this hits Supabase RPC for nearby providers
-            // For now return smart mock data based on sector + location
-            generateMockProviders(intent, userLat ?: 22.7196, userLng ?: 75.8577, filter)
+            val sortBy = when (filter.sortBy) {
+                ServiceSort.RATING    -> "rating"
+                ServiceSort.DISTANCE  -> "distance"
+                ServiceSort.PRICE_LOW -> "price_low"
+                ServiceSort.FASTEST   -> "fastest"
+                else                  -> "rating"
+            }
+
+            val bodyJson = JSONObject().apply {
+                put("user_lat",    lat)
+                put("user_lng",    lng)
+                if (intent.sector != null) put("sector_name", intent.sector.name)
+                put("radius_km",   filter.maxDistanceKm)
+                put("sort_by",     sortBy)
+                put("max_results", 5)
+            }.toString().toRequestBody("application/json".toMediaType())
+
+            val request = Request.Builder()
+                .url("${BuildConfig.SUPABASE_URL}/rest/v1/rpc/get_nearby_providers")
+                .addHeader("apikey",        BuildConfig.SUPABASE_ANON_KEY)
+                .addHeader("Authorization", "Bearer ${BuildConfig.SUPABASE_ANON_KEY}")
+                .addHeader("Content-Type",  "application/json")
+                .post(bodyJson).build()
+
+            val response = http.newCall(request).execute()
+            val resBody  = response.body?.string() ?: ""
+            Log.d(TAG, "Supabase providers (${response.code}): ${resBody.take(300)}")
+
+            if (!response.isSuccessful || resBody.isBlank() || resBody == "[]") {
+                Log.w(TAG, "Supabase returned no data — using fallback")
+                return@withContext fallbackProviders(intent, lat, lng, filter)
+            }
+
+            val arr = JSONArray(resBody)
+            if (arr.length() == 0) return@withContext fallbackProviders(intent, lat, lng, filter)
+
+            (0 until arr.length()).map { i ->
+                val obj = arr.getJSONObject(i)
+                ServiceProvider(
+                    id          = obj.optString("id"),
+                    name        = obj.optString("name"),
+                    sector      = intent.sector ?: ServiceSector.GROCERY,
+                    rating      = obj.optDouble("rating", 4.0),
+                    reviewCount = obj.optInt("review_count", 0),
+                    priceMin    = obj.optInt("price_min", 0),
+                    priceMax    = obj.optInt("price_max", 0),
+                    priceUnit   = obj.optString("price_unit", "per visit"),
+                    distanceKm  = obj.optDouble("distance_km", 1.0),
+                    isAvailable = obj.optBoolean("is_available", true),
+                    eta         = "${obj.optInt("eta_minutes", 30)} min",
+                    tags        = parseStringArray(obj.optJSONArray("tags")),
+                    location    = obj.optString("location_name", "Nearby"),
+                    phone       = obj.optString("phone", ""),
+                    experience  = obj.optString("experience", ""),
+                    languages   = parseStringArray(obj.optJSONArray("languages")),
+                    description = obj.optString("description", "")
+                )
+            }
         } catch (e: Exception) {
-            Log.e(TAG, "searchProviders failed: ${e.message}")
-            emptyList()
+            Log.e(TAG, "searchProviders failed: ${e.message} — using fallback")
+            fallbackProviders(intent, lat, lng, filter)
         }
     }
 
-    // ── 3. RAG: Extract medicine names from prescription image using GPT-4V ────
+    private fun parseStringArray(arr: JSONArray?): List<String> {
+        if (arr == null) return emptyList()
+        return (0 until arr.length()).map { arr.optString(it) }
+    }
+
+    // ── 3. Create booking in Supabase ─────────────────────────────────────────
+    suspend fun createBooking(
+        userId: String,
+        provider: ServiceProvider,
+        sector: ServiceSector,
+        notes: String = ""
+    ): String = withContext(Dispatchers.IO) {
+        try {
+            val bodyJson = JSONObject().apply {
+                put("p_user_id",     userId)
+                put("p_provider_id", provider.id)
+                put("p_sector",      sector.name)
+                put("p_notes",       notes)
+            }.toString().toRequestBody("application/json".toMediaType())
+
+            val request = Request.Builder()
+                .url("${BuildConfig.SUPABASE_URL}/rest/v1/rpc/create_service_booking")
+                .addHeader("apikey",        BuildConfig.SUPABASE_ANON_KEY)
+                .addHeader("Authorization", "Bearer ${BuildConfig.SUPABASE_ANON_KEY}")
+                .addHeader("Content-Type",  "application/json")
+                .post(bodyJson).build()
+
+            val response = http.newCall(request).execute()
+            val resBody  = response.body?.string() ?: ""
+            Log.d(TAG, "Booking response (${response.code}): $resBody")
+
+            if (response.isSuccessful && resBody.isNotBlank()) {
+                JSONObject(resBody).optString("booking_id", generateLocalBookingId())
+            } else {
+                generateLocalBookingId()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "createBooking failed: ${e.message}")
+            generateLocalBookingId()
+        }
+    }
+
+    private fun generateLocalBookingId() =
+        "BUT-" + java.util.UUID.randomUUID().toString().takeLast(6).uppercase()
+
+    // ── 4. GPT-4 Vision prescription RAG ─────────────────────────────────────
     suspend fun extractMedicinesFromPrescription(
         base64Image: String,
         openAiKey: String
     ): List<String> = withContext(Dispatchers.IO) {
         try {
-            val body = JSONObject().apply {
+            val bodyJson = JSONObject().apply {
                 put("model", "gpt-4o")
                 put("max_tokens", 500)
-                put("messages", JSONArray().apply {
-                    put(JSONObject().apply {
-                        put("role", "user")
-                        put("content", JSONArray().apply {
-                            put(JSONObject().apply {
-                                put("type", "text")
-                                put("text", """You are a medical prescription reader. Extract ALL medicine names from this prescription image.
-Return ONLY a JSON array of medicine names, nothing else. Example: ["Paracetamol 500mg", "Azithromycin 250mg"]
-If you cannot read the prescription clearly, return an empty array [].""")
-                            })
-                            put(JSONObject().apply {
-                                put("type", "image_url")
-                                put("image_url", JSONObject().apply {
-                                    put("url", "data:image/jpeg;base64,$base64Image")
-                                })
-                            })
+                put("messages", JSONArray().put(JSONObject().apply {
+                    put("role", "user")
+                    put("content", JSONArray().apply {
+                        put(JSONObject().apply {
+                            put("type", "text")
+                            put("text", "You are a medical prescription reader for Indian pharmacies. Extract ALL medicine names with dosage from this image. Return ONLY a JSON array like: [\"Paracetamol 500mg\", \"Azithromycin 250mg\"]. If unreadable, return [].")
+                        })
+                        put(JSONObject().apply {
+                            put("type", "image_url")
+                            put("image_url", JSONObject().put("url", "data:image/jpeg;base64,$base64Image"))
                         })
                     })
-                })
+                }))
             }.toString().toRequestBody("application/json".toMediaType())
 
-            val request = Request.Builder()
-                .url("https://api.openai.com/v1/chat/completions")
-                .addHeader("Authorization", "Bearer $openAiKey")
-                .addHeader("Content-Type", "application/json")
-                .post(body).build()
+            val response = http.newCall(
+                Request.Builder().url("https://api.openai.com/v1/chat/completions")
+                    .addHeader("Authorization", "Bearer $openAiKey")
+                    .addHeader("Content-Type", "application/json")
+                    .post(bodyJson).build()
+            ).execute()
 
-            val response = http.newCall(request).execute()
-            val resBody  = response.body?.string() ?: return@withContext emptyList()
-            val content  = JSONObject(resBody)
+            val content = JSONObject(response.body?.string() ?: return@withContext emptyList())
                 .getJSONArray("choices").getJSONObject(0)
                 .getJSONObject("message").getString("content").trim()
+                .replace("```json", "").replace("```", "").trim()
 
-            // Parse the JSON array of medicine names
-            val cleaned = content.replace("```json", "").replace("```", "").trim()
-            val arr = JSONArray(cleaned)
+            val arr = JSONArray(content)
             (0 until arr.length()).map { arr.getString(it) }
         } catch (e: Exception) {
             Log.e(TAG, "extractMedicines failed: ${e.message}")
@@ -136,252 +217,82 @@ If you cannot read the prescription clearly, return an empty array [].""")
         }
     }
 
-    // ── 4. Find nearby medical shops that can fulfil the prescription ──────────
+    // ── 5. Find nearby pharmacies ─────────────────────────────────────────────
     suspend fun findMedicalShopsForPrescription(
         medicines: List<String>,
         userLat: Double,
         userLng: Double
-    ): List<ServiceProvider> = withContext(Dispatchers.IO) {
-        // In production: query Supabase for medical shops with these medicines in stock
-        // Returns shops sorted by distance + availability
-        medicines.indices.map { i ->
-            ServiceProvider(
-                id           = "shop_${i + 1}",
-                name         = listOf("Apollo Pharmacy", "MedPlus", "Jan Aushadhi Store", "Wellness Forever", "Guardian Pharmacy")[i % 5],
-                sector       = ServiceSector.MEDICINE,
-                rating       = 4.2 + (i * 0.1),
-                reviewCount  = 340 + i * 50,
-                priceMin     = 0,
-                priceMax     = 0,
-                priceUnit    = "as per prescription",
-                distanceKm   = 0.5 + i * 0.3,
-                isAvailable  = true,
-                eta          = "${15 + i * 5} min",
-                tags         = listOf("verified", "24/7", "home delivery"),
-                location     = "Nearby",
-                experience   = "Trusted pharmacy",
-                description  = "Has ${medicines.take(3).joinToString(", ")} in stock"
-            )
-        }.take(3)
-    }
+    ): List<ServiceProvider> = searchProviders(
+        ServiceIntent(ServiceSector.MEDICINE, medicines.joinToString(", ")),
+        userLat, userLng,
+        ServiceFilter(maxDistanceKm = 5.0, sortBy = ServiceSort.DISTANCE)
+    )
 
-    // ── 5. Build voice response for service search results ────────────────────
+    // ── 6. Voice response builder ─────────────────────────────────────────────
     fun buildServiceVoiceResponse(
         sector: ServiceSector,
         providers: List<ServiceProvider>,
         userName: String = ""
     ): String {
-        if (providers.isEmpty()) return "I couldn't find any ${sector.displayName} providers near you right now. Would you like me to try a wider area?"
-
-        val top = providers.first()
-        val count = providers.size
+        if (providers.isEmpty())
+            return "I couldn't find any ${sector.displayName} providers near you. Say wider area to search more."
+        val top     = providers.first()
+        val count   = providers.size
         val greeting = if (userName.isNotBlank()) "$userName, " else ""
-
+        val price   = if (top.priceMin > 0) ", charges ${top.priceMin} to ${top.priceMax} ${top.priceUnit}" else ""
         return when (sector) {
             ServiceSector.AMBULANCE ->
-                "EMERGENCY! Calling ambulance now. Nearest is ${top.name}, ${top.distanceKm}km away, arriving in ${top.eta}. Stay calm."
-
+                "EMERGENCY! Nearest is ${top.name}, ${top.distanceKm}km away, arriving in ${top.eta}. Calling now!"
             ServiceSector.MEDICINE ->
-                "${greeting}I found $count pharmacy options. The closest is ${top.name}, ${top.distanceKm}km away, rated ${top.rating} stars. They can deliver in ${top.eta}. Say 1 to choose them, or 2 and 3 for other options."
-
-            ServiceSector.DOCTOR ->
-                "${greeting}I found $count doctors available. ${top.name} is ${top.distanceKm}km away with ${top.reviewCount} reviews and rated ${top.rating} stars. Consultation starts at ${top.priceMin} rupees. Say 1 to book."
-
-            ServiceSector.PLUMBER, ServiceSector.ELECTRICIAN, ServiceSector.CARPENTER ->
-                "${greeting}Found $count ${sector.displayName} professionals. ${top.name} is ${top.distanceKm}km away, rated ${top.rating} stars, charges ${top.priceMin} to ${top.priceMax} rupees ${top.priceUnit}. Say 1 to book."
-
-            ServiceSector.FOOD ->
-                "${greeting}Found $count restaurants delivering near you. Say the name or number to order."
-
+                "${greeting}Found $count pharmacies. ${top.name} is ${top.distanceKm}km away, delivering in ${top.eta}. Say 1, 2, or 3."
             else ->
-                "${greeting}I found $count ${sector.displayName} providers. The top rated is ${top.name}, ${top.distanceKm}km away, rated ${top.rating} stars. Say 1 to book, or ask me to filter by price or rating."
+                "${greeting}Found $count ${sector.displayName} professionals. ${top.name} is ${top.distanceKm}km away, rated ${top.rating} stars${price}. Say 1 to book."
         }
     }
 
-    // ── 6. Build prescription voice prompt ────────────────────────────────────
-    fun buildPrescriptionPrompt(): String =
-        "To order medicines from your prescription, please show your prescription to the camera or upload a photo. I'll read it automatically and find the best pharmacy near you."
-
-    fun buildPrescriptionFoundPrompt(medicines: List<String>, shopCount: Int): String {
-        val medList = when {
-            medicines.isEmpty() -> "the medicines"
-            medicines.size == 1 -> medicines[0]
-            medicines.size <= 3 -> medicines.dropLast(1).joinToString(", ") + " and " + medicines.last()
-            else -> "${medicines.take(2).joinToString(", ")} and ${medicines.size - 2} more medicines"
-        }
-        return "I've read your prescription and found $medList. I found $shopCount pharmacies nearby that can deliver them. Say 1, 2, or 3 to choose your pharmacy."
-    }
-
-    // ── 7. Smart mock providers generator (replace with Supabase in production) ─
-    private fun generateMockProviders(
+    // ── 7. Fallback mock (when Supabase unreachable) ──────────────────────────
+    private fun fallbackProviders(
         intent: ServiceIntent,
         lat: Double,
         lng: Double,
         filter: ServiceFilter
     ): List<ServiceProvider> {
         val sector = intent.sector ?: return emptyList()
-
-        // Provider templates per sector
-        val templates: List<Triple<String, Double, String>> = when (sector) {
-            ServiceSector.GROCERY -> listOf(
-                Triple("Big Basket Express", 4.5, "0.3"),
-                Triple("Blinkit", 4.3, "0.5"),
-                Triple("Zepto", 4.4, "0.8"),
-                Triple("D-Mart Ready", 4.2, "1.2"),
-                Triple("Local Kirana Store", 4.1, "0.2")
-            )
-            ServiceSector.MEDICINE -> listOf(
-                Triple("Apollo Pharmacy", 4.6, "0.4"),
-                Triple("MedPlus", 4.4, "0.6"),
-                Triple("1mg Delivery", 4.5, "0.1"),
-                Triple("PharmEasy", 4.3, "0.1"),
-                Triple("Jan Aushadhi", 4.2, "1.1")
-            )
-            ServiceSector.DOCTOR -> listOf(
-                Triple("Dr. Rajesh Sharma (MBBS, MD)", 4.8, "1.2"),
-                Triple("Dr. Priya Patel (Specialist)", 4.7, "2.1"),
-                Triple("Practo Teleconsult", 4.5, "0.1"),
-                Triple("Apollo Clinic", 4.6, "1.8"),
-                Triple("Aarogya Health Center", 4.3, "0.9")
-            )
-            ServiceSector.PLUMBER -> listOf(
-                Triple("Ramesh Plumbing Works", 4.4, "1.1"),
-                Triple("Quick Fix Plumbers", 4.3, "0.8"),
-                Triple("Urban Company Pro", 4.6, "1.5"),
-                Triple("HomeTriangle Plumber", 4.2, "2.0"),
-                Triple("Local Plumber — Suresh", 4.1, "0.5")
-            )
-            ServiceSector.ELECTRICIAN -> listOf(
-                Triple("Vijay Electricals", 4.5, "0.7"),
-                Triple("Urban Company Electrician", 4.6, "1.4"),
-                Triple("PowerFix Services", 4.3, "1.9"),
-                Triple("Local — Raju Electrician", 4.2, "0.4"),
-                Triple("HomeHelp Electrics", 4.4, "2.2")
-            )
-            ServiceSector.CLEANING -> listOf(
-                Triple("UrbanClap Cleaning", 4.5, "1.2"),
-                Triple("ZAP Cleaning Services", 4.3, "0.9"),
-                Triple("House Joy", 4.4, "1.7"),
-                Triple("Local Bai — Sunita", 4.1, "0.3"),
-                Triple("Helpr Home Services", 4.2, "2.0")
-            )
-            ServiceSector.TAXI -> listOf(
-                Triple("Ola Mini", 4.3, "0.2"),
-                Triple("Uber Go", 4.4, "0.3"),
-                Triple("Rapido Auto", 4.2, "0.1"),
-                Triple("InDrive", 4.1, "0.4"),
-                Triple("Meru Cabs", 4.0, "1.0")
-            )
-            ServiceSector.FOOD -> listOf(
-                Triple("Swiggy Express", 4.4, "0.5"),
-                Triple("Zomato Gold", 4.5, "0.8"),
-                Triple("Local Tiffin Service", 4.3, "0.3"),
-                Triple("Biryani By Kilo", 4.6, "1.2"),
-                Triple("McDonald's Delivery", 4.2, "1.5")
-            )
-            ServiceSector.AMBULANCE -> listOf(
-                Triple("108 Emergency Services", 5.0, "0.0"),
-                Triple("Ziqitza Ambulance", 4.8, "1.2"),
-                Triple("CATS Ambulance", 4.7, "2.0"),
-                Triple("Apollo Ambulance", 4.9, "1.8"),
-                Triple("StanPlus", 4.6, "0.8")
-            )
-            ServiceSector.SALON -> listOf(
-                Triple("Jawed Habib", 4.5, "1.1"),
-                Triple("Green Trends", 4.4, "0.9"),
-                Triple("VLCC", 4.3, "1.5"),
-                Triple("YLG Salon", 4.6, "2.0"),
-                Triple("Local Beauty Parlour", 4.2, "0.4")
-            )
-            ServiceSector.REAL_ESTATE -> listOf(
-                Triple("NoBroker", 4.4, "0.1"),
-                Triple("99acres Agent", 4.3, "1.2"),
-                Triple("MagicBricks", 4.2, "0.1"),
-                Triple("Local Property Agent", 4.5, "0.8"),
-                Triple("Housing.com Pro", 4.3, "0.1")
-            )
-            ServiceSector.CA_SERVICES -> listOf(
-                Triple("CA Amit Jain", 4.7, "2.1"),
-                Triple("TaxBuddy Online", 4.5, "0.1"),
-                Triple("ClearTax Expert", 4.6, "0.1"),
-                Triple("Local CA Firm", 4.4, "1.5"),
-                Triple("Vakilsearch", 4.3, "0.1")
-            )
-            ServiceSector.AGRICULTURE -> listOf(
-                Triple("Kisan Seva Center", 4.4, "2.5"),
-                Triple("AgroStar Delivery", 4.5, "0.1"),
-                Triple("BigHaat Farm Store", 4.3, "0.1"),
-                Triple("Local Krishi Kendra", 4.2, "3.1"),
-                Triple("Tractor Junction", 4.1, "5.0")
-            )
-            else -> listOf(
-                Triple("Top Rated Provider", 4.5, "1.0"),
-                Triple("Verified Professional", 4.3, "1.5"),
-                Triple("Budget Option", 4.1, "2.0"),
-                Triple("Premium Service", 4.7, "2.5"),
-                Triple("Nearby Provider", 4.2, "0.8")
-            )
-        }
-
+        val templates = mapOf(
+            ServiceSector.PLUMBER     to listOf("Ramesh Plumbing" to 4.5, "Urban Company Pro" to 4.7, "Quick Fix" to 4.3, "Local Plumber" to 4.1, "HomeTriangle" to 4.4),
+            ServiceSector.ELECTRICIAN to listOf("Vijay Electricals" to 4.6, "Urban Electrician" to 4.8, "PowerFix" to 4.3, "Local Electrician" to 4.2, "HomeHelp" to 4.5),
+            ServiceSector.DOCTOR      to listOf("Dr. Sharma MBBS" to 4.8, "Dr. Patel Specialist" to 4.9, "Practo Online" to 4.5, "Apollo Clinic" to 4.7, "City Doctor" to 4.6),
+            ServiceSector.MEDICINE    to listOf("Apollo Pharmacy" to 4.7, "MedPlus" to 4.5, "Jan Aushadhi" to 4.3, "PharmEasy" to 4.6, "Wellness Forever" to 4.4),
+            ServiceSector.AMBULANCE   to listOf("108 Emergency" to 5.0, "Ziqitza" to 4.8, "StanPlus" to 4.7, "Apollo Ambulance" to 4.9),
+            ServiceSector.TAXI        to listOf("Ola Mini" to 4.3, "Uber Go" to 4.4, "Rapido" to 4.2, "InDrive" to 4.1),
+            ServiceSector.FOOD        to listOf("Swiggy Express" to 4.5, "Zomato Gold" to 4.6, "Local Tiffin" to 4.7),
+            ServiceSector.CLEANING    to listOf("Urban Cleaning" to 4.6, "Local Maid" to 4.3, "ZAP Cleaning" to 4.4),
+            ServiceSector.SALON       to listOf("Jawed Habib" to 4.5, "Green Trends" to 4.4, "Home Salon" to 4.6),
+            ServiceSector.AC_REPAIR   to listOf("CoolCare AC" to 4.5, "Urban AC" to 4.7, "FrostFix" to 4.3),
+        )
         val priceRanges = mapOf(
-            ServiceSector.GROCERY    to Triple(0, 0, "free delivery"),
-            ServiceSector.MEDICINE   to Triple(0, 0, "as per MRP"),
-            ServiceSector.DOCTOR     to Triple(200, 800, "per consultation"),
-            ServiceSector.PLUMBER    to Triple(200, 500, "per hour"),
-            ServiceSector.ELECTRICIAN to Triple(200, 600, "per hour"),
-            ServiceSector.CARPENTER  to Triple(300, 800, "per hour"),
-            ServiceSector.CLEANING   to Triple(500, 1500, "per session"),
-            ServiceSector.TAXI       to Triple(50, 500, "per trip"),
-            ServiceSector.FOOD       to Triple(0, 0, "as per menu"),
-            ServiceSector.SALON      to Triple(100, 1000, "per service"),
-            ServiceSector.PAINTER    to Triple(10, 25, "per sq ft"),
-            ServiceSector.AC_REPAIR  to Triple(300, 1500, "per service"),
-            ServiceSector.TUTOR      to Triple(500, 2000, "per month"),
-            ServiceSector.LEGAL      to Triple(1000, 5000, "per consultation"),
-            ServiceSector.CA_SERVICES to Triple(500, 5000, "per filing"),
-            ServiceSector.AGRICULTURE to Triple(100, 5000, "varies"),
+            ServiceSector.PLUMBER to Triple(200, 500, "per hour"), ServiceSector.ELECTRICIAN to Triple(200, 600, "per hour"),
+            ServiceSector.DOCTOR  to Triple(300, 800, "per consultation"), ServiceSector.TAXI to Triple(50, 500, "per trip"),
+            ServiceSector.CLEANING to Triple(500, 1500, "per session"), ServiceSector.SALON to Triple(100, 1000, "per service"),
+            ServiceSector.AC_REPAIR to Triple(300, 1500, "per service"),
         )
-
-        val (min, max, unit) = priceRanges[sector] ?: Triple(100, 1000, "varies")
-        val etaList = listOf("10 min", "15 min", "20 min", "30 min", "45 min")
-        val tagsList = listOf(
-            listOf("verified", "background checked"),
-            listOf("trained", "certified"),
-            listOf("top rated", "200+ jobs"),
-            listOf("verified", "GST registered"),
-            listOf("5 star", "fast response")
-        )
-
-        return templates.mapIndexed { i, (name, rating, distStr) ->
+        val names = templates[sector] ?: listOf("Top Provider" to 4.5, "Verified Pro" to 4.3, "Local Expert" to 4.1)
+        val (pMin, pMax, pUnit) = priceRanges[sector] ?: Triple(0, 0, "varies")
+        return names.mapIndexed { i, (name, rating) ->
             ServiceProvider(
-                id          = "${sector.name.lowercase()}_${i + 1}",
-                name        = name,
-                sector      = sector,
-                rating      = rating,
-                reviewCount = 100 + i * 75,
-                priceMin    = min,
-                priceMax    = max,
-                priceUnit   = unit,
-                distanceKm  = distStr.toDouble(),
-                isAvailable = true,
-                eta         = etaList[i % etaList.size],
-                tags        = tagsList[i % tagsList.size],
-                location    = "Near you",
-                experience  = "${2 + i} years",
-                description = "Trusted ${sector.displayName} in your area"
+                id = "${sector.name}_fb_$i", name = name, sector = sector,
+                rating = rating, reviewCount = 100 + i * 80,
+                priceMin = pMin, priceMax = pMax, priceUnit = pUnit,
+                distanceKm = 0.4 + i * 0.5, isAvailable = true,
+                eta = "${10 + i * 5} min", tags = listOf("verified"),
+                location = "Near you", experience = "${3 + i} years"
             )
-        }.filter {
-            it.distanceKm <= filter.maxDistanceKm &&
-                    it.rating >= filter.minRating &&
-                    (!filter.availableOnly || it.isAvailable)
-        }.sortedWith(
-            when (filter.sortBy) {
-                ServiceSort.RATING    -> compareByDescending { it.rating }
-                ServiceSort.PRICE_LOW -> compareBy { it.priceMin }
-                ServiceSort.DISTANCE  -> compareBy { it.distanceKm }
-                ServiceSort.FASTEST   -> compareBy { it.eta }
-                else                  -> compareByDescending { it.rating }
-            }
-        )
+        }.sortedWith(when (filter.sortBy) {
+            ServiceSort.RATING    -> compareByDescending { it.rating }
+            ServiceSort.DISTANCE  -> compareBy { it.distanceKm }
+            ServiceSort.PRICE_LOW -> compareBy { it.priceMin }
+            ServiceSort.FASTEST   -> compareBy { it.eta }
+            else                  -> compareByDescending { it.rating }
+        })
     }
 }
