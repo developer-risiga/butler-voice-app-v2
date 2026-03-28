@@ -751,9 +751,11 @@ class MainActivity : ComponentActivity() {
             cleaned.contains("qr") || cleaned.contains("scan") || cleaned.contains("क्यूआर") -> {
                 val amount = toSpeakableAmount(pendingOrderTotal)
                 currentState = AssistantState.WAITING_QR_PAYMENT
+                // Set QR screen FIRST before speaking — speak() would overwrite it with Speaking state
                 setUiState(ButlerUiState.ShowQRCode(pendingOrderTotal, pendingOrderSummary))
-                speak("I have shown a QR code on screen. Scan it with any UPI app to pay $amount.") {
-                    Handler(Looper.getMainLooper()).postDelayed({ askIfPaid("qr") }, 5000)
+                speakKeepingQRVisible("I have shown a QR code on screen. Scan it with any UPI app to pay $amount.") {
+                    // 20 seconds gives user time to open UPI app and scan
+                    Handler(Looper.getMainLooper()).postDelayed({ askIfPaid("qr") }, 20000)
                 }
             }
             else -> speak("Say card, UPI, or QR to choose payment method.") { startListening() }
@@ -1145,6 +1147,18 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             val lang      = LanguageManager.getLanguage()
             val finalText = TranslationManager.translate(text, lang)
+            runOnUiThread { ttsManager.speak(text = finalText, language = lang, onDone = { onDone?.invoke() }) }
+        }
+    }
+
+    // Speaks without changing UI state — used for QR screen so ShowQRCode stays visible
+    private fun speakKeepingQRVisible(text: String, onDone: (() -> Unit)? = null) {
+        sarvamSTT.stop()
+        lifecycleScope.launch {
+            val lang      = LanguageManager.getLanguage()
+            val finalText = TranslationManager.translate(text, lang)
+            Log.d("Butler", "QR speak (no UI change): $finalText")
+            // Deliberately does NOT call setUiState — QR screen stays on screen
             runOnUiThread { ttsManager.speak(text = finalText, language = lang, onDone = { onDone?.invoke() }) }
         }
     }
