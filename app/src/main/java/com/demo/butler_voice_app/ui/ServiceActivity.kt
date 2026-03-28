@@ -265,7 +265,7 @@ class ServiceActivity : ComponentActivity() {
         prescriptionStatus = PrescriptionUploadStatus.PROCESSING
         speak("Reading your prescription. Please wait a moment.") {}
 
-        lifecycleScope.launch {
+        lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             try {
                 val inputStream = contentResolver.openInputStream(uri)
                 val bytes       = inputStream?.readBytes() ?: byteArrayOf()
@@ -299,7 +299,7 @@ class ServiceActivity : ComponentActivity() {
     private fun processPrescriptionBytes(bytes: ByteArray) {
         prescriptionStatus = PrescriptionUploadStatus.PROCESSING
         speak("Reading your prescription now…") {}
-        lifecycleScope.launch { processPrescriptionBytesAsync(bytes) }
+        lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) { processPrescriptionBytesAsync(bytes) }
     }
 
     // ── CORE RAG FUNCTION — GPT-4o Vision extracts medicines ─────────────────
@@ -350,14 +350,20 @@ Do NOT include instructions or frequency — only names and doses."""
                 ))
             }.toString()
 
-            val response = OkHttpClient().newCall(
-                okhttp3.Request.Builder()
-                    .url("https://api.openai.com/v1/chat/completions")
-                    .addHeader("Authorization", "Bearer ${BuildConfig.OPENAI_API_KEY}")
-                    .addHeader("Content-Type", "application/json")
-                    .post(requestBody.toRequestBody("application/json".toMediaType()))
+            val response = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                OkHttpClient.Builder()
+                    .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                    .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
                     .build()
-            ).execute()
+                    .newCall(
+                        okhttp3.Request.Builder()
+                            .url("https://api.openai.com/v1/chat/completions")
+                            .addHeader("Authorization", "Bearer ${BuildConfig.OPENAI_API_KEY}")
+                            .addHeader("Content-Type", "application/json")
+                            .post(requestBody.toRequestBody("application/json".toMediaType()))
+                            .build()
+                    ).execute()
+            }
 
             val responseBody = response.body?.string() ?: ""
             Log.d("ServiceActivity", "GPT-4o response: ${responseBody.take(500)}")

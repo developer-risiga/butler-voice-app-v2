@@ -1087,7 +1087,8 @@ class MainActivity : ComponentActivity() {
                     val firstName   = profile.full_name?.split(" ")?.first() ?: "there"
                     val history     = UserSessionManager.purchaseHistory
                     AnalyticsManager.logUserAuth("login", LanguageManager.getLanguage())
-                    val lastProduct = history.firstOrNull()?.product_name?.takeIf { it.isNotBlank() }
+                    val lastProduct = history.firstOrNull()?.product_name
+                        ?.takeIf { it.isNotBlank() && it != "null" }
                     val greeting    = if (lastProduct != null) "Welcome back $firstName! Last time you ordered $lastProduct. What would you like?"
                     else IndianLanguageProcessor.getWelcomeGreeting(LanguageManager.getLanguage(), firstName)
                     speak(greeting) { startListening() }
