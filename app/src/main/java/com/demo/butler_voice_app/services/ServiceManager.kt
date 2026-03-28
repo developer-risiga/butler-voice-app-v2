@@ -13,10 +13,6 @@ import com.demo.butler_voice_app.BuildConfig
 import com.demo.butler_voice_app.api.SupabaseClient
 import java.util.concurrent.TimeUnit
 
-// ══════════════════════════════════════════════════════════════════════════════
-// SERVICE MANAGER — Uses existing SupabaseClient.rpc() + GPT-4V prescription
-// ══════════════════════════════════════════════════════════════════════════════
-
 object ServiceManager {
 
     private val http = OkHttpClient.Builder()
@@ -26,6 +22,7 @@ object ServiceManager {
     private const val TAG = "ServiceManager"
 
     // ── 1. Detect service intent from voice ───────────────────────────────────
+
     fun detectServiceIntent(transcript: String): ServiceIntent {
         val lower = transcript.lowercase().trim()
 
@@ -54,7 +51,10 @@ object ServiceManager {
         return ServiceIntent(sector = bestSector, query = transcript, budget = budget)
     }
 
-    // ── 2. Search providers using SupabaseClient.rpc() ────────────────────────
+    // ── 2. Search providers — uses get_nearby_service_providers RPC ───────────
+    // NOTE: get_nearby_providers is for GROCERIES (ApiClient.kt)
+    //       get_nearby_service_providers is for ALL SERVICES (this file)
+
     suspend fun searchProviders(
         intent: ServiceIntent,
         userLat: Double?,
@@ -73,7 +73,6 @@ object ServiceManager {
                 else                  -> "rating"
             }
 
-            // ✅ Use existing SupabaseClient.rpc() — no duplicate HTTP setup needed
             val params = JSONObject().apply {
                 put("user_lat",    lat)
                 put("user_lng",    lng)
@@ -83,7 +82,9 @@ object ServiceManager {
                 put("max_results", 5)
             }
 
-            val resBody = SupabaseClient.rpc("get_nearby_providers", params)
+            // ── KEY CHANGE: get_nearby_service_providers (service_providers table)
+            // ── NOT get_nearby_providers (that is groceries only)
+            val resBody = SupabaseClient.rpc("get_nearby_service_providers", params)
             Log.d(TAG, "Supabase providers: ${resBody.take(300)}")
 
             if (resBody.isBlank() || resBody == "[]" || resBody == "null") {
@@ -127,7 +128,8 @@ object ServiceManager {
         return (0 until arr.length()).map { arr.optString(it) }
     }
 
-    // ── 3. Create booking using SupabaseClient.rpc() ──────────────────────────
+    // ── 3. Create booking ─────────────────────────────────────────────────────
+
     suspend fun createBooking(
         userId: String,
         provider: ServiceProvider,
@@ -159,7 +161,8 @@ object ServiceManager {
     private fun generateLocalBookingId() =
         "BUT-" + java.util.UUID.randomUUID().toString().takeLast(6).uppercase()
 
-    // ── 4. GPT-4 Vision prescription RAG ─────────────────────────────────────
+    // ── 4. GPT-4o Vision prescription extraction ──────────────────────────────
+
     suspend fun extractMedicinesFromPrescription(
         base64Image: String,
         openAiKey: String
@@ -205,17 +208,21 @@ object ServiceManager {
     }
 
     // ── 5. Find nearby pharmacies ─────────────────────────────────────────────
+    // radius_km = 20 so all 30 Indore pharmacies are in range
+
     suspend fun findMedicalShopsForPrescription(
         medicines: List<String>,
         userLat: Double,
-        userLng: Double
+        userLng: Double,
+        useServiceTable: Boolean = true
     ): List<ServiceProvider> = searchProviders(
         ServiceIntent(ServiceSector.MEDICINE, medicines.joinToString(", ")),
         userLat, userLng,
-        ServiceFilter(maxDistanceKm = 5.0, sortBy = ServiceSort.DISTANCE)
+        ServiceFilter(maxDistanceKm = 20.0, sortBy = ServiceSort.DISTANCE)
     )
 
     // ── 6. Voice response builder ─────────────────────────────────────────────
+
     fun buildServiceVoiceResponse(
         sector: ServiceSector,
         providers: List<ServiceProvider>,
@@ -237,7 +244,8 @@ object ServiceManager {
         }
     }
 
-    // ── 7. Fallback mock (when Supabase unreachable) ──────────────────────────
+    // ── 7. Fallback (when Supabase unreachable) ───────────────────────────────
+
     private fun fallbackProviders(
         intent: ServiceIntent,
         lat: Double,
