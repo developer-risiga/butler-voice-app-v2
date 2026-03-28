@@ -1,5 +1,8 @@
 package com.demo.butler_voice_app.ui
 
+
+
+import com.demo.butler_voice_app.api.OrderTrackingManager
 import android.app.Activity
 import android.content.Intent
 import android.net.Uri
@@ -24,6 +27,7 @@ import com.demo.butler_voice_app.ai.LanguageManager
 import com.demo.butler_voice_app.ai.TranslationManager
 import kotlinx.coroutines.launch
 import java.util.UUID
+
 
 // ══════════════════════════════════════════════════════════════════════════════
 // SERVICE ACTIVITY — Handles all India services voice flow
@@ -322,7 +326,7 @@ class ServiceActivity : ComponentActivity() {
     }
 
     private fun confirmBooking(provider: ServiceProvider) {
-        val bookingId = "BUT-${UUID.randomUUID().toString().takeLast(6).uppercase()}"
+        val bookingId = "BUT-${java.util.UUID.randomUUID().toString().takeLast(6).uppercase()}"
         val lang      = LanguageManager.getLanguage()
 
         if (screenState is ServiceScreenState.Prescription) {
@@ -331,8 +335,24 @@ class ServiceActivity : ComponentActivity() {
 
         screenState = ServiceScreenState.BookingDone(provider, bookingId, provider.eta)
         speak(ServiceVoiceHandler.buildBookingConfirmedPrompt(provider, bookingId, lang)) {
-            // Return to MainActivity after 8 seconds
             Handler(Looper.getMainLooper()).postDelayed({ finishWithResult(bookingId) }, 8000)
+        }
+
+        // Save booking to Supabase so status tracking works
+        lifecycleScope.launch {
+            try {
+                val userId = UserSessionManager.currentUserId() ?: return@launch
+                saveBookingToSupabase(
+                    bookingId    = bookingId,
+                    userId       = userId,
+                    providerName = provider.name,
+                    providerPhone = null,           // add if your ServiceProvider has phone
+                    sector       = provider.sector.name,
+                    etaMinutes   = provider.eta.filter { it.isDigit() }.toIntOrNull() ?: 15
+                )
+            } catch (e: Exception) {
+                android.util.Log.e("ServiceActivity", "Failed to save booking: ${e.message}")
+            }
         }
     }
 
@@ -386,6 +406,41 @@ class ServiceActivity : ComponentActivity() {
                 ttsManager.speak(text = finalText, language = lang, onDone = { onDone?.invoke() })
             }
         }
+    }
+
+
+    private suspend fun saveBookingToSupabase(
+        bookingId: String,
+        userId: String,
+        providerName: String,
+        providerPhone: String?,
+        sector: String,
+        etaMinutes: Int
+    ) {
+        val supabaseUrl = com.demo.butler_voice_app.BuildConfig.SUPABASE_URL
+        val supabaseKey = com.demo.butler_voice_app.BuildConfig.SUPABASE_ANON_KEY
+
+        val body = org.json.JSONObject().apply {
+            put("booking_id",     bookingId)
+            put("user_id",        userId)
+            put("provider_name",  providerName)
+            put("sector",         sector)
+            put("status",         "booked")
+            put("eta_minutes",    etaMinutes)
+            if (providerPhone != null) put("provider_phone", providerPhone)
+        }.toString()
+
+        val request = okhttp3.Request.Builder()
+            .url("$supabaseUrl/rest/v1/bookings")
+            .header("apikey", supabaseKey)
+            .header("Authorization", "Bearer $supabaseKey")
+            .header("Content-Type", "application/json")
+            .header("Prefer", "return=minimal")
+            .post(body.toRequestBody("application/json".toMediaType()))
+            .build()
+
+        val response = okhttp3.OkHttpClient().newCall(request).execute()
+        android.util.Log.d("ServiceActivity", "Booking saved: ${response.code} $bookingId")
     }
 }
 

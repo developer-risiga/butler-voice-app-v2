@@ -46,6 +46,8 @@ import com.demo.butler_voice_app.ai.IntentRouting
 import com.demo.butler_voice_app.ai.LanguageDetector
 import com.demo.butler_voice_app.ai.LanguageManager
 import com.demo.butler_voice_app.ai.SessionLanguageManager
+import com.demo.butler_voice_app.ai.StatusCheckHandler
+import com.demo.butler_voice_app.ai.StatusQueryResult
 import com.demo.butler_voice_app.ai.TranslationManager
 import com.demo.butler_voice_app.api.ApiClient
 import com.demo.butler_voice_app.api.SessionStore
@@ -56,10 +58,6 @@ import com.demo.butler_voice_app.ui.CartDisplayItem
 import com.demo.butler_voice_app.voice.SarvamSTTManager
 import kotlinx.coroutines.launch
 
-// ══════════════════════════════════════════════════════════════════════════════
-// ASSISTANT STATES
-// ══════════════════════════════════════════════════════════════════════════════
-
 enum class AssistantState {
     IDLE, CHECKING_AUTH,
     ASKING_IS_NEW_USER, ASKING_NAME, ASKING_EMAIL, ASKING_PHONE, ASKING_PASSWORD,
@@ -69,10 +67,6 @@ enum class AssistantState {
     CONFIRMING_CARD_PAID, CONFIRMING_UPI_PAID, CONFIRMING_QR_PAID,
     IN_SERVICE_FLOW
 }
-
-// ══════════════════════════════════════════════════════════════════════════════
-// MAIN ACTIVITY
-// ══════════════════════════════════════════════════════════════════════════════
 
 class MainActivity : ComponentActivity() {
 
@@ -94,6 +88,9 @@ class MainActivity : ComponentActivity() {
     private var lastPublicId   = ""
     private var lastOrderTotal = 0.0
 
+    // PATCH 2: tracks last booking ID so "where's my plumber?" works without saying the ID
+    private var lastBookingId: String? = null
+
     private lateinit var ttsManager : TTSManager
     private lateinit var sarvamSTT  : SarvamSTTManager
     private lateinit var porcupine  : WakeWordManager
@@ -107,7 +104,7 @@ class MainActivity : ComponentActivity() {
     private fun toSpeakableAmount(amount: Double): String = "${amount.toInt()} rupees"
 
     // ══════════════════════════════════════════════════════════════════════════
-    // CENTRAL ROUTER — emergency/prescription/service always win
+    // CENTRAL ROUTER
     // ══════════════════════════════════════════════════════════════════════════
 
     private fun routeTranscript(text: String, lower: String): Boolean {
@@ -126,6 +123,12 @@ class MainActivity : ComponentActivity() {
                 speak("Finding $sectorName providers near you.") { launchServiceFlow(text) }
                 return true
             }
+        }
+        // PATCH 4: status check — "where is my order / plumber / booking"
+        if (StatusCheckHandler.isStatusQuery(lower) &&
+            (currentState == AssistantState.LISTENING || currentState == AssistantState.REORDER_CONFIRM)) {
+            handleStatusQuery(text)
+            return true
         }
         return false
     }
@@ -194,6 +197,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // PATCH 3: serviceLauncher saves lastBookingId
     private val serviceLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -202,6 +206,7 @@ class MainActivity : ComponentActivity() {
         Handler(Looper.getMainLooper()).postDelayed({
             val bookingId = result.data?.getStringExtra("booking_id")
             if (!bookingId.isNullOrBlank()) {
+                lastBookingId = bookingId              // saves for "where is my plumber?" queries
                 speak("Your booking is confirmed. Booking ID $bookingId. Is there anything else you need?") {
                     currentState = AssistantState.LISTENING
                     startListening()
@@ -298,7 +303,7 @@ class MainActivity : ComponentActivity() {
         tempName = ""; tempEmail = ""; tempPhone = ""
         pendingReorderSuggestions = emptyList()
         LanguageManager.reset()
-        SessionLanguageManager.reset()          // ← resets language lock between sessions
+        SessionLanguageManager.reset()
         apiClient.clearProductCache()
         setUiState(ButlerUiState.Idle)
         Log.d("Butler", "Waiting for wake word...")
@@ -481,11 +486,8 @@ class MainActivity : ComponentActivity() {
         val lower   = text.lowercase().trim()
         val cleaned = lower.replace(Regex("[,।.!?؟]"), "").trim()
         val lang    = LanguageManager.getLanguage()
-
         if (routeTranscript(text, lower)) return
-
         when (currentState) {
-
             AssistantState.ASKING_IS_NEW_USER -> {
                 when {
                     cleaned.contains("new") || cleaned.contains("first") || cleaned.contains("register") ||
@@ -503,7 +505,6 @@ class MainActivity : ComponentActivity() {
                     else -> speak("Please say new customer, or returning customer.") { startListening() }
                 }
             }
-
             AssistantState.ASKING_NAME -> {
                 lifecycleScope.launch {
                     val translatedText = if (LanguageDetector.detect(text) != "en") translateToEnglish(text) else text
@@ -525,7 +526,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-
             AssistantState.ASKING_EMAIL -> {
                 val parsed = EmailPasswordParser.parseEmail(text)
                 if (parsed != null) {
@@ -554,7 +554,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-
             AssistantState.ASKING_PHONE -> {
                 val digits = text.replace(Regex("[^0-9]"), "")
                 val phone  = when {
@@ -579,7 +578,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-
             AssistantState.ASKING_PASSWORD -> {
                 val password = EmailPasswordParser.parsePassword(text).ifBlank { text.trim().replace(" ", "").trimEnd('.', ',', '!') }
                 if (password.length < 6) { speak("Password must be at least 6 characters. Please try again.") { startListening() }; return }
@@ -607,7 +605,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-
             AssistantState.REORDER_CONFIRM -> {
                 when {
                     MultilingualMatcher.isYes(cleaned) || IndianLanguageProcessor.detectIntent(cleaned) == "confirm" -> {
@@ -636,9 +633,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-
             AssistantState.LISTENING -> handleOrderIntent(text, lower)
-
             AssistantState.ASKING_QUANTITY -> {
                 val qty = extractQuantity(text); val product = tempProduct
                 if (product != null) {
@@ -649,10 +644,8 @@ class MainActivity : ComponentActivity() {
                     else "Added $qty ${product.name}. More items or say done to checkout?") { startListening() }
                 } else speak("Let us try again. What would you like?") { currentState = AssistantState.LISTENING; startListening() }
             }
-
             AssistantState.ASKING_MORE  -> handleAskingMore(cleaned, text)
             AssistantState.EDITING_CART -> handleCartEdit(cleaned, text)
-
             AssistantState.CONFIRMING -> {
                 val intentFromLang = IndianLanguageProcessor.detectIntent(cleaned)
                 when {
@@ -674,7 +667,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-
             AssistantState.ASKING_PAYMENT_MODE  -> handlePaymentModeChoice(cleaned)
             AssistantState.WAITING_CARD_PAYMENT -> handlePaymentConfirmation(cleaned, "card")
             AssistantState.WAITING_UPI_PAYMENT  -> handlePaymentConfirmation(cleaned, "upi")
@@ -682,8 +674,39 @@ class MainActivity : ComponentActivity() {
             AssistantState.CONFIRMING_CARD_PAID -> handlePaidOrNotPaid(cleaned, "card")
             AssistantState.CONFIRMING_UPI_PAID  -> handlePaidOrNotPaid(cleaned, "upi")
             AssistantState.CONFIRMING_QR_PAID   -> handlePaidOrNotPaid(cleaned, "qr")
-
             else -> {}
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // PATCH 5: STATUS QUERY HANDLER
+    // ══════════════════════════════════════════════════════════════════════════
+
+    private fun handleStatusQuery(text: String) {
+        val firstName = UserSessionManager.currentProfile?.full_name
+            ?.split(" ")?.first() ?: "there"
+        val userId = UserSessionManager.currentUserId() ?: return
+        val lang   = LanguageManager.getLanguage()
+
+        setUiState(ButlerUiState.Thinking(
+            if (lang == "hi") "स्टेटस चेक कर रहे हैं…" else "Checking status…"
+        ))
+
+        lifecycleScope.launch {
+            val result = StatusCheckHandler.handleStatusQuery(
+                text          = text,
+                lang          = lang,
+                firstName     = firstName,
+                userId        = userId,
+                lastBookingId = lastBookingId
+            )
+            val voiceText = result.voiceText
+            runOnUiThread {
+                speak(voiceText) {
+                    currentState = AssistantState.LISTENING
+                    startListening()
+                }
+            }
         }
     }
 
@@ -795,7 +818,7 @@ class MainActivity : ComponentActivity() {
     }
 
     // ══════════════════════════════════════════════════════════════════════════
-    // ORDER INTENT — grocery only; AIParser intercepts service first
+    // ORDER INTENT
     // ══════════════════════════════════════════════════════════════════════════
 
     private fun handleOrderIntent(text: String, lower: String) {
@@ -808,18 +831,12 @@ class MainActivity : ComponentActivity() {
         if (regional != cleaned && regional.isNotBlank()) { searchAndAskQuantity(regional); return }
 
         lifecycleScope.launch {
-            // AIParser runs first — catches service intents AIOrderParser doesn't know about
-            // (e.g. "मुझे एक प्लंबर चाहिए" spoken during grocery flow)
             val fullParsed = AIParser.parse(text)
             if (fullParsed.routing is IntentRouting.GoToService) {
                 val cat = (fullParsed.routing as IntentRouting.GoToService).category
-                runOnUiThread {
-                    speak("Finding $cat providers near you.") { launchServiceFlow(text) }
-                }
+                runOnUiThread { speak("Finding $cat providers near you.") { launchServiceFlow(text) } }
                 return@launch
             }
-
-            // Not a service — hand off to grocery parser as before
             val parsed = AIOrderParser.parse(text)
             LanguageManager.setLanguage(parsed.detectedLanguage)
             runOnUiThread {
@@ -831,8 +848,7 @@ class MainActivity : ComponentActivity() {
                     "order", "add_more" -> {
                         if (parsed.items.isEmpty()) {
                             val fb = keywordFallback(cleaned)
-                            if (fb != null) searchAndAskQuantity(fb)
-                            else speak("Tell me what you want to order.") { startListening() }
+                            if (fb != null) searchAndAskQuantity(fb) else speak("Tell me what you want to order.") { startListening() }
                         } else if (parsed.items.size == 1) {
                             val i = parsed.items.first(); searchAndAskQuantity(i.name, i.quantity, i.unit)
                         } else {
@@ -1156,9 +1172,7 @@ class MainActivity : ComponentActivity() {
                 org.json.JSONObject(response.body?.string() ?: return@withContext text)
                     .getJSONArray("choices").getJSONObject(0)
                     .getJSONObject("message").getString("content").trim()
-            } catch (e: Exception) {
-                Log.e("Butler","translateToEnglish failed: ${e.message}"); text
-            }
+            } catch (e: Exception) { Log.e("Butler","translateToEnglish failed: ${e.message}"); text }
         }
     }
 }
