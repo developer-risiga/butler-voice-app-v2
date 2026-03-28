@@ -41,8 +41,11 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.demo.butler_voice_app.BuildConfig
 import com.demo.butler_voice_app.ai.AIOrderParser
+import com.demo.butler_voice_app.ai.AIParser
+import com.demo.butler_voice_app.ai.IntentRouting
 import com.demo.butler_voice_app.ai.LanguageDetector
 import com.demo.butler_voice_app.ai.LanguageManager
+import com.demo.butler_voice_app.ai.SessionLanguageManager
 import com.demo.butler_voice_app.ai.TranslationManager
 import com.demo.butler_voice_app.api.ApiClient
 import com.demo.butler_voice_app.api.SessionStore
@@ -101,42 +104,30 @@ class MainActivity : ComponentActivity() {
     private var currentState = AssistantState.IDLE
     private val recordRequestCode = 101
 
-    // ── ₹ FIX ────────────────────────────────────────────────────────────────
     private fun toSpeakableAmount(amount: Double): String = "${amount.toInt()} rupees"
 
     // ══════════════════════════════════════════════════════════════════════════
-    // ✅ CENTRAL ROUTER — called first before any state handling
-    // This ensures service requests ALWAYS win over grocery regardless of state
+    // CENTRAL ROUTER — emergency/prescription/service always win
     // ══════════════════════════════════════════════════════════════════════════
 
     private fun routeTranscript(text: String, lower: String): Boolean {
-        // Emergency = absolute highest priority
         if (ServiceVoiceHandler.isEmergency(lower)) {
-            speak("Emergency! Connecting to emergency services right away.") {
-                launchServiceFlow(text)
-            }
+            speak("Emergency! Connecting to emergency services right away.") { launchServiceFlow(text) }
             return true
         }
-        // Prescription
         if (ServiceVoiceHandler.isPrescriptionRequest(lower)) {
-            speak("I will help you order from your prescription. Opening camera now.") {
-                launchServiceFlow(text)
-            }
+            speak("I will help you order from your prescription. Opening camera now.") { launchServiceFlow(text) }
             return true
         }
-        // Any service request — BUT only when not in grocery ordering flow
-        // (LISTENING, REORDER_CONFIRM are the only states where we check)
         if (currentState == AssistantState.LISTENING || currentState == AssistantState.REORDER_CONFIRM) {
             if (ServiceVoiceHandler.isServiceRequest(lower)) {
                 val intent     = ServiceManager.detectServiceIntent(text)
                 val sectorName = intent.sector?.displayName ?: "service"
-                speak("Finding $sectorName providers near you.") {
-                    launchServiceFlow(text)
-                }
+                speak("Finding $sectorName providers near you.") { launchServiceFlow(text) }
                 return true
             }
         }
-        return false // not a service request — continue normal handling
+        return false
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -203,7 +194,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // ── Service launcher ──────────────────────────────────────────────────────
     private val serviceLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -217,7 +207,6 @@ class MainActivity : ComponentActivity() {
                     startListening()
                 }
             } else {
-                // Return to LISTENING so user can order grocery OR another service
                 currentState = AssistantState.LISTENING
                 speak("Is there anything else you need? You can order groceries or book another service.") {
                     startListening()
@@ -309,6 +298,7 @@ class MainActivity : ComponentActivity() {
         tempName = ""; tempEmail = ""; tempPhone = ""
         pendingReorderSuggestions = emptyList()
         LanguageManager.reset()
+        SessionLanguageManager.reset()          // ← resets language lock between sessions
         apiClient.clearProductCache()
         setUiState(ButlerUiState.Idle)
         Log.d("Butler", "Waiting for wake word...")
@@ -404,7 +394,6 @@ class MainActivity : ComponentActivity() {
         )
     }
 
-    // Extended listening for number selection (1/2/3)
     private fun startListeningForSelection(
         onNumber: (Int) -> Unit,
         onOther: (String) -> Unit,
@@ -424,9 +413,9 @@ class MainActivity : ComponentActivity() {
                                             val t   = t2.trim()
                                             val num = detectNumberFromSpeech(t)
                                             when {
-                                                num > 0      -> onNumber(num)
+                                                num > 0        -> onNumber(num)
                                                 t.isNotBlank() -> onOther(t)
-                                                else         -> speak(retryPrompt) { startListeningForSelection(onNumber, onOther, retryPrompt) }
+                                                else           -> speak(retryPrompt) { startListeningForSelection(onNumber, onOther, retryPrompt) }
                                             }
                                         }
                                     },
@@ -493,12 +482,9 @@ class MainActivity : ComponentActivity() {
         val cleaned = lower.replace(Regex("[,।.!?؟]"), "").trim()
         val lang    = LanguageManager.getLanguage()
 
-        // ✅ ROUTE FIRST — emergency/prescription always interrupt any state
         if (routeTranscript(text, lower)) return
 
         when (currentState) {
-
-            // ── Voice signup ───────────────────────────────────────────────────
 
             AssistantState.ASKING_IS_NEW_USER -> {
                 when {
@@ -622,12 +608,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            // ══════════════════════════════════════════════════════════════════
-            // ✅ REORDER CONFIRM — checks service first, then reorder
-            // ══════════════════════════════════════════════════════════════════
-
             AssistantState.REORDER_CONFIRM -> {
-                // routeTranscript already handled emergency/prescription/service above
                 when {
                     MultilingualMatcher.isYes(cleaned) || IndianLanguageProcessor.detectIntent(cleaned) == "confirm" -> {
                         lifecycleScope.launch {
@@ -649,7 +630,6 @@ class MainActivity : ComponentActivity() {
                         speak("No problem! What would you like today? I can order groceries or book any service for you.") { startListening() }
                     }
                     else -> {
-                        // Could be a new grocery item OR a service request — treat as LISTENING
                         pendingReorderSuggestions = emptyList()
                         currentState = AssistantState.LISTENING
                         handleOrderIntent(text, lower)
@@ -657,13 +637,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            // ══════════════════════════════════════════════════════════════════
-            // ✅ LISTENING — grocery only (services already routed above)
-            // ══════════════════════════════════════════════════════════════════
-
             AssistantState.LISTENING -> handleOrderIntent(text, lower)
-
-            // ── Ordering states ────────────────────────────────────────────────
 
             AssistantState.ASKING_QUANTITY -> {
                 val qty = extractQuantity(text); val product = tempProduct
@@ -700,8 +674,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-
-            // ── Payment states ─────────────────────────────────────────────────
 
             AssistantState.ASKING_PAYMENT_MODE  -> handlePaymentModeChoice(cleaned)
             AssistantState.WAITING_CARD_PAYMENT -> handlePaymentConfirmation(cleaned, "card")
@@ -823,7 +795,7 @@ class MainActivity : ComponentActivity() {
     }
 
     // ══════════════════════════════════════════════════════════════════════════
-    // ORDER INTENT (grocery only)
+    // ORDER INTENT — grocery only; AIParser intercepts service first
     // ══════════════════════════════════════════════════════════════════════════
 
     private fun handleOrderIntent(text: String, lower: String) {
@@ -834,8 +806,22 @@ class MainActivity : ComponentActivity() {
         if (cart.isNotEmpty() && isCartEditIntent(cleaned)) { currentState = AssistantState.EDITING_CART; handleCartEdit(cleaned, text); return }
         val regional = IndianLanguageProcessor.normalizeProduct(cleaned)
         if (regional != cleaned && regional.isNotBlank()) { searchAndAskQuantity(regional); return }
+
         lifecycleScope.launch {
-            val parsed = AIOrderParser.parse(text); LanguageManager.setLanguage(parsed.detectedLanguage)
+            // AIParser runs first — catches service intents AIOrderParser doesn't know about
+            // (e.g. "मुझे एक प्लंबर चाहिए" spoken during grocery flow)
+            val fullParsed = AIParser.parse(text)
+            if (fullParsed.routing is IntentRouting.GoToService) {
+                val cat = (fullParsed.routing as IntentRouting.GoToService).category
+                runOnUiThread {
+                    speak("Finding $cat providers near you.") { launchServiceFlow(text) }
+                }
+                return@launch
+            }
+
+            // Not a service — hand off to grocery parser as before
+            val parsed = AIOrderParser.parse(text)
+            LanguageManager.setLanguage(parsed.detectedLanguage)
             runOnUiThread {
                 when (parsed.intent) {
                     "finish_order"  -> { if (cart.isEmpty()) speak("Cart is empty. What would you like?") { startListening() } else readCartAndConfirm() }
@@ -843,9 +829,15 @@ class MainActivity : ComponentActivity() {
                     "cancel_order"  -> speak("Cancelled.") { startWakeWordListening() }
                     "history"       -> readOrderHistory()
                     "order", "add_more" -> {
-                        if (parsed.items.isEmpty()) { val fb = keywordFallback(cleaned); if (fb != null) searchAndAskQuantity(fb) else speak("Tell me what you want to order.") { startListening() } }
-                        else if (parsed.items.size == 1) { val i = parsed.items.first(); searchAndAskQuantity(i.name, i.quantity, i.unit) }
-                        else lifecycleScope.launch { addMultipleItemsToCart(parsed.items) }
+                        if (parsed.items.isEmpty()) {
+                            val fb = keywordFallback(cleaned)
+                            if (fb != null) searchAndAskQuantity(fb)
+                            else speak("Tell me what you want to order.") { startListening() }
+                        } else if (parsed.items.size == 1) {
+                            val i = parsed.items.first(); searchAndAskQuantity(i.name, i.quantity, i.unit)
+                        } else {
+                            lifecycleScope.launch { addMultipleItemsToCart(parsed.items) }
+                        }
                     }
                     else -> speak("Tell me what you want to order.") { startListening() }
                 }
@@ -1146,17 +1138,27 @@ class MainActivity : ComponentActivity() {
             try {
                 val body = org.json.JSONObject().apply {
                     put("model", "gpt-4o-mini")
-                    put("messages", org.json.JSONArray().apply { put(org.json.JSONObject().apply { put("role","user"); put("content","Translate to English. Return ONLY the translated text: $text") }) })
+                    put("messages", org.json.JSONArray().apply {
+                        put(org.json.JSONObject().apply {
+                            put("role","user")
+                            put("content","Translate to English. Return ONLY the translated text: $text")
+                        })
+                    })
                     put("max_tokens", 50); put("temperature", 0.1)
                 }.toString().toRequestBody("application/json".toMediaType())
                 val response = okhttp3.OkHttpClient().newCall(
-                    okhttp3.Request.Builder().url("https://api.openai.com/v1/chat/completions")
+                    okhttp3.Request.Builder()
+                        .url("https://api.openai.com/v1/chat/completions")
                         .addHeader("Authorization","Bearer ${BuildConfig.OPENAI_API_KEY}")
-                        .addHeader("Content-Type","application/json").post(body).build()
+                        .addHeader("Content-Type","application/json")
+                        .post(body).build()
                 ).execute()
                 org.json.JSONObject(response.body?.string() ?: return@withContext text)
-                    .getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content").trim()
-            } catch (e: Exception) { Log.e("Butler","translateToEnglish failed: ${e.message}"); text }
+                    .getJSONArray("choices").getJSONObject(0)
+                    .getJSONObject("message").getString("content").trim()
+            } catch (e: Exception) {
+                Log.e("Butler","translateToEnglish failed: ${e.message}"); text
+            }
         }
     }
 }
