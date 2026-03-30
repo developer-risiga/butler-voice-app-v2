@@ -60,6 +60,13 @@ import com.demo.butler_voice_app.utils.HumanFillerManager
 import com.demo.butler_voice_app.voice.SarvamSTTManager
 import com.demo.butler_voice_app.workers.ProactiveButlerWorker
 import kotlinx.coroutines.launch
+import com.demo.butler_voice_app.api.PriceComparisonEngine
+import com.demo.butler_voice_app.api.StorePrice
+import com.demo.butler_voice_app.api.PriceComparison
+
+
+
+
 
 enum class AssistantState {
     IDLE, CHECKING_AUTH,
@@ -1016,26 +1023,53 @@ class MainActivity : ComponentActivity() {
                 val recs = productRepo.getTopRecommendations(itemName, userLocation)
                 if (recs.isNotEmpty()) {
                     runOnUiThread { setUiState(ButlerUiState.ShowingRecommendations(itemName, recs)) }
-                    val readout = "${recs.size} options mila $itemName ke liye. " +
-                            recs.mapIndexed { i, r ->
-                                val shortName = r.productName.split(" ").take(3).joinToString(" ")
-                                "${i + 1}: $shortName, ${toSpeakableAmount(r.priceRs)}"
-                            }.joinToString(". ") + ". 1, 2 ya 3 bolein."
+
+                    // ── LIVE PRICE INTELLIGENCE ──────────────────────────────────────
+                    // Check if there are meaningful price differences across stores
+                    val comparison = productRepo.getPriceComparison(itemName, userLocation)
+
+                    val readout = if (comparison != null && comparison.allPrices.size > 1) {
+                        // Price comparison available — lead with savings angle
+                        val lang = LanguageManager.getLanguage()
+                        PriceComparisonEngine.buildVoiceAnnouncement(comparison, lang)
+                    } else {
+                        // Fallback to original readout
+                        "${recs.size} options mila $itemName ke liye. " +
+                                recs.mapIndexed { i, r ->
+                                    val shortName = r.productName.split(" ").take(3).joinToString(" ")
+                                    "${i + 1}: $shortName, ${toSpeakableAmount(r.priceRs)}"
+                                }.joinToString(". ") + ". 1, 2 ya 3 bolein."
+                    }
+
                     speakKeepingRecsVisible(readout) {
                         startListeningForSelection(
                             onNumber = { num -> handleRecSelectionByIndex(num - 1, recs, qty, itemName) },
                             onOther  = { spoken ->
-                                val pick = recs.firstOrNull { r ->
-                                    val rw = r.productName.lowercase().split(" ")
-                                    val sw = spoken.lowercase().split(" ").filter { it.length > 2 }
-                                    sw.any { s -> rw.any { w -> w.contains(s) || s.contains(w) } }
-                                }
-                                if (pick != null) handleRecSelectionByIndex(recs.indexOf(pick), recs, qty, itemName)
-                                else speakKeepingRecsVisible("1, 2 ya 3 bolein.") {
-                                    startListeningForSelection(
-                                        onNumber = { n -> handleRecSelectionByIndex(n - 1, recs, qty, itemName) },
-                                        onOther  = { _ -> speak(ButlerPhraseBank.get("ask_item", lang)) { currentState = AssistantState.LISTENING; startListening() } }
+                                // Check if user said "haan" or confirmed cheapest
+                                val lower = spoken.lowercase()
+                                if (comparison != null && (lower.contains("haan") || lower.contains("yes") ||
+                                            lower.contains("wahan") || lower.contains("sasta") || lower.contains("theek"))) {
+                                    // User confirmed cheapest option
+                                    val bestIdx = recs.indexOfFirst { it.storeId == comparison.cheapest.storeId }
+                                    handleRecSelectionByIndex(
+                                        if (bestIdx >= 0) bestIdx else 0,
+                                        recs, qty, itemName
                                     )
+                                } else {
+                                    val pick = recs.firstOrNull { r ->
+                                        val rw = r.productName.lowercase().split(" ")
+                                        val sw = spoken.lowercase().split(" ").filter { it.length > 2 }
+                                        sw.any { s -> rw.any { w -> w.contains(s) || s.contains(w) } }
+                                    }
+                                    if (pick != null) handleRecSelectionByIndex(recs.indexOf(pick), recs, qty, itemName)
+                                    else speakKeepingRecsVisible("1, 2 ya 3 bolein.") {
+                                        startListeningForSelection(
+                                            onNumber = { n -> handleRecSelectionByIndex(n - 1, recs, qty, itemName) },
+                                            onOther  = { _ -> speak(ButlerPhraseBank.get("ask_item", lang)) {
+                                                currentState = AssistantState.LISTENING; startListening()
+                                            }}
+                                        )
+                                    }
                                 }
                             },
                             retryPrompt = "1, 2 ya 3 bolein."

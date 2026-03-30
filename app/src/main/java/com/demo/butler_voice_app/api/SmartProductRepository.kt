@@ -88,4 +88,49 @@ class SmartProductRepository(private val supabaseClient: SupabaseClient) {
             emptyList()
         }
     }
+
+    // ── LIVE PRICE INTELLIGENCE ───────────────────────────────────────────────
+// Queries ALL stores for the item and returns a PriceComparison
+// showing cheapest vs others so Butler can announce the savings
+    suspend fun getPriceComparison(
+        itemName: String,
+        userLocation: android.location.Location?
+    ): PriceComparison? {
+        return try {
+            val lat = userLocation?.latitude ?: 17.3850
+            val lng = userLocation?.longitude ?: 78.4867
+
+            // Reuse your existing getTopRecommendations but get ALL results
+            val recs = getTopRecommendations(itemName, userLocation)
+            if (recs.isEmpty()) return null
+
+            val storePrices = recs.map { rec ->
+                StorePrice(
+                    storeName    = rec.storeName,
+                    storeId      = rec.storeId,
+                    productName  = rec.productName,
+                    productId    = rec.productId,
+                    priceRs      = rec.priceRs,
+                    unit         = rec.unit,
+                    distanceKm   = rec.storeDistanceKm,
+                    deliveryMins = (rec.storeDistanceKm * 8).toInt().coerceIn(10, 60)
+                )
+            }.sortedBy { it.priceRs }
+
+            val cheapest   = storePrices.first()
+            val mostExpensive = storePrices.last()
+            val savings    = mostExpensive.priceRs - cheapest.priceRs
+
+            PriceComparison(
+                itemName   = itemName,
+                cheapest   = cheapest,
+                others     = storePrices.drop(1),
+                savingsRs  = savings,
+                allPrices  = storePrices
+            )
+        } catch (e: Exception) {
+            android.util.Log.e("PriceComparison", "Failed: ${e.message}")
+            null
+        }
+    }
 }
