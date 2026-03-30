@@ -22,6 +22,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import com.demo.butler_voice_app.ai.MultilingualMatcher
 import com.demo.butler_voice_app.ai.IndianLanguageProcessor
 import com.demo.butler_voice_app.ai.EmailPasswordParser
+import com.demo.butler_voice_app.ai.MoodDetector
+import com.demo.butler_voice_app.ai.MoodAdapter
+import com.demo.butler_voice_app.ai.UserMood
 import com.demo.butler_voice_app.api.SmartProductRepository
 import com.demo.butler_voice_app.api.SupabaseClient
 import okhttp3.MediaType.Companion.toMediaType
@@ -64,10 +67,6 @@ import com.demo.butler_voice_app.api.PriceComparisonEngine
 import com.demo.butler_voice_app.api.StorePrice
 import com.demo.butler_voice_app.api.PriceComparison
 
-
-
-
-
 enum class AssistantState {
     IDLE, CHECKING_AUTH,
     ASKING_IS_NEW_USER, ASKING_NAME, ASKING_EMAIL, ASKING_PHONE, ASKING_PASSWORD,
@@ -105,6 +104,9 @@ class MainActivity : ComponentActivity() {
 
     // ── Proactive Butler ──────────────────────────────────────────────────────
     private var pendingProactiveData: ProactiveData? = null
+
+    // ── Mood Detection ────────────────────────────────────────────────────────
+    private var currentMood: UserMood = UserMood.CALM
 
     private lateinit var ttsManager : TTSManager
     private lateinit var sarvamSTT  : SarvamSTTManager
@@ -292,8 +294,6 @@ class MainActivity : ComponentActivity() {
             try { apiClient.searchProduct("rice"); Log.d("Butler", "Cache warmed") }
             catch (_: Exception) {}
         }
-
-        // ── Proactive Butler: schedule daily 8am check + handle notification tap ──
         ProactiveButlerWorker.schedule(this)
         checkProactiveLaunch()
     }
@@ -306,26 +306,23 @@ class MainActivity : ComponentActivity() {
     }
 
     // ══════════════════════════════════════════════════════════════════════════
-    // PROACTIVE BUTLER — notification tap handler
+    // PROACTIVE BUTLER
     // ══════════════════════════════════════════════════════════════════════════
 
     private fun checkProactiveLaunch() {
         val fromNotification = intent?.getBooleanExtra("proactive_launch", false) ?: false
         if (!fromNotification) return
         val data = ProactiveSession.consumePendingMessage(this) ?: return
-
         Log.d("Butler", "Proactive launch detected: ${data.productName}")
         currentState = AssistantState.CHECKING_AUTH
         lifecycleScope.launch {
             val restored = UserSessionManager.tryRestoreSession()
             runOnUiThread {
                 if (restored && UserSessionManager.currentProfile != null) {
-                    // Skip greeting — Butler speaks the proactive message directly
                     currentState = AssistantState.REORDER_CONFIRM
                     pendingProactiveData = data
                     speak(data.message) { startListening() }
                 } else {
-                    // Not logged in — fall through to normal flow
                     startWakeWordListening()
                 }
             }
@@ -379,6 +376,8 @@ class MainActivity : ComponentActivity() {
         pendingProactiveData      = null
         sessionLastProduct = null
         sessionLastQty     = 0
+        currentMood = UserMood.CALM
+        MoodDetector.reset()
         LanguageManager.reset()
         SessionLanguageManager.reset()
         apiClient.clearProductCache()
@@ -401,7 +400,8 @@ class MainActivity : ComponentActivity() {
                 if (restored && UserSessionManager.currentProfile != null) {
                     val name    = UserSessionManager.currentProfile?.full_name?.split(" ")?.first() ?: "there"
                     val history = UserSessionManager.purchaseHistory
-                    AnalyticsManager.logSessionStart(UserSessionManager.currentUserId(), LanguageManager.getLanguage())
+                    val lang    = LanguageManager.getLanguage()
+                    AnalyticsManager.logSessionStart(UserSessionManager.currentUserId(), lang)
                     if (history.isNotEmpty()) {
                         lifecycleScope.launch {
                             val suggestions = SmartReorderManager.getSuggestions(UserSessionManager.currentUserId() ?: "")
@@ -414,9 +414,15 @@ class MainActivity : ComponentActivity() {
                                 } else {
                                     currentState = AssistantState.LISTENING
                                     val lastProduct = history.firstOrNull()?.product_name?.takeIf { it.isNotBlank() }
-                                    val greeting = if (lastProduct != null)
-                                        "welcome back $name! last time $lastProduct. kya chahiye aaj?"
-                                    else IndianLanguageProcessor.getWelcomeGreeting(LanguageManager.getLanguage(), name)
+                                    // ── MOOD: if TIRED, proactively suggest reorder ───────
+                                    val greeting = when {
+                                        MoodAdapter.shouldSuggestReorder(currentMood) && lastProduct != null ->
+                                            MoodAdapter.adaptGreeting(currentMood, name, lang)
+                                        lastProduct != null ->
+                                            "welcome back $name! last time $lastProduct. kya chahiye aaj?"
+                                        else ->
+                                            IndianLanguageProcessor.getWelcomeGreeting(lang, name)
+                                    }
                                     speak(greeting) { startListening() }
                                 }
                             }
@@ -445,7 +451,7 @@ class MainActivity : ComponentActivity() {
     }
 
     // ══════════════════════════════════════════════════════════════════════════
-    // STT
+    // STT — with Mood Detection wired in
     // ══════════════════════════════════════════════════════════════════════════
 
     private fun startListening() {
@@ -456,6 +462,19 @@ class MainActivity : ComponentActivity() {
                 runOnUiThread {
                     val transcript = text.trim()
                     Log.d("Butler", "Transcript: $transcript")
+
+                    // ── MOOD DETECTION ────────────────────────────────────────
+                    val pcm      = sarvamSTT.lastPcmBuffer
+                    val duration = sarvamSTT.lastRecordingDurationMs
+                    if (pcm.isNotEmpty()) {
+                        currentMood = MoodDetector.analyse(pcm, duration)
+                        Log.d("Butler", "Mood detected: $currentMood")
+                    }
+                    if (transcript.isBlank()) {
+                        MoodDetector.recordRetry()
+                    }
+                    // ─────────────────────────────────────────────────────────
+
                     if (transcript.isNotBlank() && transcript.length > 3) {
                         val scriptLang = MultilingualMatcher.detectScript(transcript)
                         val detected   = LanguageDetector.detect(transcript)
@@ -523,15 +542,12 @@ class MainActivity : ComponentActivity() {
             s.contains("one")   || s.contains("wan")    || s.contains("won")    || s.contains("first")  ||
                     s.contains("pehla") || s.contains("ek")     || s.contains("एक")     || s.contains("ఒకటి")   ||
                     s.contains("ஒன்று") || s.contains("option one") || s.contains("number one") -> 1
-
             s.contains("two")   || s.contains("too")    || s.contains("second") || s.contains("doosra") ||
                     s.contains("do")    || s.contains("दो")     || s.contains("రెండు")  || s.contains("இரண்டு") ||
                     s.contains("option two") || s.contains("number two") -> 2
-
             s.contains("three") || s.contains("tree")   || s.contains("third")  || s.contains("teesra") ||
                     s.contains("teen")  || s.contains("तीन")    || s.contains("మూడు")   || s.contains("மூன்று") ||
                     s.contains("option three") || s.contains("number three") -> 3
-
             else -> -1
         }
     }
@@ -683,11 +699,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            // ══════════════════════════════════════════════════════════════════
-            // REORDER CONFIRM — handles both proactive AND normal reorder
-            // ══════════════════════════════════════════════════════════════════
             AssistantState.REORDER_CONFIRM -> {
-                // ── PROACTIVE PATH: launched from notification ─────────────────
                 val proactive = pendingProactiveData
                 if (proactive != null) {
                     when {
@@ -713,7 +725,6 @@ class MainActivity : ComponentActivity() {
                             speak("theek hai! ${ButlerPhraseBank.get("ask_item", LanguageManager.getLanguage())}") { startListening() }
                         }
                         else -> {
-                            // User said something else — treat as a new order intent
                             pendingProactiveData = null
                             currentState = AssistantState.LISTENING
                             handleOrderIntent(text, lower)
@@ -721,8 +732,6 @@ class MainActivity : ComponentActivity() {
                     }
                     return
                 }
-
-                // ── NORMAL REORDER PATH: wake word triggered ───────────────────
                 when {
                     MultilingualMatcher.isYes(cleaned) || IndianLanguageProcessor.detectIntent(cleaned) == "confirm" -> {
                         lifecycleScope.launch {
@@ -1013,7 +1022,7 @@ class MainActivity : ComponentActivity() {
     }
 
     // ══════════════════════════════════════════════════════════════════════════
-    // PRODUCT SEARCH
+    // PRODUCT SEARCH — with Mood Adaptation
     // ══════════════════════════════════════════════════════════════════════════
 
     private fun searchAndAskQuantity(itemName: String, qty: Int = 0, unit: String? = null) {
@@ -1024,16 +1033,39 @@ class MainActivity : ComponentActivity() {
                 if (recs.isNotEmpty()) {
                     runOnUiThread { setUiState(ButlerUiState.ShowingRecommendations(itemName, recs)) }
 
-                    // ── LIVE PRICE INTELLIGENCE ──────────────────────────────────────
-                    // Check if there are meaningful price differences across stores
-                    val comparison = productRepo.getPriceComparison(itemName, userLocation)
+                    // ── MOOD ADAPTATION: FRUSTRATED or RUSHED — skip options list ──
+                    if (MoodAdapter.shouldSkipOptions(currentMood) && recs.isNotEmpty()) {
+                        val best    = recs.minByOrNull { it.priceRs }!!
+                        val ack     = if (currentMood == UserMood.FRUSTRATED)
+                            MoodAdapter.getFrustrationAck(lang) else ""
+                        val msg     = MoodAdapter.buildRushedProductAnnouncement(
+                            best.productName, best.priceRs, best.storeName, lang
+                        )
+                        runOnUiThread {
+                            speakKeepingRecsVisible("$ack $msg".trim()) {
+                                startListeningForSelection(
+                                    onNumber = { handleRecSelectionByIndex(0, recs, qty, itemName) },
+                                    onOther  = { spoken ->
+                                        val lo = spoken.lowercase()
+                                        if (lo.contains("haan") || lo.contains("yes") ||
+                                            lo.contains("loon") || lo.contains("order")) {
+                                            handleRecSelectionByIndex(0, recs, qty, itemName)
+                                        } else {
+                                            handleRecSelectionByIndex(0, recs, qty, itemName)
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                        return@launch
+                    }
+                    // ── END MOOD ADAPTATION ───────────────────────────────────────
 
+                    // ── LIVE PRICE INTELLIGENCE ───────────────────────────────────
+                    val comparison = productRepo.getPriceComparison(itemName, userLocation)
                     val readout = if (comparison != null && comparison.allPrices.size > 1) {
-                        // Price comparison available — lead with savings angle
-                        val lang = LanguageManager.getLanguage()
                         PriceComparisonEngine.buildVoiceAnnouncement(comparison, lang)
                     } else {
-                        // Fallback to original readout
                         "${recs.size} options mila $itemName ke liye. " +
                                 recs.mapIndexed { i, r ->
                                     val shortName = r.productName.split(" ").take(3).joinToString(" ")
@@ -1045,16 +1077,11 @@ class MainActivity : ComponentActivity() {
                         startListeningForSelection(
                             onNumber = { num -> handleRecSelectionByIndex(num - 1, recs, qty, itemName) },
                             onOther  = { spoken ->
-                                // Check if user said "haan" or confirmed cheapest
                                 val lower = spoken.lowercase()
                                 if (comparison != null && (lower.contains("haan") || lower.contains("yes") ||
                                             lower.contains("wahan") || lower.contains("sasta") || lower.contains("theek"))) {
-                                    // User confirmed cheapest option
                                     val bestIdx = recs.indexOfFirst { it.storeId == comparison.cheapest.storeId }
-                                    handleRecSelectionByIndex(
-                                        if (bestIdx >= 0) bestIdx else 0,
-                                        recs, qty, itemName
-                                    )
+                                    handleRecSelectionByIndex(if (bestIdx >= 0) bestIdx else 0, recs, qty, itemName)
                                 } else {
                                     val pick = recs.firstOrNull { r ->
                                         val rw = r.productName.lowercase().split(" ")

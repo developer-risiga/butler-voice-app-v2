@@ -1,6 +1,7 @@
 package com.demo.butler_voice_app.voice
 
 import com.demo.butler_voice_app.ai.SessionLanguageManager
+import com.demo.butler_voice_app.ai.MoodDetector
 import android.content.Context
 import android.content.pm.PackageManager
 import android.media.AudioFormat
@@ -22,7 +23,7 @@ import kotlin.math.sqrt
 import kotlin.random.Random
 
 class SarvamSTTManager(
-    private val context: Context,   // kept — used for permission check
+    private val context: Context,
     private val apiKey: String
 ) {
     companion object {
@@ -44,6 +45,12 @@ class SarvamSTTManager(
     private var isRecording = false
     private val tokens      = AtomicInteger(MAX_TOKENS)
     private val lastRefill  = AtomicLong(System.currentTimeMillis())
+
+    // ── Mood Detection — exposes last recording's PCM buffer ─────────────────
+    var lastPcmBuffer: ShortArray = ShortArray(0)
+        private set
+    var lastRecordingDurationMs: Long = 0L
+        private set
 
     // ── Public API ────────────────────────────────────────────────────────────
 
@@ -78,7 +85,6 @@ class SarvamSTTManager(
     // ── Recording ─────────────────────────────────────────────────────────────
 
     private fun recordAudio(): ByteArray? {
-        // FIX 1: explicit permission check before AudioRecord constructor — fixes the error on line 76
         if (ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO)
             != PackageManager.PERMISSION_GRANTED) {
             Log.e(TAG, "RECORD_AUDIO permission not granted")
@@ -91,7 +97,6 @@ class SarvamSTTManager(
             AudioFormat.ENCODING_PCM_16BIT
         ).coerceAtLeast(4096)
 
-        // AudioRecord is now safely constructed after permission check
         recorder = AudioRecord(
             MediaRecorder.AudioSource.MIC,
             SAMPLE_RATE,
@@ -108,10 +113,11 @@ class SarvamSTTManager(
         recorder?.startRecording()
         Log.d(TAG, "Recording started")
 
-        val allBytes    = mutableListOf<Byte>()
-        val buf         = ShortArray(bufSize / 2)
-        val startMs     = System.currentTimeMillis()
-        var lastSoundMs = startMs
+        val allBytes      = mutableListOf<Byte>()
+        val allShorts     = mutableListOf<Short>()   // ← for mood analysis
+        val buf           = ShortArray(bufSize / 2)
+        val startMs       = System.currentTimeMillis()
+        var lastSoundMs   = startMs
 
         while (isRecording) {
             val read = recorder?.read(buf, 0, buf.size) ?: break
@@ -119,6 +125,9 @@ class SarvamSTTManager(
 
             val rms = sqrt(buf.take(read).sumOf { (it * it).toDouble() } / read)
             if (rms > 300) lastSoundMs = System.currentTimeMillis()
+
+            // Collect shorts for mood analysis
+            for (i in 0 until read) allShorts.add(buf[i])
 
             val pcm = ByteArray(read * 2)
             for (i in 0 until read) {
@@ -134,6 +143,11 @@ class SarvamSTTManager(
             if (now - startMs > MAX_REC_MS) break
         }
 
+        // ── Store for mood analysis ───────────────────────────────────────────
+        val durationMs = System.currentTimeMillis() - startMs
+        lastPcmBuffer           = allShorts.toShortArray()
+        lastRecordingDurationMs = durationMs
+
         stop()
         if (allBytes.isEmpty()) return null
         return addWavHeader(allBytes.toByteArray())
@@ -141,8 +155,6 @@ class SarvamSTTManager(
 
     // ── Transcription ─────────────────────────────────────────────────────────
 
-    // FIX 2: changed while condition from attempt <= MAX_RETRIES to attempt < MAX_RETRIES
-    // to fix the "condition is always true" warning and make retry logic correct
     private suspend fun transcribeWithRetry(audioBytes: ByteArray): String {
         var attempt = 0
         while (attempt < MAX_RETRIES) {
@@ -167,8 +179,8 @@ class SarvamSTTManager(
                 }
                 obj.has("transcript") -> {
                     val t        = obj.optString("transcript", "").trim()
-                    val langCode = obj.optString("language_code", "en-IN")  // declared first
-                    SessionLanguageManager.onDetection(langCode)             // then used
+                    val langCode = obj.optString("language_code", "en-IN")
+                    SessionLanguageManager.onDetection(langCode)
                     if (t.isBlank()) Log.e(TAG, "No transcript found")
                     else Log.d(TAG, "Transcript: $t")
                     return t
@@ -237,7 +249,6 @@ class SarvamSTTManager(
 
     // ── WAV header ────────────────────────────────────────────────────────────
 
-    // FIX 3: removed unused sampleRate parameter — always used SAMPLE_RATE constant directly
     private fun addWavHeader(pcm: ByteArray): ByteArray {
         val totalLen = pcm.size + 36
         val byteRate = SAMPLE_RATE * 2
