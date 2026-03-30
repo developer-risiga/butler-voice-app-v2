@@ -55,6 +55,8 @@ import com.demo.butler_voice_app.api.UserSessionManager
 import com.demo.butler_voice_app.ui.ButlerScreen
 import com.demo.butler_voice_app.ui.ButlerUiState
 import com.demo.butler_voice_app.ui.CartDisplayItem
+import com.demo.butler_voice_app.utils.ButlerPhraseBank
+import com.demo.butler_voice_app.utils.HumanFillerManager
 import com.demo.butler_voice_app.voice.SarvamSTTManager
 import kotlinx.coroutines.launch
 
@@ -88,7 +90,10 @@ class MainActivity : ComponentActivity() {
     private var lastPublicId   = ""
     private var lastOrderTotal = 0.0
 
-    // PATCH 2: tracks last booking ID so "where's my plumber?" works without saying the ID
+    // (session memory): tracks what was said earlier in the session
+    private var sessionLastProduct: String? = null
+    private var sessionLastQty: Int = 0
+
     private var lastBookingId: String? = null
 
     private lateinit var ttsManager : TTSManager
@@ -102,6 +107,34 @@ class MainActivity : ComponentActivity() {
     private val recordRequestCode = 101
 
     private fun toSpeakableAmount(amount: Double): String = "${amount.toInt()} rupees"
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // HUMAN HELPERS — Fix 1, 2, 5, 6
+    // ══════════════════════════════════════════════════════════════════════════
+
+    // 1: speak a filler sound immediately, then run the action
+    private fun speakFillerThen(action: () -> Unit) {
+        val filler = HumanFillerManager.getThinkingFiller(LanguageManager.getLanguage())
+        // speak filler without waiting for onDone — just fire-and-forget
+        // then immediately run the action (search / API call starts in parallel)
+        ttsManager.speak(text = filler, language = LanguageManager.getLanguage(), onDone = null)
+        action()
+    }
+
+    //  5: transition phrase bridges two states naturally
+    private fun speakWithTransition(text: String, onDone: (() -> Unit)? = null) {
+        val lang       = LanguageManager.getLanguage()
+        val transition = HumanFillerManager.getTransition(lang)
+        speak("$transition $text", onDone)
+    }
+
+    // 6: short confirm — "2 chawal. order karon?" instead of long robot sentence
+    private fun buildShortConfirm(lang: String): String {
+        val items  = cart.joinToString(", ") { "${it.quantity} ${it.product.name}" }
+        val total  = toSpeakableAmount(cart.sumOf { it.product.price * it.quantity })
+        val phrase = ButlerPhraseBank.get("confirm_order", lang)
+        return "$items. $total. $phrase"
+    }
 
     // ══════════════════════════════════════════════════════════════════════════
     // CENTRAL ROUTER
@@ -119,7 +152,6 @@ class MainActivity : ComponentActivity() {
         if (currentState == AssistantState.LISTENING || currentState == AssistantState.REORDER_CONFIRM) {
             if (ServiceVoiceHandler.isServiceRequest(lower)) {
                 val intent     = ServiceManager.detectServiceIntent(text)
-                // FIX: use localised sector name so Hindi doesn't say "Finding Plumber आपके पास"
                 val lang       = LanguageManager.getLanguage()
                 val sectorName = intent.sector?.let {
                     com.demo.butler_voice_app.ai.HindiSectorNames.get(it.name, lang)
@@ -128,7 +160,6 @@ class MainActivity : ComponentActivity() {
                 return true
             }
         }
-        // PATCH 4: status check — "where is my order / plumber / booking"
         if (StatusCheckHandler.isStatusQuery(lower) &&
             (currentState == AssistantState.LISTENING || currentState == AssistantState.REORDER_CONFIRM)) {
             handleStatusQuery(text)
@@ -201,7 +232,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // PATCH 3: serviceLauncher saves lastBookingId
     private val serviceLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -210,16 +240,21 @@ class MainActivity : ComponentActivity() {
         Handler(Looper.getMainLooper()).postDelayed({
             val bookingId = result.data?.getStringExtra("booking_id")
             if (!bookingId.isNullOrBlank()) {
-                lastBookingId = bookingId              // saves for "where is my plumber?" queries
-                speak("Your booking is confirmed. Booking ID $bookingId. Is there anything else you need?") {
+                lastBookingId = bookingId
+                // 6: short natural sentence instead of long robot one
+                val lang = LanguageManager.getLanguage()
+                val confirmMsg = when {
+                    lang.startsWith("hi") -> "booking confirm ho gayi! ID $bookingId. aur kuch chahiye?"
+                    else -> "booking confirmed! ID $bookingId. anything else?"
+                }
+                speak(confirmMsg) {
                     currentState = AssistantState.LISTENING
                     startListening()
                 }
             } else {
                 currentState = AssistantState.LISTENING
-                speak("Is there anything else you need? You can order groceries or book another service.") {
-                    startListening()
-                }
+                val lang = LanguageManager.getLanguage()
+                speak(ButlerPhraseBank.get("ask_item", lang)) { startListening() }
             }
         }, 500)
     }
@@ -306,6 +341,9 @@ class MainActivity : ComponentActivity() {
         cart.clear()
         tempName = ""; tempEmail = ""; tempPhone = ""
         pendingReorderSuggestions = emptyList()
+        // 4: reset session memory on new session
+        sessionLastProduct = null
+        sessionLastQty     = 0
         LanguageManager.reset()
         SessionLanguageManager.reset()
         apiClient.clearProductCache()
@@ -341,8 +379,9 @@ class MainActivity : ComponentActivity() {
                                 } else {
                                     currentState = AssistantState.LISTENING
                                     val lastProduct = history.firstOrNull()?.product_name?.takeIf { it.isNotBlank() }
+                                    // 6: shorter, natural greeting
                                     val greeting = if (lastProduct != null)
-                                        "Welcome back $name! Last time you ordered $lastProduct. Say what you need — groceries, plumber, doctor, or any other service."
+                                        "welcome back $name! last time $lastProduct. kya chahiye aaj?"
                                     else IndianLanguageProcessor.getWelcomeGreeting(LanguageManager.getLanguage(), name)
                                     speak(greeting) { startListening() }
                                 }
@@ -618,17 +657,19 @@ class MainActivity : ComponentActivity() {
                             runOnUiThread {
                                 if (cart.isNotEmpty()) {
                                     currentState = AssistantState.CONFIRMING
-                                    showCartAndSpeak("Perfect! Added ${cart.joinToString(", ") { "${it.quantity} ${it.product.name}" }}. Shall I place the order?") { startListening() }
+                                    // 6: shorter confirmation
+                                    showCartAndSpeak(buildShortConfirm(LanguageManager.getLanguage())) { startListening() }
                                 } else {
                                     currentState = AssistantState.LISTENING
-                                    speak("Could not find those products. What would you like?") { startListening() }
+                                    speak("Could not find those products. ${ButlerPhraseBank.get("ask_item", LanguageManager.getLanguage())}") { startListening() }
                                 }
                             }
                         }
                     }
                     MultilingualMatcher.isNo(cleaned) -> {
                         pendingReorderSuggestions = emptyList(); currentState = AssistantState.LISTENING
-                        speak("No problem! What would you like today? I can order groceries or book any service for you.") { startListening() }
+                        // 6: shorter
+                        speak("no problem! ${ButlerPhraseBank.get("ask_item", LanguageManager.getLanguage())}") { startListening() }
                     }
                     else -> {
                         pendingReorderSuggestions = emptyList()
@@ -641,12 +682,25 @@ class MainActivity : ComponentActivity() {
             AssistantState.ASKING_QUANTITY -> {
                 val qty = extractQuantity(text); val product = tempProduct
                 if (product != null) {
-                    cart.add(CartItem(product, qty)); currentState = AssistantState.ASKING_MORE
+                    cart.add(CartItem(product, qty))
+                    // 4: save to session memory
+                    sessionLastProduct = product.name
+                    sessionLastQty     = qty
+                    currentState = AssistantState.ASKING_MORE
                     val suggestion = suggestRelatedItem(product.name)
-                    showCartAndSpeak(if (suggestion != null && cart.size == 1)
-                        "Added $qty ${product.name}. Would you also like $suggestion? Or say done to checkout."
-                    else "Added $qty ${product.name}. More items or say done to checkout?") { startListening() }
-                } else speak("Let us try again. What would you like?") { currentState = AssistantState.LISTENING; startListening() }
+                    val lang       = LanguageManager.getLanguage()
+                    val addedMsg   = ButlerPhraseBank.get("added_item", lang)
+                    val askMore    = ButlerPhraseBank.get("ask_more", lang)
+                    // 4: if suggestion exists and first item, mention it naturally
+                    showCartAndSpeak(
+                        if (suggestion != null && cart.size == 1)
+                            "$addedMsg $qty ${product.name}. $suggestion bhi chahiye? $askMore"
+                        else
+                            "$addedMsg $qty ${product.name}. $askMore"
+                    ) { startListening() }
+                } else speak("Let us try again. ${ButlerPhraseBank.get("ask_item", LanguageManager.getLanguage())}") {
+                    currentState = AssistantState.LISTENING; startListening()
+                }
             }
             AssistantState.ASKING_MORE  -> handleAskingMore(cleaned, text)
             AssistantState.EDITING_CART -> handleCartEdit(cleaned, text)
@@ -655,7 +709,8 @@ class MainActivity : ComponentActivity() {
                 when {
                     intentFromLang == "confirm" || MultilingualMatcher.isYes(cleaned) -> askPaymentMode()
                     intentFromLang == "cancel"  || MultilingualMatcher.isNo(cleaned)  ->
-                        speak("Order cancelled. Goodbye!") { cart.clear(); UserSessionManager.logout(); startWakeWordListening() }
+                        // 6: shorter cancel
+                        speak("theek hai, cancel.") { cart.clear(); UserSessionManager.logout(); startWakeWordListening() }
                     isCartEditIntent(cleaned) -> { currentState = AssistantState.EDITING_CART; handleCartEdit(cleaned, text) }
                     else -> {
                         lifecycleScope.launch {
@@ -663,8 +718,8 @@ class MainActivity : ComponentActivity() {
                             runOnUiThread {
                                 when (parsed.intent) {
                                     "confirm_order" -> askPaymentMode()
-                                    "cancel_order"  -> speak("Order cancelled.") { cart.clear(); UserSessionManager.logout(); startWakeWordListening() }
-                                    else -> speak("Say yes to place the order, or no to cancel.") { startListening() }
+                                    "cancel_order"  -> speak("theek hai, cancel.") { cart.clear(); UserSessionManager.logout(); startWakeWordListening() }
+                                    else -> speak("haan bolein toh order, na bolein toh cancel.") { startListening() }
                                 }
                             }
                         }
@@ -683,7 +738,7 @@ class MainActivity : ComponentActivity() {
     }
 
     // ══════════════════════════════════════════════════════════════════════════
-    // PATCH 5: STATUS QUERY HANDLER
+    // STATUS QUERY HANDLER
     // ══════════════════════════════════════════════════════════════════════════
 
     private fun handleStatusQuery(text: String) {
@@ -727,8 +782,9 @@ class MainActivity : ComponentActivity() {
         val cardInfo = if (card != null) "${card.network} card ending ${card.last4}" else ""
         setUiState(ButlerUiState.PaymentChoice(pendingOrderTotal, pendingOrderSummary, hasSaved, cardInfo))
         val amount   = toSpeakableAmount(pendingOrderTotal)
-        val cardPart = if (hasSaved) "say card to pay with your saved $cardInfo," else "say card to add a new card,"
-        speak("Your total is $amount. How would you like to pay? $cardPart say UPI to pay with UPI, or say QR to scan a QR code.") { startListening() }
+        // 6: shorter payment prompt
+        val cardPart = if (hasSaved) "card pe $cardInfo," else "card,"
+        speak("total $amount. card, UPI, ya QR — kaise pay karein?") { startListening() }
     }
 
     private fun handlePaymentModeChoice(cleaned: String) {
@@ -738,8 +794,8 @@ class MainActivity : ComponentActivity() {
                 val card = PaymentManager.getSavedCard(this); val amount = toSpeakableAmount(pendingOrderTotal)
                 currentState = AssistantState.WAITING_CARD_PAYMENT
                 setUiState(ButlerUiState.WaitingPaymentConfirm("card", pendingOrderTotal))
-                speak(if (card != null) "I will charge your ${card.network} card ending ${card.last4} for $amount. Please complete the payment."
-                else "Please enter your card details and complete the payment for $amount.") {
+                speak(if (card != null) "${card.network} card ${card.last4} pe $amount charge hoga. payment complete karein."
+                else "card details enter karein aur $amount pay karein.") {
                     Handler(Looper.getMainLooper()).postDelayed({ askIfPaid("card") }, 2000)
                 }
             }
@@ -748,43 +804,42 @@ class MainActivity : ComponentActivity() {
                 val amount = toSpeakableAmount(pendingOrderTotal)
                 currentState = AssistantState.WAITING_UPI_PAYMENT
                 setUiState(ButlerUiState.WaitingPaymentConfirm("upi", pendingOrderTotal))
-                speak("Open your UPI app and pay $amount to butler at upi. Take your time.") {
+                speak("UPI app mein $amount pay karein butler at upi pe.") {
                     Handler(Looper.getMainLooper()).postDelayed({ askIfPaid("upi") }, 3000)
                 }
             }
             cleaned.contains("qr") || cleaned.contains("scan") || cleaned.contains("क्यूआर") -> {
                 val amount = toSpeakableAmount(pendingOrderTotal)
                 currentState = AssistantState.WAITING_QR_PAYMENT
-                // Set QR screen FIRST before speaking — speak() would overwrite it with Speaking state
                 setUiState(ButlerUiState.ShowQRCode(pendingOrderTotal, pendingOrderSummary))
-                speakKeepingQRVisible("I have shown a QR code on screen. Scan it with any UPI app to pay $amount.") {
-                    // 20 seconds gives user time to open UPI app and scan
+                speakKeepingQRVisible("screen pe QR code hai. kisi bhi UPI app se $amount pay karein.") {
                     Handler(Looper.getMainLooper()).postDelayed({ askIfPaid("qr") }, 20000)
                 }
             }
-            else -> speak("Say card, UPI, or QR to choose payment method.") { startListening() }
+            else -> speak("card, UPI, ya QR bolein.") { startListening() }
         }
     }
 
     private fun askIfPaid(mode: String) {
         currentState = when (mode) { "card" -> AssistantState.CONFIRMING_CARD_PAID; "upi" -> AssistantState.CONFIRMING_UPI_PAID; else -> AssistantState.CONFIRMING_QR_PAID }
-        speak("Have you completed the payment of ${toSpeakableAmount(pendingOrderTotal)}? Say yes or paid if you have, or no if not yet.") { startListening() }
+        // 6: shorter payment confirmation ask
+        speak("payment ho gayi? haan ya nahi bolein.") { startListening() }
     }
 
     private fun handlePaidOrNotPaid(cleaned: String, mode: String) {
         val paid    = listOf("yes","paid","done","payment done","i paid","completed","transferred","confirm","हाँ","हां","हो गया","పేమెంట్ చేశాను","అవును","ஆம்","ha","kar diya","ho gaya")
         val notPaid = listOf("no","not yet","haven't","wait","not done","failed","नहीं","अभी नहीं","లేదు","ఇంకా","nahi","abhi nahi")
         when {
-            paid.any    { cleaned.contains(it) } -> speak("Great! Payment confirmed. Placing your order now.") { placeOrder() }
+            paid.any    { cleaned.contains(it) } -> speak("perfect! order place kar raha hoon.") { placeOrder() }
             notPaid.any { cleaned.contains(it) } -> {
                 val amount = toSpeakableAmount(pendingOrderTotal)
                 speak(when (mode) {
-                    "card" -> "No problem! Please complete the card payment of $amount."
-                    "upi"  -> "No problem! Please pay $amount to butler at upi."
-                    else   -> "No problem! Please scan the QR code and pay $amount."
+                    "card" -> "theek hai! card se $amount pay karein."
+                    "upi"  -> "theek hai! UPI pe $amount bhejein."
+                    else   -> "theek hai! QR scan karke $amount pay karein."
                 }) { Handler(Looper.getMainLooper()).postDelayed({ askIfPaid(mode) }, 8000) }
             }
-            else -> speak("Say yes if you have paid, or no if you have not.") { startListening() }
+            else -> speak("haan bolein toh paid, nahi bolein toh cancel.") { startListening() }
         }
     }
 
@@ -798,16 +853,16 @@ class MainActivity : ComponentActivity() {
         listOf("remove","delete","हटाओ","హటావో","change","update","बदलो","మార్చు").any { s.contains(it) }
 
     private fun handleCartEdit(cleaned: String, originalText: String) {
-        if (cart.isEmpty()) { speak("Cart is empty. What would you like?") { currentState = AssistantState.LISTENING; startListening() }; return }
+        if (cart.isEmpty()) { speak("cart khaali hai. ${ButlerPhraseBank.get("ask_item", LanguageManager.getLanguage())}") { currentState = AssistantState.LISTENING; startListening() }; return }
         val isRemove = cleaned.contains("remove") || cleaned.contains("delete") || cleaned.contains("हटाओ") || cleaned.contains("हटा")
         val isChange = cleaned.contains("change") || cleaned.contains("update") || cleaned.contains("बदलो") || cleaned.contains("make it")
         if (isRemove) {
             val item = cart.firstOrNull { it.product.name.lowercase().split(" ").any { w -> cleaned.contains(w) && w.length > 3 } }
             if (item != null) {
                 cart.remove(item)
-                if (cart.isEmpty()) speak("Removed ${item.product.name}. Cart empty. What would you like?") { currentState = AssistantState.LISTENING; startListening() }
-                else { currentState = AssistantState.CONFIRMING; showCartAndSpeak("Removed ${item.product.name}. Shall I proceed to payment?") { startListening() } }
-            } else speak("Could not find that. Which item to remove?") { startListening() }
+                if (cart.isEmpty()) speak("${item.product.name} hata diya. cart khaali. ${ButlerPhraseBank.get("ask_item", LanguageManager.getLanguage())}") { currentState = AssistantState.LISTENING; startListening() }
+                else { currentState = AssistantState.CONFIRMING; showCartAndSpeak("${item.product.name} hata diya. ${buildShortConfirm(LanguageManager.getLanguage())}") { startListening() } }
+            } else speak("kaunsa item hatana hai?") { startListening() }
             return
         }
         if (isChange) {
@@ -816,8 +871,8 @@ class MainActivity : ComponentActivity() {
             if (item != null && newQty > 0) {
                 cart[cart.indexOf(item)] = CartItem(item.product, newQty)
                 currentState = AssistantState.CONFIRMING
-                showCartAndSpeak("Updated ${item.product.name} to $newQty. Shall I proceed?") { startListening() }
-            } else speak("Tell me which item to change and the new quantity.") { startListening() }
+                showCartAndSpeak("${item.product.name} $newQty kar diya. ${buildShortConfirm(LanguageManager.getLanguage())}") { startListening() }
+            } else speak("kaunsa item aur kitna chahiye?") { startListening() }
             return
         }
         currentState = AssistantState.CONFIRMING; readCartAndConfirm()
@@ -847,21 +902,21 @@ class MainActivity : ComponentActivity() {
             LanguageManager.setLanguage(parsed.detectedLanguage)
             runOnUiThread {
                 when (parsed.intent) {
-                    "finish_order"  -> { if (cart.isEmpty()) speak("Cart is empty. What would you like?") { startListening() } else readCartAndConfirm() }
+                    "finish_order"  -> { if (cart.isEmpty()) speak("cart khaali hai. ${ButlerPhraseBank.get("ask_item", LanguageManager.getLanguage())}") { startListening() } else readCartAndConfirm() }
                     "confirm_order" -> { if (currentState == AssistantState.CONFIRMING) askPaymentMode() else readCartAndConfirm() }
-                    "cancel_order"  -> speak("Cancelled.") { startWakeWordListening() }
+                    "cancel_order"  -> speak("theek hai, cancel.") { startWakeWordListening() }
                     "history"       -> readOrderHistory()
                     "order", "add_more" -> {
                         if (parsed.items.isEmpty()) {
                             val fb = keywordFallback(cleaned)
-                            if (fb != null) searchAndAskQuantity(fb) else speak("Tell me what you want to order.") { startListening() }
+                            if (fb != null) searchAndAskQuantity(fb) else speak(ButlerPhraseBank.get("ask_item", LanguageManager.getLanguage())) { startListening() }
                         } else if (parsed.items.size == 1) {
                             val i = parsed.items.first(); searchAndAskQuantity(i.name, i.quantity, i.unit)
                         } else {
                             lifecycleScope.launch { addMultipleItemsToCart(parsed.items) }
                         }
                     }
-                    else -> speak("Tell me what you want to order.") { startListening() }
+                    else -> speak(ButlerPhraseBank.get("ask_item", LanguageManager.getLanguage())) { startListening() }
                 }
             }
         }
@@ -872,10 +927,18 @@ class MainActivity : ComponentActivity() {
     // ══════════════════════════════════════════════════════════════════════════
 
     private fun handleAskingMore(cleaned: String, originalText: String) {
+        val lang = LanguageManager.getLanguage()
         when {
             MultilingualMatcher.isYes(cleaned) || cleaned.contains("add") || cleaned.contains("more") ||
                     cleaned.contains("और") || cleaned.contains("aur") -> {
-                currentState = AssistantState.LISTENING; showCartAndSpeak("What else would you like?") { startListening() }
+                currentState = AssistantState.LISTENING
+                // 4: if session has a previous item, suggest it naturally
+                val lastProd = sessionLastProduct
+                val prompt = if (lastProd != null && cart.size == 1)
+                    "wahi waala ${lastProd} dobara? ya kuch aur?"
+                else
+                    ButlerPhraseBank.get("ask_item", lang)
+                showCartAndSpeak(prompt) { startListening() }
             }
             isNoMoreIntent(cleaned) -> readCartAndConfirm()
             isCartEditIntent(cleaned) -> { currentState = AssistantState.EDITING_CART; handleCartEdit(cleaned, originalText) }
@@ -887,9 +950,9 @@ class MainActivity : ComponentActivity() {
                             "finish_order", "cancel_order" -> readCartAndConfirm()
                             "order", "add_more" -> {
                                 if (parsed.items.isNotEmpty()) { currentState = AssistantState.LISTENING; handleOrderIntent(originalText, originalText.lowercase()) }
-                                else showCartAndSpeak("Add more or checkout?") { startListening() }
+                                else showCartAndSpeak(ButlerPhraseBank.get("ask_more", lang)) { startListening() }
                             }
-                            else -> showCartAndSpeak("Add more, or say done to checkout?") { startListening() }
+                            else -> showCartAndSpeak(ButlerPhraseBank.get("ask_more", lang)) { startListening() }
                         }
                     }
                 }
@@ -898,47 +961,67 @@ class MainActivity : ComponentActivity() {
     }
 
     // ══════════════════════════════════════════════════════════════════════════
-    // PRODUCT SEARCH
+    // PRODUCT SEARCH — Fix 1 (filler sound before search)
     // ══════════════════════════════════════════════════════════════════════════
 
     private fun searchAndAskQuantity(itemName: String, qty: Int = 0, unit: String? = null) {
-        lifecycleScope.launch {
-            val recs = productRepo.getTopRecommendations(itemName, userLocation)
-            if (recs.isNotEmpty()) {
-                runOnUiThread { setUiState(ButlerUiState.ShowingRecommendations(itemName, recs)) }
-                val readout = "I found ${recs.size} options for $itemName. " +
-                        recs.mapIndexed { i, r -> "${i + 1}: ${r.productName} at ${toSpeakableAmount(r.priceRs)}" }.joinToString(". ") +
-                        ". Say 1, 2, or 3 to pick."
-                speakKeepingRecsVisible(readout) {
-                    startListeningForSelection(
-                        onNumber = { num -> handleRecSelectionByIndex(num - 1, recs, qty, itemName) },
-                        onOther  = { spoken ->
-                            val pick = recs.firstOrNull { r ->
-                                val rw = r.productName.lowercase().split(" ")
-                                val sw = spoken.lowercase().split(" ").filter { it.length > 2 }
-                                sw.any { s -> rw.any { w -> w.contains(s) || s.contains(w) } }
+        val lang = LanguageManager.getLanguage()
+
+        // 1: play filler sound IMMEDIATELY before the network call
+        // This fires the filler and starts search at the same time — no delay
+        speakFillerThen {
+            lifecycleScope.launch {
+                val recs = productRepo.getTopRecommendations(itemName, userLocation)
+                if (recs.isNotEmpty()) {
+                    runOnUiThread { setUiState(ButlerUiState.ShowingRecommendations(itemName, recs)) }
+                    // 6: shorter product readout — say brand name only, not full long name
+                    val readout = "${recs.size} options mila $itemName ke liye. " +
+                            recs.mapIndexed { i, r ->
+                                val shortName = r.productName.split(" ").take(3).joinToString(" ")
+                                "${i + 1}: $shortName, ${toSpeakableAmount(r.priceRs)}"
+                            }.joinToString(". ") +
+                            ". 1, 2 ya 3 bolein."
+                    speakKeepingRecsVisible(readout) {
+                        startListeningForSelection(
+                            onNumber = { num -> handleRecSelectionByIndex(num - 1, recs, qty, itemName) },
+                            onOther  = { spoken ->
+                                val pick = recs.firstOrNull { r ->
+                                    val rw = r.productName.lowercase().split(" ")
+                                    val sw = spoken.lowercase().split(" ").filter { it.length > 2 }
+                                    sw.any { s -> rw.any { w -> w.contains(s) || s.contains(w) } }
+                                }
+                                if (pick != null) handleRecSelectionByIndex(recs.indexOf(pick), recs, qty, itemName)
+                                else speakKeepingRecsVisible("1, 2 ya 3 bolein.") {
+                                    startListeningForSelection(
+                                        onNumber = { n -> handleRecSelectionByIndex(n - 1, recs, qty, itemName) },
+                                        onOther  = { _ -> speak(ButlerPhraseBank.get("ask_item", lang)) { currentState = AssistantState.LISTENING; startListening() } }
+                                    )
+                                }
+                            },
+                            retryPrompt = "1, 2 ya 3 bolein."
+                        )
+                    }
+                } else {
+                    val product = apiClient.searchProduct(itemName)
+                    runOnUiThread {
+                        if (product != null) {
+                            tempProduct = product
+                            if (qty > 0) {
+                                cart.add(CartItem(product, qty))
+                                sessionLastProduct = product.name
+                                sessionLastQty     = qty
+                                currentState = AssistantState.ASKING_MORE
+                                val addedMsg = ButlerPhraseBank.get("added_item", lang)
+                                val askMore  = ButlerPhraseBank.get("ask_more", lang)
+                                showCartAndSpeak("$addedMsg $qty ${product.name}. $askMore") { startListening() }
+                            } else {
+                                // 6: shorter quantity ask — just product name + kitna
+                                currentState = AssistantState.ASKING_QUANTITY
+                                val qPhrase = ButlerPhraseBank.get("ask_quantity", lang)
+                                speak("${product.name}? $qPhrase") { startListening() }
                             }
-                            if (pick != null) handleRecSelectionByIndex(recs.indexOf(pick), recs, qty, itemName)
-                            else speakKeepingRecsVisible("Please say 1, 2, or 3.") {
-                                startListeningForSelection(
-                                    onNumber = { n -> handleRecSelectionByIndex(n - 1, recs, qty, itemName) },
-                                    onOther  = { _ -> speak("Let us try again. What would you like?") { currentState = AssistantState.LISTENING; startListening() } }
-                                )
-                            }
-                        },
-                        retryPrompt = "Please say 1, 2, or 3 to choose a product."
-                    )
-                }
-            } else {
-                val product = apiClient.searchProduct(itemName)
-                runOnUiThread {
-                    if (product != null) {
-                        tempProduct = product
-                        if (qty > 0) {
-                            cart.add(CartItem(product, qty)); currentState = AssistantState.ASKING_MORE
-                            showCartAndSpeak("Added $qty ${product.name}. More items or checkout?") { startListening() }
-                        } else { currentState = AssistantState.ASKING_QUANTITY; speak("How many ${product.name} would you like?") { startListening() } }
-                    } else speak("Could not find $itemName. What else would you like?") { startListening() }
+                        } else speak("$itemName nahi mila. ${ButlerPhraseBank.get("ask_item", lang)}") { startListening() }
+                    }
                 }
             }
         }
@@ -946,21 +1029,31 @@ class MainActivity : ComponentActivity() {
 
     private fun handleRecSelectionByIndex(index: Int, recs: List<com.demo.butler_voice_app.api.ProductRecommendation>, qty: Int, itemName: String) {
         val pick = recs.getOrNull(index)
+        val lang = LanguageManager.getLanguage()
         if (pick != null) {
             val finalQty = if (qty > 0) qty else 1
             cart.add(CartItem(ApiClient.Product(id = pick.productId, name = pick.productName, price = pick.priceRs, unit = pick.unit), finalQty))
+            // 4: save to session memory
+            sessionLastProduct = pick.productName
+            sessionLastQty     = finalQty
             val suggestion = suggestRelatedItem(pick.productName)
             currentState   = AssistantState.ASKING_MORE
-            showCartAndSpeak(if (suggestion != null && cart.size == 1)
-                "Added ${pick.productName} from ${pick.storeName}. Would you also like $suggestion? Or say done to checkout."
-            else "Added ${pick.productName} from ${pick.storeName}. More items or say done to checkout?") { startListening() }
+            val addedMsg   = ButlerPhraseBank.get("added_item", lang)
+            val askMore    = ButlerPhraseBank.get("ask_more", lang)
+            // 5: transition into "ask more" naturally
+            showCartAndSpeak(
+                if (suggestion != null && cart.size == 1)
+                    "$addedMsg ${pick.productName}. $suggestion bhi chahiye? $askMore"
+                else
+                    "$addedMsg ${pick.productName}. $askMore"
+            ) { startListening() }
         } else {
-            speakKeepingRecsVisible("Sorry, that option is not available. Please say 1, 2, or 3.") {
+            speakKeepingRecsVisible("1, 2 ya 3 mein se bolein.") {
                 startListeningForSelection(
                     onNumber = { n -> handleRecSelectionByIndex(n - 1, recs, qty, itemName) },
-                    onOther  = { _ -> speak("Please say 1, 2, or 3.") { startListeningForSelection(
+                    onOther  = { _ -> speak("1, 2 ya 3 bolein.") { startListeningForSelection(
                         onNumber = { n -> handleRecSelectionByIndex(n - 1, recs, qty, itemName) },
-                        onOther  = { _ -> speak("Let us try again. What would you like?") { currentState = AssistantState.LISTENING; startListening() } }
+                        onOther  = { _ -> speak(ButlerPhraseBank.get("ask_item", lang)) { currentState = AssistantState.LISTENING; startListening() } }
                     ) } }
                 )
             }
@@ -975,7 +1068,7 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             try {
                 val userId = UserSessionManager.currentUserId()
-                if (userId == null) { speak("Session expired. Say Hey Butler to start.") { startWakeWordListening() }; return@launch }
+                if (userId == null) { speak("session expire ho gayi. hey butler bolein.") { startWakeWordListening() }; return@launch }
                 val orderResult = apiClient.createOrder(cart, userId)
                 val shortId     = if (orderResult.public_id.isNotBlank()) orderResult.public_id else orderResult.id.takeLast(6).uppercase()
                 val firstName   = UserSessionManager.currentProfile?.full_name?.split(" ")?.first() ?: ""
@@ -996,7 +1089,7 @@ class MainActivity : ComponentActivity() {
                 }
             } catch (e: Exception) {
                 Log.e("Butler", "Order failed: ${e.message}")
-                runOnUiThread { currentState = AssistantState.CONFIRMING; showCartAndSpeak("Network issue. Say yes to retry or no to cancel.") { startListening() } }
+                runOnUiThread { currentState = AssistantState.CONFIRMING; showCartAndSpeak("network issue. retry karein? haan ya nahi bolein.") { startListening() } }
             }
         }
     }
@@ -1024,10 +1117,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun readCartAndConfirm() {
-        if (cart.isEmpty()) { speak("Cart is empty. What would you like?") { currentState = AssistantState.LISTENING; startListening() }; return }
+        if (cart.isEmpty()) { speak("cart khaali hai. ${ButlerPhraseBank.get("ask_item", LanguageManager.getLanguage())}") { currentState = AssistantState.LISTENING; startListening() }; return }
         currentState = AssistantState.CONFIRMING
-        val total = cart.sumOf { it.product.price * it.quantity }
-        showCartAndSpeak("You have ${cart.joinToString(", ") { "${it.quantity} ${it.product.name}" }}. Total is ${toSpeakableAmount(total)}. Say yes to proceed to payment.") { startListening() }
+        // 5: transition into confirmation naturally
+        speakWithTransition(buildShortConfirm(LanguageManager.getLanguage())) { startListening() }
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -1042,10 +1135,15 @@ class MainActivity : ComponentActivity() {
             if (p != null) { cart.add(CartItem(p, item.quantity)); found.add("${item.quantity} ${p.name}") }
             else { notFound.add(item.name); AnalyticsManager.logItemNotFound(item.name) }
         }
+        val lang = LanguageManager.getLanguage()
         runOnUiThread {
             currentState = AssistantState.ASKING_MORE
-            showCartAndSpeak(if (notFound.isEmpty()) "Added ${found.joinToString(", ")}. More or checkout?"
-            else "Added ${found.joinToString(", ")}. Could not find ${notFound.joinToString(", ")}. Anything else?") { startListening() }
+            showCartAndSpeak(
+                if (notFound.isEmpty())
+                    "${found.joinToString(", ")} add ho gaya. ${ButlerPhraseBank.get("ask_more", lang)}"
+                else
+                    "${found.joinToString(", ")} add ho gaya. ${notFound.joinToString(", ")} nahi mila. ${ButlerPhraseBank.get("ask_more", lang)}"
+            ) { startListening() }
         }
     }
 
@@ -1093,30 +1191,32 @@ class MainActivity : ComponentActivity() {
                     AnalyticsManager.logUserAuth("login", LanguageManager.getLanguage())
                     val lastProduct = history.firstOrNull()?.product_name
                         ?.takeIf { it.isNotBlank() && it != "null" }
-                    val greeting    = if (lastProduct != null) "Welcome back $firstName! Last time you ordered $lastProduct. What would you like?"
+                    // 6: shorter welcome back
+                    val greeting = if (lastProduct != null)
+                        "welcome back $firstName! last time $lastProduct tha. ${ButlerPhraseBank.get("ask_item", LanguageManager.getLanguage())}"
                     else IndianLanguageProcessor.getWelcomeGreeting(LanguageManager.getLanguage(), firstName)
                     speak(greeting) { startListening() }
                 }
             },
-            onFailure = { runOnUiThread { speak("Login failed. Please check your email and password.") { startWakeWordListening() } } }
+            onFailure = { runOnUiThread { speak("login nahi hua. email aur password check karein.") { startWakeWordListening() } } }
         )
     }
 
     private fun readOrderHistory() {
         val h = UserSessionManager.purchaseHistory
-        if (h.isEmpty()) speak("No orders yet. What would you like?") { startListening() }
-        else speak("Recent orders: ${h.take(3).joinToString(", ") { it.product_name ?: "unknown" }}. Order again?") { startListening() }
+        if (h.isEmpty()) speak("koi order nahi hai abhi tak. ${ButlerPhraseBank.get("ask_item", LanguageManager.getLanguage())}") { startListening() }
+        else speak("recent orders: ${h.take(3).joinToString(", ") { it.product_name ?: "unknown" }}. dobara order karein?") { startListening() }
     }
 
     private fun repeatLastOrder() {
         lifecycleScope.launch {
             val userId = UserSessionManager.currentUserId() ?: return@launch
             val orders = apiClient.getOrderHistory(userId)
-            if (orders.isEmpty()) { runOnUiThread { speak("No previous orders.") { startListening() } }; return@launch }
+            if (orders.isEmpty()) { runOnUiThread { speak("koi purana order nahi.") { startListening() } }; return@launch }
             val items  = apiClient.getOrderItems(orders.first().id)
-            if (items.isEmpty()) { runOnUiThread { speak("Could not load last order.") { startListening() } }; return@launch }
+            if (items.isEmpty()) { runOnUiThread { speak("last order load nahi hua.") { startListening() } }; return@launch }
             for (item in items) { apiClient.searchProduct(item.product_name)?.let { cart.add(CartItem(it, item.quantity)) } }
-            runOnUiThread { currentState = AssistantState.CONFIRMING; showCartAndSpeak("Repeating your last order. Say yes to pay.") { startListening() } }
+            runOnUiThread { currentState = AssistantState.CONFIRMING; showCartAndSpeak("last order ready hai. ${buildShortConfirm(LanguageManager.getLanguage())}") { startListening() } }
         }
     }
 
@@ -1156,14 +1256,12 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // Speaks without changing UI state — used for QR screen so ShowQRCode stays visible
     private fun speakKeepingQRVisible(text: String, onDone: (() -> Unit)? = null) {
         sarvamSTT.stop()
         lifecycleScope.launch {
             val lang      = LanguageManager.getLanguage()
             val finalText = TranslationManager.translate(text, lang)
             Log.d("Butler", "QR speak (no UI change): $finalText")
-            // Deliberately does NOT call setUiState — QR screen stays on screen
             runOnUiThread { ttsManager.speak(text = finalText, language = lang, onDone = { onDone?.invoke() }) }
         }
     }
