@@ -18,16 +18,12 @@ data class ProductRecommendation(
     val storeName: String,
     val distanceKm: Double
 ) {
-    // Badge label for first card
-    val isBestValue: Boolean get() = false // set externally after sorting
-
     val priceLabel: String get() = "₹${priceRs.toInt()}"
 
     val distanceLabel: String get() =
         if (distanceKm < 1.0) "${(distanceKm * 1000).toInt()} m away"
-        else String.format("%.1f km away", distanceKm)
+        else String.format(java.util.Locale.getDefault(), "%.1f km away", distanceKm)
 
-    // Voice shortcut: first word of product name
     val voiceShortcut: String get() = productName.split(" ").firstOrNull() ?: productName
 }
 
@@ -38,16 +34,11 @@ class SmartProductRepository(private val supabaseClient: SupabaseClient) {
         private const val TOP_N = 3
     }
 
-    /**
-     * Calls search_products_near() RPC and returns top 3 recommendations
-     * sorted by distance then price.
-     */
     suspend fun getTopRecommendations(
         keyword: String,
         userLocation: Location?
     ): List<ProductRecommendation> = withContext(Dispatchers.IO) {
 
-        // Default to Indore city center if no GPS fix yet
         val lat = userLocation?.latitude ?: 22.7196
         val lng = userLocation?.longitude ?: 75.8577
 
@@ -90,17 +81,11 @@ class SmartProductRepository(private val supabaseClient: SupabaseClient) {
     }
 
     // ── LIVE PRICE INTELLIGENCE ───────────────────────────────────────────────
-// Queries ALL stores for the item and returns a PriceComparison
-// showing cheapest vs others so Butler can announce the savings
     suspend fun getPriceComparison(
         itemName: String,
-        userLocation: android.location.Location?
+        userLocation: Location?
     ): PriceComparison? {
         return try {
-            val lat = userLocation?.latitude ?: 17.3850
-            val lng = userLocation?.longitude ?: 78.4867
-
-            // Reuse your existing getTopRecommendations but get ALL results
             val recs = getTopRecommendations(itemName, userLocation)
             if (recs.isEmpty()) return null
 
@@ -109,27 +94,29 @@ class SmartProductRepository(private val supabaseClient: SupabaseClient) {
                     storeName    = rec.storeName,
                     storeId      = rec.storeId,
                     productName  = rec.productName,
-                    productId    = rec.productId,
+                    productId    = rec.productId.toString(),
                     priceRs      = rec.priceRs,
                     unit         = rec.unit,
-                    distanceKm   = rec.storeDistanceKm,
-                    deliveryMins = (rec.storeDistanceKm * 8).toInt().coerceIn(10, 60)
+                    distanceKm   = rec.distanceKm,
+                    deliveryMins = (rec.distanceKm * 8).toInt().coerceIn(10, 60)
                 )
             }.sortedBy { it.priceRs }
 
-            val cheapest   = storePrices.first()
+            if (storePrices.isEmpty()) return null
+
+            val cheapest      = storePrices.first()
             val mostExpensive = storePrices.last()
-            val savings    = mostExpensive.priceRs - cheapest.priceRs
+            val savings       = mostExpensive.priceRs - cheapest.priceRs
 
             PriceComparison(
-                itemName   = itemName,
-                cheapest   = cheapest,
-                others     = storePrices.drop(1),
-                savingsRs  = savings,
-                allPrices  = storePrices
+                itemName  = itemName,
+                cheapest  = cheapest,
+                others    = storePrices.drop(1),
+                savingsRs = savings,
+                allPrices = storePrices
             )
         } catch (e: Exception) {
-            android.util.Log.e("PriceComparison", "Failed: ${e.message}")
+            Log.e(TAG, "getPriceComparison failed: ${e.message}")
             null
         }
     }
