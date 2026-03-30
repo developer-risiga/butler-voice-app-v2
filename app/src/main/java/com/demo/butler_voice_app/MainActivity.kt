@@ -119,7 +119,11 @@ class MainActivity : ComponentActivity() {
         if (currentState == AssistantState.LISTENING || currentState == AssistantState.REORDER_CONFIRM) {
             if (ServiceVoiceHandler.isServiceRequest(lower)) {
                 val intent     = ServiceManager.detectServiceIntent(text)
-                val sectorName = intent.sector?.displayName ?: "service"
+                // FIX: use localised sector name so Hindi doesn't say "Finding Plumber आपके पास"
+                val lang       = LanguageManager.getLanguage()
+                val sectorName = intent.sector?.let {
+                    com.demo.butler_voice_app.ai.HindiSectorNames.get(it.name, lang)
+                } ?: "service"
                 speak("Finding $sectorName providers near you.") { launchServiceFlow(text) }
                 return true
             }
