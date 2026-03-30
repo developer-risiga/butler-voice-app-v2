@@ -1,6 +1,8 @@
 package com.demo.butler_voice_app
 
 import android.content.Intent
+import com.demo.butler_voice_app.api.FamilyMember
+import com.demo.butler_voice_app.api.FamilyProfileManager
 import com.demo.butler_voice_app.api.PaymentManager
 import com.demo.butler_voice_app.api.SmartReorderManager
 import com.demo.butler_voice_app.api.ReorderSuggestion
@@ -74,7 +76,8 @@ enum class AssistantState {
     ASKING_PAYMENT_MODE,
     WAITING_CARD_PAYMENT, WAITING_UPI_PAYMENT, WAITING_QR_PAYMENT,
     CONFIRMING_CARD_PAID, CONFIRMING_UPI_PAID, CONFIRMING_QR_PAID,
-    IN_SERVICE_FLOW
+    IN_SERVICE_FLOW,
+    ASKING_WHO   // ← Family Profiles: who is speaking?
 }
 
 class MainActivity : ComponentActivity() {
@@ -99,13 +102,9 @@ class MainActivity : ComponentActivity() {
 
     private var sessionLastProduct: String? = null
     private var sessionLastQty: Int = 0
-
     private var lastBookingId: String? = null
 
-    // ── Proactive Butler ──────────────────────────────────────────────────────
     private var pendingProactiveData: ProactiveData? = null
-
-    // ── Mood Detection ────────────────────────────────────────────────────────
     private var currentMood: UserMood = UserMood.CALM
 
     private lateinit var ttsManager : TTSManager
@@ -195,6 +194,8 @@ class MainActivity : ComponentActivity() {
                         setUiState(ButlerUiState.VoiceSignupStep(ButlerUiState.SignupStep.CREATING_ACCOUNT, displayName, email))
                         UserSessionManager.signup(email, pass, displayName, "").fold(
                             onSuccess = { profile ->
+                                // Register this new user as a family member
+                                FamilyProfileManager.ensureCurrentUserRegistered(this@MainActivity, profile)
                                 currentState = AssistantState.LISTENING
                                 val firstName = profile.full_name?.split(" ")?.first() ?: displayName
                                 speak(IndianLanguageProcessor.getWelcomeGreeting(LanguageManager.getLanguage(), firstName)) { startListening() }
@@ -223,6 +224,7 @@ class MainActivity : ComponentActivity() {
                     setUiState(ButlerUiState.VoiceSignupStep(ButlerUiState.SignupStep.CREATING_ACCOUNT, displayName, gEmail))
                     UserSessionManager.signup(gEmail, googlePass, displayName, "").fold(
                         onSuccess = { profile ->
+                            FamilyProfileManager.ensureCurrentUserRegistered(this@MainActivity, profile)
                             currentState = AssistantState.LISTENING
                             val firstName = profile.full_name?.split(" ")?.first() ?: displayName.split(" ").first()
                             AnalyticsManager.logUserAuth("google", LanguageManager.getLanguage())
@@ -279,6 +281,10 @@ class MainActivity : ComponentActivity() {
         audioManager.mode             = AudioManager.MODE_NORMAL
         audioManager.isSpeakerphoneOn = true
         SessionStore.init(this)
+
+        // ── Load family profiles from SharedPreferences ───────────────────────
+        FamilyProfileManager.load(this)
+
         startLocationUpdates()
         sarvamSTT = SarvamSTTManager(this, BuildConfig.SARVAM_API_KEY)
         porcupine = WakeWordManager(this, BuildConfig.PORCUPINE_ACCESS_KEY) {
@@ -378,6 +384,7 @@ class MainActivity : ComponentActivity() {
         sessionLastQty     = 0
         currentMood = UserMood.CALM
         MoodDetector.reset()
+        FamilyProfileManager.clearActive()   // ← reset active family member
         LanguageManager.reset()
         SessionLanguageManager.reset()
         apiClient.clearProductCache()
@@ -398,45 +405,67 @@ class MainActivity : ComponentActivity() {
             val restored = UserSessionManager.tryRestoreSession()
             runOnUiThread {
                 if (restored && UserSessionManager.currentProfile != null) {
-                    val name    = UserSessionManager.currentProfile?.full_name?.split(" ")?.first() ?: "there"
-                    val history = UserSessionManager.purchaseHistory
+                    val profile = UserSessionManager.currentProfile!!
                     val lang    = LanguageManager.getLanguage()
-                    AnalyticsManager.logSessionStart(UserSessionManager.currentUserId(), lang)
-                    if (history.isNotEmpty()) {
-                        lifecycleScope.launch {
-                            val suggestions = SmartReorderManager.getSuggestions(UserSessionManager.currentUserId() ?: "")
-                            val smartMsg    = SmartReorderManager.buildReorderGreeting(suggestions, name)
-                            runOnUiThread {
-                                if (smartMsg != null && suggestions.isNotEmpty()) {
-                                    pendingReorderSuggestions = suggestions
-                                    currentState = AssistantState.REORDER_CONFIRM
-                                    speak(smartMsg) { startListening() }
-                                } else {
-                                    currentState = AssistantState.LISTENING
-                                    val lastProduct = history.firstOrNull()?.product_name?.takeIf { it.isNotBlank() }
-                                    // ── MOOD: if TIRED, proactively suggest reorder ───────
-                                    val greeting = when {
-                                        MoodAdapter.shouldSuggestReorder(currentMood) && lastProduct != null ->
-                                            MoodAdapter.adaptGreeting(currentMood, name, lang)
-                                        lastProduct != null ->
-                                            "welcome back $name! last time $lastProduct. kya chahiye aaj?"
-                                        else ->
-                                            IndianLanguageProcessor.getWelcomeGreeting(lang, name)
-                                    }
-                                    speak(greeting) { startListening() }
-                                }
-                            }
-                        }
-                    } else {
-                        currentState = AssistantState.LISTENING
-                        speak(IndianLanguageProcessor.getWelcomeGreeting(LanguageManager.getLanguage(), name)) { startListening() }
+
+                    // ── Register current user as family member if not yet done ──
+                    FamilyProfileManager.ensureCurrentUserRegistered(this@MainActivity, profile)
+
+                    // ── FAMILY PROFILES: if multiple members, ask who it is ────
+                    if (FamilyProfileManager.hasFamilyProfiles()) {
+                        currentState = AssistantState.ASKING_WHO
+                        val members  = FamilyProfileManager.getMembers()
+                        val question = FamilyProfileManager.buildWhoQuestion(lang)
+                        setUiState(ButlerUiState.FamilySelection(members, question))
+                        speak(question) { startListening() }
+                        return@runOnUiThread
                     }
+
+                    // ── Single user — proceed as before ──────────────────────
+                    val name    = profile.full_name?.split(" ")?.first() ?: "there"
+                    val history = UserSessionManager.purchaseHistory
+                    AnalyticsManager.logSessionStart(UserSessionManager.currentUserId(), lang)
+                    proceedAfterIdentification(name, history, lang)
                 } else {
                     setUiState(ButlerUiState.AuthChoice)
                     try { stopLockTask() } catch (_: Exception) {}
                     authLauncher.launch(Intent(this@MainActivity, AuthActivity::class.java))
                 }
             }
+        }
+    }
+
+    // ── Shared greeting logic used by both single-user and family-identified paths
+    private fun proceedAfterIdentification(name: String, history: List<com.demo.butler_voice_app.api.PurchaseSummary>, lang: String) {
+        if (history.isNotEmpty()) {
+            lifecycleScope.launch {
+                val userId      = FamilyProfileManager.activeProfile?.userId
+                    ?: UserSessionManager.currentUserId() ?: ""
+                val suggestions = SmartReorderManager.getSuggestions(userId)
+                val smartMsg    = SmartReorderManager.buildReorderGreeting(suggestions, name)
+                runOnUiThread {
+                    if (smartMsg != null && suggestions.isNotEmpty()) {
+                        pendingReorderSuggestions = suggestions
+                        currentState = AssistantState.REORDER_CONFIRM
+                        speak(smartMsg) { startListening() }
+                    } else {
+                        currentState = AssistantState.LISTENING
+                        val lastProduct = history.firstOrNull()?.product_name?.takeIf { it.isNotBlank() }
+                        val greeting = when {
+                            MoodAdapter.shouldSuggestReorder(currentMood) && lastProduct != null ->
+                                MoodAdapter.adaptGreeting(currentMood, name, lang)
+                            lastProduct != null ->
+                                "welcome back $name! last time $lastProduct. kya chahiye aaj?"
+                            else ->
+                                IndianLanguageProcessor.getWelcomeGreeting(lang, name)
+                        }
+                        speak(greeting) { startListening() }
+                    }
+                }
+            }
+        } else {
+            currentState = AssistantState.LISTENING
+            speak(IndianLanguageProcessor.getWelcomeGreeting(lang, name)) { startListening() }
         }
     }
 
@@ -451,7 +480,7 @@ class MainActivity : ComponentActivity() {
     }
 
     // ══════════════════════════════════════════════════════════════════════════
-    // STT — with Mood Detection wired in
+    // STT
     // ══════════════════════════════════════════════════════════════════════════
 
     private fun startListening() {
@@ -468,11 +497,9 @@ class MainActivity : ComponentActivity() {
                     val duration = sarvamSTT.lastRecordingDurationMs
                     if (pcm.isNotEmpty()) {
                         currentMood = MoodDetector.analyse(pcm, duration)
-                        Log.d("Butler", "Mood detected: $currentMood")
+                        Log.d("Butler", "Mood: $currentMood")
                     }
-                    if (transcript.isBlank()) {
-                        MoodDetector.recordRetry()
-                    }
+                    if (transcript.isBlank()) MoodDetector.recordRetry()
                     // ─────────────────────────────────────────────────────────
 
                     if (transcript.isNotBlank() && transcript.length > 3) {
@@ -581,6 +608,47 @@ class MainActivity : ComponentActivity() {
         val lang    = LanguageManager.getLanguage()
         if (routeTranscript(text, lower)) return
         when (currentState) {
+
+            // ── FAMILY PROFILES: who is speaking? ─────────────────────────────
+            AssistantState.ASKING_WHO -> {
+                val detected = FamilyProfileManager.detectSpeaker(text)
+                if (detected != null) {
+                    FamilyProfileManager.setActive(detected)
+                    currentState = AssistantState.LISTENING
+                    val greeting = FamilyProfileManager.buildPersonalGreeting(detected, lang)
+                    AnalyticsManager.logSessionStart(detected.userId, lang)
+                    lifecycleScope.launch {
+                        val suggestions = SmartReorderManager.getSuggestions(detected.userId)
+                        val smartMsg    = SmartReorderManager.buildReorderGreeting(suggestions, detected.displayName)
+                        runOnUiThread {
+                            if (smartMsg != null && suggestions.isNotEmpty()) {
+                                pendingReorderSuggestions = suggestions
+                                currentState = AssistantState.REORDER_CONFIRM
+                                speak(smartMsg) { startListening() }
+                            } else {
+                                speak(greeting) { startListening() }
+                            }
+                        }
+                    }
+                } else {
+                    // Not recognised — show members again, one retry then fall through
+                    val members  = FamilyProfileManager.getMembers()
+                    val names    = members.joinToString(", ") { it.displayName }
+                    val retry    = when {
+                        lang.startsWith("hi") -> "pehchan nahi hua. $names mein se kaun hain aap?"
+                        else                  -> "didn't catch that — are you $names?"
+                    }
+                    setUiState(ButlerUiState.FamilySelection(members, retry))
+                    speak(retry) {
+                        // After one retry fall through to normal single-user flow
+                        val profile = UserSessionManager.currentProfile!!
+                        val name    = profile.full_name?.split(" ")?.first() ?: "there"
+                        currentState = AssistantState.LISTENING
+                        speak(IndianLanguageProcessor.getWelcomeGreeting(lang, name)) { startListening() }
+                    }
+                }
+            }
+
             AssistantState.ASKING_IS_NEW_USER -> {
                 when {
                     cleaned.contains("new") || cleaned.contains("first") || cleaned.contains("register") ||
@@ -680,6 +748,7 @@ class MainActivity : ComponentActivity() {
                         speak("Creating your account, please wait.") {}
                         UserSessionManager.signup(tempEmail, password, tempName, tempPhone).fold(
                             onSuccess = { profile ->
+                                FamilyProfileManager.ensureCurrentUserRegistered(this@MainActivity, profile)
                                 currentState = AssistantState.LISTENING
                                 val firstName = profile.full_name?.split(" ")?.first() ?: tempName
                                 AnalyticsManager.logUserAuth("voice_signup", LanguageManager.getLanguage())
@@ -765,17 +834,14 @@ class MainActivity : ComponentActivity() {
                 val qty = extractQuantity(text); val product = tempProduct
                 if (product != null) {
                     cart.add(CartItem(product, qty))
-                    sessionLastProduct = product.name
-                    sessionLastQty     = qty
+                    sessionLastProduct = product.name; sessionLastQty = qty
                     currentState = AssistantState.ASKING_MORE
                     val suggestion = suggestRelatedItem(product.name)
                     val addedMsg   = ButlerPhraseBank.get("added_item", lang)
                     val askMore    = ButlerPhraseBank.get("ask_more", lang)
                     showCartAndSpeak(
-                        if (suggestion != null && cart.size == 1)
-                            "$addedMsg $qty ${product.name}. $suggestion bhi chahiye? $askMore"
-                        else
-                            "$addedMsg $qty ${product.name}. $askMore"
+                        if (suggestion != null && cart.size == 1) "$addedMsg $qty ${product.name}. $suggestion bhi chahiye? $askMore"
+                        else "$addedMsg $qty ${product.name}. $askMore"
                     ) { startListening() }
                 } else speak("Let us try again. ${ButlerPhraseBank.get("ask_item", LanguageManager.getLanguage())}") {
                     currentState = AssistantState.LISTENING; startListening()
@@ -829,9 +895,7 @@ class MainActivity : ComponentActivity() {
                 text = text, lang = lang, firstName = firstName,
                 userId = userId, lastBookingId = lastBookingId
             )
-            runOnUiThread {
-                speak(result.voiceText) { currentState = AssistantState.LISTENING; startListening() }
-            }
+            runOnUiThread { speak(result.voiceText) { currentState = AssistantState.LISTENING; startListening() } }
         }
     }
 
@@ -995,10 +1059,8 @@ class MainActivity : ComponentActivity() {
                     cleaned.contains("और") || cleaned.contains("aur") -> {
                 currentState = AssistantState.LISTENING
                 val lastProd = sessionLastProduct
-                val prompt = if (lastProd != null && cart.size == 1)
-                    "wahi waala ${lastProd} dobara? ya kuch aur?"
-                else
-                    ButlerPhraseBank.get("ask_item", lang)
+                val prompt = if (lastProd != null && cart.size == 1) "wahi waala ${lastProd} dobara? ya kuch aur?"
+                else ButlerPhraseBank.get("ask_item", lang)
                 showCartAndSpeak(prompt) { startListening() }
             }
             isNoMoreIntent(cleaned) -> readCartAndConfirm()
@@ -1022,7 +1084,7 @@ class MainActivity : ComponentActivity() {
     }
 
     // ══════════════════════════════════════════════════════════════════════════
-    // PRODUCT SEARCH — with Mood Adaptation
+    // PRODUCT SEARCH — with Mood Adaptation + Price Intelligence
     // ══════════════════════════════════════════════════════════════════════════
 
     private fun searchAndAskQuantity(itemName: String, qty: Int = 0, unit: String? = null) {
@@ -1033,35 +1095,23 @@ class MainActivity : ComponentActivity() {
                 if (recs.isNotEmpty()) {
                     runOnUiThread { setUiState(ButlerUiState.ShowingRecommendations(itemName, recs)) }
 
-                    // ── MOOD ADAPTATION: FRUSTRATED or RUSHED — skip options list ──
-                    if (MoodAdapter.shouldSkipOptions(currentMood) && recs.isNotEmpty()) {
-                        val best    = recs.minByOrNull { it.priceRs }!!
-                        val ack     = if (currentMood == UserMood.FRUSTRATED)
-                            MoodAdapter.getFrustrationAck(lang) else ""
-                        val msg     = MoodAdapter.buildRushedProductAnnouncement(
-                            best.productName, best.priceRs, best.storeName, lang
-                        )
+                    // ── MOOD: FRUSTRATED or RUSHED — skip options, pick cheapest ──
+                    if (MoodAdapter.shouldSkipOptions(currentMood)) {
+                        val best = recs.minByOrNull { it.priceRs }!!
+                        val ack  = if (currentMood == UserMood.FRUSTRATED) MoodAdapter.getFrustrationAck(lang) else ""
+                        val msg  = MoodAdapter.buildRushedProductAnnouncement(best.productName, best.priceRs, best.storeName, lang)
                         runOnUiThread {
                             speakKeepingRecsVisible("$ack $msg".trim()) {
                                 startListeningForSelection(
                                     onNumber = { handleRecSelectionByIndex(0, recs, qty, itemName) },
-                                    onOther  = { spoken ->
-                                        val lo = spoken.lowercase()
-                                        if (lo.contains("haan") || lo.contains("yes") ||
-                                            lo.contains("loon") || lo.contains("order")) {
-                                            handleRecSelectionByIndex(0, recs, qty, itemName)
-                                        } else {
-                                            handleRecSelectionByIndex(0, recs, qty, itemName)
-                                        }
-                                    }
+                                    onOther  = { _ -> handleRecSelectionByIndex(0, recs, qty, itemName) }
                                 )
                             }
                         }
                         return@launch
                     }
-                    // ── END MOOD ADAPTATION ───────────────────────────────────────
 
-                    // ── LIVE PRICE INTELLIGENCE ───────────────────────────────────
+                    // ── LIVE PRICE INTELLIGENCE ───────────────────────────────
                     val comparison = productRepo.getPriceComparison(itemName, userLocation)
                     val readout = if (comparison != null && comparison.allPrices.size > 1) {
                         PriceComparisonEngine.buildVoiceAnnouncement(comparison, lang)
@@ -1092,9 +1142,7 @@ class MainActivity : ComponentActivity() {
                                     else speakKeepingRecsVisible("1, 2 ya 3 bolein.") {
                                         startListeningForSelection(
                                             onNumber = { n -> handleRecSelectionByIndex(n - 1, recs, qty, itemName) },
-                                            onOther  = { _ -> speak(ButlerPhraseBank.get("ask_item", lang)) {
-                                                currentState = AssistantState.LISTENING; startListening()
-                                            }}
+                                            onOther  = { _ -> speak(ButlerPhraseBank.get("ask_item", lang)) { currentState = AssistantState.LISTENING; startListening() } }
                                         )
                                     }
                                 }
@@ -1154,7 +1202,7 @@ class MainActivity : ComponentActivity() {
     }
 
     // ══════════════════════════════════════════════════════════════════════════
-    // PLACE ORDER
+    // PLACE ORDER — saves family member last order summary
     // ══════════════════════════════════════════════════════════════════════════
 
     private fun placeOrder() {
@@ -1164,11 +1212,19 @@ class MainActivity : ComponentActivity() {
                 if (userId == null) { speak("session expire ho gayi. hey butler bolein.") { startWakeWordListening() }; return@launch }
                 val orderResult = apiClient.createOrder(cart, userId)
                 val shortId     = if (orderResult.public_id.isNotBlank()) orderResult.public_id else orderResult.id.takeLast(6).uppercase()
-                val firstName   = UserSessionManager.currentProfile?.full_name?.split(" ")?.first() ?: ""
+                val firstName   = FamilyProfileManager.activeProfile?.displayName?.split(" ")?.first()
+                    ?: UserSessionManager.currentProfile?.full_name?.split(" ")?.first() ?: ""
                 val lang        = LanguageManager.getLanguage()
                 Log.d("Butler", "Order placed: ${orderResult.id}")
                 AnalyticsManager.logOrderPlaced(orderResult.id, orderResult.total_amount, cart.size, lang)
                 lastOrderId = orderResult.id; lastPublicId = shortId; lastOrderTotal = orderResult.total_amount
+
+                // ── Update family member's last order summary ─────────────────
+                FamilyProfileManager.activeProfile?.let { member ->
+                    val summary = cart.take(2).joinToString(", ") { it.product.name }
+                    FamilyProfileManager.updateLastOrder(this@MainActivity, member.id, summary)
+                }
+
                 val cartItems = cart.map { CartDisplayItem(it.product.name, it.quantity, it.product.price) }
                 setUiState(ButlerUiState.OrderPlaced(shortId, orderResult.total_amount, cartItems, 30, firstName))
                 speak(IndianLanguageProcessor.getOrderConfirmation(lang, firstName, shortId)) {
@@ -1274,6 +1330,7 @@ class MainActivity : ComponentActivity() {
     private suspend fun doLogin(email: String, password: String) {
         UserSessionManager.login(email, password).fold(
             onSuccess = { profile ->
+                FamilyProfileManager.ensureCurrentUserRegistered(this@MainActivity, profile)
                 runOnUiThread {
                     currentState = AssistantState.LISTENING
                     val firstName   = profile.full_name?.split(" ")?.first() ?: "there"
