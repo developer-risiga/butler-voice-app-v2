@@ -3,6 +3,8 @@ package com.demo.butler_voice_app.ai
 import android.util.Log
 import com.demo.butler_voice_app.BuildConfig
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -33,10 +35,15 @@ data class FullParsedIntent(
 
 object AIParser {
     private const val TAG = "AIParser"
+
     private val http = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(15, TimeUnit.SECONDS)
         .build()
+
+    // ── Dedup: prevents double-fire when the same transcript triggers two parse calls ──
+    private val parseMutex = Mutex()
+    private var lastParsedTranscript: String = ""
 
     private val SYSTEM_PROMPT = """
 You are an intent parser for Butler, a multilingual Indian voice assistant.
@@ -73,22 +80,35 @@ Rules:
 """.trimIndent()
 
     suspend fun parse(transcript: String): FullParsedIntent = withContext(Dispatchers.IO) {
+        // ── DEDUP: skip if this exact transcript is already being parsed ──────
+        if (transcript.isBlank()) return@withContext fallback(transcript)
+
+        parseMutex.withLock {
+            if (transcript == lastParsedTranscript) {
+                Log.w(TAG, "Duplicate transcript — skipping parse: '$transcript'")
+                return@withLock fallback(transcript)
+            }
+            lastParsedTranscript = transcript
+        }
+
         Log.d(TAG, "Parsing: '$transcript'")
+
         try {
             val reqBody = JSONObject().apply {
                 put("model", "gpt-4o-mini")
                 put("temperature", 0.1)
                 put("max_tokens", 250)
                 put("messages", org.json.JSONArray().apply {
-                    put(JSONObject().apply { put("role","system"); put("content", SYSTEM_PROMPT) })
-                    put(JSONObject().apply { put("role","user");   put("content", transcript) })
+                    put(JSONObject().apply { put("role", "system"); put("content", SYSTEM_PROMPT) })
+                    put(JSONObject().apply { put("role", "user");   put("content", transcript) })
                 })
             }.toString().toRequestBody("application/json".toMediaType())
 
             val request = Request.Builder()
                 .url("https://api.openai.com/v1/chat/completions")
                 .header("Authorization", "Bearer ${BuildConfig.OPENAI_API_KEY}")
-                .post(reqBody).build()
+                .post(reqBody)
+                .build()
 
             val response = http.newCall(request).execute()
             Log.d(TAG, "OpenAI code: ${response.code}")
@@ -97,45 +117,58 @@ Rules:
             val content = JSONObject(response.body!!.string())
                 .getJSONArray("choices").getJSONObject(0)
                 .getJSONObject("message").getString("content")
-                .replace("```json","").replace("```","").trim()
+                .replace("```json", "").replace("```", "").trim()
             Log.d(TAG, "Content: $content")
             buildResult(content, transcript)
+
         } catch (e: Exception) {
             Log.e(TAG, "Exception: ${e.message}")
             fallback(transcript)
         }
     }
 
+    // Call after session ends so next session starts fresh
+    fun resetDebounce() {
+        lastParsedTranscript = ""
+    }
+
     private fun buildResult(content: String, original: String): FullParsedIntent {
-        val json = JSONObject(content)
-        val intentStr = json.optString("intent","unknown")
-        val confidence = json.optDouble("confidence", 0.5)
-        val language = json.optString("language","en")
-        val serviceCategory = json.optString("service_category").takeIf { it.isNotBlank() && it != "null" }
-        val timePreference = json.optString("time_preference").takeIf { it.isNotBlank() && it != "null" }
-        val arr = json.optJSONArray("items") ?: org.json.JSONArray()
+        val json           = JSONObject(content)
+        val intentStr      = json.optString("intent", "unknown")
+        val confidence     = json.optDouble("confidence", 0.5)
+        val language       = json.optString("language", "en")
+        val serviceCategory = json.optString("service_category")
+            .takeIf { it.isNotBlank() && it != "null" }
+        val timePreference = json.optString("time_preference")
+            .takeIf { it.isNotBlank() && it != "null" }
+        val arr   = json.optJSONArray("items") ?: org.json.JSONArray()
         val items = (0 until arr.length()).mapNotNull { i ->
-            val o = arr.optJSONObject(i) ?: return@mapNotNull null
+            val o    = arr.optJSONObject(i) ?: return@mapNotNull null
             val name = o.optString("name").takeIf { it.isNotBlank() } ?: return@mapNotNull null
-            ParsedItem(name = ItemNormalizer.normalize(name), quantity = o.optInt("quantity",1),
-                unit = o.optString("unit").takeIf { it.isNotBlank() && it != "null" })
+            ParsedItem(
+                name     = ItemNormalizer.normalize(name),
+                quantity = o.optInt("quantity", 1),
+                unit     = o.optString("unit").takeIf { it.isNotBlank() && it != "null" }
+            )
         }
         Log.d(TAG, "Parsed: ${items.size} items, intent=$intentStr, confidence=$confidence, service=$serviceCategory")
+
         val routing = when {
             confidence < 0.3 -> IntentRouting.ShowMenu
             confidence < 0.5 -> IntentRouting.AskClarify
             else -> when (intentStr) {
-                "grocery_order","grocery_reorder" -> IntentRouting.GoToGrocery(items)
-                "service_request","service_reorder" -> IntentRouting.GoToService(serviceCategory ?: "general", timePreference)
-                "finish_order"   -> IntentRouting.FinishOrder
-                "confirm_order"  -> IntentRouting.ConfirmOrder
-                "cancel_order"   -> IntentRouting.CancelOrder
-                else             -> IntentRouting.Unknown
+                "grocery_order", "grocery_reorder"    -> IntentRouting.GoToGrocery(items)
+                "service_request", "service_reorder"  -> IntentRouting.GoToService(serviceCategory ?: "general", timePreference)
+                "finish_order"                        -> IntentRouting.FinishOrder
+                "confirm_order"                       -> IntentRouting.ConfirmOrder
+                "cancel_order"                        -> IntentRouting.CancelOrder
+                else                                  -> IntentRouting.Unknown
             }
         }
         return FullParsedIntent(routing, language, confidence, serviceCategory, timePreference, original)
     }
 
     private fun fallback(t: String) = FullParsedIntent(
-        IntentRouting.AskClarify, LanguageDetector.detect(t), 0.0, null, null, t)
+        IntentRouting.AskClarify, LanguageDetector.detect(t), 0.0, null, null, t
+    )
 }

@@ -15,6 +15,9 @@ class WakeWordManager(
 ) {
     private val appContext = context.applicationContext
     private var porcupineManager: PorcupineManager? = null
+
+    // isStopped = true means any in-flight callback should be ignored
+    // isRunning  = true means the engine is active and consuming audio
     private val isRunning = AtomicBoolean(false)
     private val isStopped = AtomicBoolean(true)
 
@@ -25,11 +28,11 @@ class WakeWordManager(
             return
         }
         if (accessKey.isBlank()) {
-            Log.e("Porcupine", "❌ AccessKey missing")
+            Log.e("Porcupine", "❌ AccessKey missing or blank")
             return
         }
         try {
-            safeDelete()
+            safeDelete()                // ensure clean state before building
             isStopped.set(false)
 
             val keywordPath = copyAssetToFile("Hey-Butler_en_android_v4_0_0.ppn")
@@ -38,9 +41,13 @@ class WakeWordManager(
                 .setAccessKey(accessKey)
                 .setKeywordPath(keywordPath)
                 .setSensitivity(0.7f)
-                .build(appContext, PorcupineManagerCallback {
-                    if (!isStopped.get()) {
+                .build(appContext, PorcupineManagerCallback { _ ->
+                    // Guard: only fire if we haven't been stopped yet
+                    if (!isStopped.get() && isRunning.get()) {
                         Log.d("Porcupine", "✅ Hey Butler detected!")
+                        // Set isStopped FIRST so a second detect can't re-fire
+                        isStopped.set(true)
+                        isRunning.set(false)
                         onWakeWordDetected()
                     }
                 })
@@ -51,9 +58,13 @@ class WakeWordManager(
 
         } catch (e: PorcupineException) {
             Log.e("Porcupine", "❌ Start failed: ${e.message}")
+            isRunning.set(false)
+            isStopped.set(true)
             safeDelete()
         } catch (e: Exception) {
-            Log.e("Porcupine", "❌ Unexpected: ${e.message}")
+            Log.e("Porcupine", "❌ Unexpected error: ${e.message}")
+            isRunning.set(false)
+            isStopped.set(true)
             safeDelete()
         }
     }
@@ -64,32 +75,53 @@ class WakeWordManager(
             Log.d("Porcupine", "⚠️ Already stopped")
             return
         }
-        // Set flag FIRST — prevents any in-flight callbacks from firing
+        // Set isStopped FIRST — blocks any in-flight PorcupineManagerCallback
         isStopped.set(true)
+        isRunning.set(false)
+
         try {
             porcupineManager?.stop()
             Log.d("Porcupine", "🛑 Wake word engine stopped")
         } catch (e: Exception) {
-            Log.w("Porcupine", "stop() warning: ${e.message}")
+            Log.w("Porcupine", "stop() warning (safe to ignore): ${e.message}")
         } finally {
             safeDelete()
-            isRunning.set(false)
         }
     }
 
+    // Call this if you want a hard restart (e.g. after returning from another Activity)
+    @Synchronized
+    fun restart() {
+        stop()
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ start() }, 200)
+    }
+
+    fun isActive(): Boolean = isRunning.get()
+
+    // ── Private helpers ──────────────────────────────────────────────────────
+
     private fun safeDelete() {
-        try { porcupineManager?.delete() }
-        catch (e: Exception) { Log.w("Porcupine", "delete() warning: ${e.message}") }
-        finally { porcupineManager = null }
+        try {
+            porcupineManager?.delete()
+        } catch (e: Exception) {
+            Log.w("Porcupine", "delete() warning (safe to ignore): ${e.message}")
+        } finally {
+            porcupineManager = null
+        }
     }
 
     private fun copyAssetToFile(assetName: String): String {
         val file = File(appContext.filesDir, assetName)
         if (!file.exists()) {
-            appContext.assets.open(assetName).use { input ->
-                file.outputStream().use { output -> input.copyTo(output) }
+            try {
+                appContext.assets.open(assetName).use { input ->
+                    file.outputStream().use { output -> input.copyTo(output) }
+                }
+                Log.d("Porcupine", "📁 Copied asset: ${file.absolutePath}")
+            } catch (e: Exception) {
+                Log.e("Porcupine", "❌ Failed to copy asset $assetName: ${e.message}")
+                throw e
             }
-            Log.d("Porcupine", "📁 Copied: ${file.absolutePath}")
         } else {
             Log.d("Porcupine", "📁 Using cached file")
         }
