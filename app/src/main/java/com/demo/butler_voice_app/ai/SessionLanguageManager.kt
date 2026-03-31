@@ -90,6 +90,18 @@ object SessionLanguageManager {
         return false
     }
 
+    /**
+     * Call this when Sarvam STT returns an empty transcript.
+     * SarvamSTTManager may have already called onDetection() with the language_code
+     * from empty audio (e.g. en-IN). This cancels any pending switch from that blank hit
+     * without touching the currently locked language.
+     */
+    fun onBlankTranscript() {
+        pendingLanguage = null
+        consecutiveCount = 0
+        Log.d(TAG, "Blank transcript — pending language reset, locked=$lockedLanguage stays")
+    }
+
     fun reset() {
         lockedLanguage = null
         pendingLanguage = null

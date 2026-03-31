@@ -37,45 +37,45 @@ object ServiceVoiceHandler {
     val SUB_TYPES: Map<String, List<SubType>> = mapOf(
 
         "PLUMBER" to listOf(
-            SubType("bath_fitting",   "Bath fitting",       "बाथ फिटिंग",      "బాత్ ఫిటింగ్",   listOf("bath","shower","geyser","naha","fitting","बाथ","नहाना")),
-            SubType("toilet_repair",  "Toilet repair",      "टॉयलेट रिपेयर",   "టాయ్‌లెట్",       listOf("toilet","commode","flush","potty","टॉयलेट","टायलेट")),
-            SubType("basin_sink",     "Basin & sink",       "बेसिन / सिंक",    "బేసిన్",          listOf("basin","sink","washbasin","बेसिन","sink")),
-            SubType("pipe_leak",      "Pipe leak",          "पाइप लीक",        "పైపు లీక్",       listOf("leak","pipe","water","drip","टपक","पाइप","लीक","rissa")),
-            SubType("water_tank",     "Water tank",         "वॉटर टैंक",        "వాటర్ ట్యాంక్",  listOf("tank","overhead","टैंक","पानी","water tank")),
-            SubType("drainage",       "Drainage blockage",  "ड्रेनेज",          "డ్రైనేజ్",        listOf("drain","blocked","choke","overflow","ड्रेन","जाम"))
+            SubType("bath_fitting",   "Bath fitting",       "बाथ फिटिंग",      "బాత్ ఫిటింగ్",   listOf("bath","shower","geyser","naha","fitting","बाथ","नहाना","बाथरूम फिटिंग","shower fitting")),
+            SubType("toilet_repair",  "Toilet repair",      "टॉयलेट रिपेयर",   "టాయ్‌లెట్",       listOf("toilet","commode","flush","potty","टॉयलेट","टायलेट","फ्लश","कमोड","toilet kharab")),
+            SubType("basin_sink",     "Basin & sink",       "बेसिन / सिंक",    "బేసిన్",          listOf("basin","sink","washbasin","बेसिन","sink","नल","टोंटी")),
+            SubType("pipe_leak",      "Pipe leak",          "पाइप लीक",        "పైపు లీక్",       listOf("leak","pipe","water","drip","टपक","पाइप","लीक","rissa","पानी टपक","पाइप टूट","लीकेज")),
+            SubType("water_tank",     "Water tank",         "वॉटर टैंक",        "వాటర్ ట్యాంక్",  listOf("tank","overhead","टैंक","पानी","water tank","टंकी","पानी की टंकी")),
+            SubType("drainage",       "Drainage blockage",  "ड्रेनेज",          "డ్రైనేజ్",        listOf("drain","blocked","choke","overflow","ड्रेन","जाम","नाली","नाली बंद","बंद नाली"))
         ),
 
         "ELECTRICIAN" to listOf(
-            SubType("fan_light",      "Fan / light fitting","फैन / लाइट",       "ఫ్యాన్ / లైట్",   listOf("fan","light","bulb","tube","फैन","लाइट","बल्ब","tube light")),
-            SubType("switchboard",    "Switchboard",        "स्विचबोर्ड",       "స్విచ్‌బోర్డ్",   listOf("switch","board","plug","socket","स्विच","plug point")),
-            SubType("ac_repair",      "AC repair",          "AC रिपेयर",        "AC రిపేర్",        listOf("ac","air condition","cooling","एसी","air conditioner","cooling nahi")),
-            SubType("wiring_fault",   "Wiring fault",       "वायरिंग फॉल्ट",   "వైరింగ్",          listOf("wire","wiring","short","trip","वायर","short circuit","spark","current")),
-            SubType("meter_issue",    "Meter / bill issue", "मीटर / बिल",      "మీటర్",            listOf("meter","bill","ebill","मीटर","बिजली बिल","electricity bill")),
-            SubType("inverter",       "Inverter / UPS",     "इन्वर्टर",         "ఇన్వర్టర్",        listOf("inverter","ups","battery","backup","इन्वर्टर","बैटरी"))
+            SubType("fan_light",      "Fan / light fitting","फैन / लाइट",       "ఫ్యాన్ / లైట్",   listOf("fan","light","bulb","tube","फैन","लाइट","बल्ब","tube light","पंखा","बत्ती","पंखा नहीं चलता","लाइट नहीं")),
+            SubType("switchboard",    "Switchboard",        "स्विचबोर्ड",       "స్విచ్‌బోర్డ్",   listOf("switch","board","plug","socket","स्विच","plug point","बोर्ड","स्विचबोर्ड","socket nahi")),
+            SubType("ac_repair",      "AC repair",          "AC रिपेयर",        "AC రిపేర్",        listOf("ac","air condition","cooling","एसी","air conditioner","cooling nahi","ठंडा नहीं","एसी खराब","AC नहीं चलता")),
+            SubType("wiring_fault",   "Wiring fault",       "वायरिंग फॉल्ट",   "వైరింగ్",          listOf("wire","wiring","short","trip","वायर","short circuit","spark","current","बिजली नहीं","ट्रिप","शॉर्ट सर्किट")),
+            SubType("meter_issue",    "Meter / bill issue", "मीटर / बिल",      "మీటర్",            listOf("meter","bill","ebill","मीटर","बिजली बिल","electricity bill","मीटर खराब","बिल ज्यादा")),
+            SubType("inverter",       "Inverter / UPS",     "इन्वर्टर",         "ఇన్వర్టర్",        listOf("inverter","ups","battery","backup","इन्वर्टर","बैटरी","इनवर्टर","backup nahi"))
         ),
 
         "CARPENTER" to listOf(
-            SubType("door_window",    "Door / window",      "दरवाजा / खिड़की", "తలుపు",           listOf("door","window","darwaza","दरवाजा","खिड़की","hinge","lock","shutter")),
-            SubType("furniture_repair","Furniture repair",  "फर्नीचर रिपेयर",  "ఫర్నిచర్",        listOf("furniture","sofa","chair","table","फर्नीचर","repair","तोड़ा","टूट")),
-            SubType("wardrobe",       "Wardrobe / almirah", "अलमारी",           "వార్డ్‌రోబ్",     listOf("wardrobe","almirah","cupboard","अलमारी","closet","shelf","रैक")),
-            SubType("bed_frame",      "Bed frame",          "पलंग / बेड",       "మంచం",            listOf("bed","palang","cot","खाट","पलंग","divan","mattress","gadda")),
-            SubType("false_ceiling",  "False ceiling",      "फॉल्स सीलिंग",    "ఫాల్స్ సీలింగ్", listOf("ceiling","false","pop","plywood","ceiling repair","छत"))
+            SubType("door_window",    "Door / window",      "दरवाजा / खिड़की", "తలుపు",           listOf("door","window","darwaza","दरवाजा","खिड़की","hinge","lock","shutter","दरवाजा खराब","दरवाजा नहीं खुलता")),
+            SubType("furniture_repair","Furniture repair",  "फर्नीचर रिपेयर",  "ఫర్నిచర్",        listOf("furniture","sofa","chair","table","फर्नीचर","repair","तोड़ा","टूट","कुर्सी","मेज टूट")),
+            SubType("wardrobe",       "Wardrobe / almirah", "अलमारी",           "వార్డ్‌రోబ్",     listOf("wardrobe","almirah","cupboard","अलमारी","closet","shelf","रैक","almari","अलमारी खराब")),
+            SubType("bed_frame",      "Bed frame",          "पलंग / बेड",       "మంచం",            listOf("bed","palang","cot","खाट","पलंग","divan","mattress","gadda","बेड टूट","पलंग खराब")),
+            SubType("false_ceiling",  "False ceiling",      "फॉल्स सीलिंग",    "ఫాల్స్ సీలింగ్", listOf("ceiling","false","pop","plywood","ceiling repair","छत","सीलिंग","POP"))
         ),
 
         "PAINTER" to listOf(
-            SubType("full_room",      "Full room painting", "पूरा कमरा",        "పూర్తి గది",      listOf("full","room","wall","पूरा","कमरा","दीवार","whole","complete")),
-            SubType("touch_up",       "Touch-up / patch",   "टच-अप",            "టచ్-అప్",         listOf("touch","small","patch","थोड़ा","छोटा","spot","dab")),
-            SubType("waterproofing",  "Waterproofing",      "वॉटरप्रूफिंग",     "వాటర్‌ప్రూఫింగ్", listOf("waterproof","leak","seepage","water","छत से पानी","baarish")),
-            SubType("exterior",       "Exterior / outside", "बाहरी पेंट",       "బాహ్య పెయింట్",   listOf("outside","exterior","outer","bahar","घर के बाहर","compound")),
-            SubType("texture",        "Texture / design",   "टेक्सचर पेंट",     "టెక్స్చర్",       listOf("texture","design","pattern","fancy","designer","textured"))
+            SubType("full_room",      "Full room painting", "पूरा कमरा",        "పూర్తి గది",      listOf("full","room","wall","पूरा","कमरा","दीवार","whole","complete","पूरा घर रंग","पूरा कमरा")),
+            SubType("touch_up",       "Touch-up / patch",   "टच-अप",            "టచ్-అప్",         listOf("touch","small","patch","थोड़ा","छोटा","spot","dab","थोड़ा सा","छोटा काम")),
+            SubType("waterproofing",  "Waterproofing",      "वॉटरप्रूफिंग",     "వాటర్‌ప్రూఫింగ్", listOf("waterproof","leak","seepage","water","छत से पानी","baarish","वाटरप्रूफ","लीकेज")),
+            SubType("exterior",       "Exterior / outside", "बाहरी पेंट",       "బాహ్య పెయింట్",   listOf("outside","exterior","outer","bahar","घर के बाहर","compound","बाहर से","बाहरी")),
+            SubType("texture",        "Texture / design",   "टेक्सचर पेंट",     "టెక్స్చర్",       listOf("texture","design","pattern","fancy","designer","textured","टेक्सचर","डिज़ाइन"))
         ),
 
         "CLEANING" to listOf(
-            SubType("deep_clean",     "Full home deep clean","पूरा घर",          "పూర్తి ఇల్లు",   listOf("full","deep","home","पूरा","घर","deep clean","whole house","sabkuch")),
-            SubType("sofa_carpet",    "Sofa / carpet",      "सोफा / कारपेट",    "సోఫా",            listOf("sofa","carpet","rug","couch","सोफा","कारपेट","गद्दा")),
-            SubType("kitchen",        "Kitchen",            "किचन",              "వంటగది",          listOf("kitchen","chimney","stove","hob","किचन","rasoi","रसोई","chimney")),
-            SubType("bathroom",       "Bathroom",           "बाथरूम",            "బాత్‌రూమ్",      listOf("bathroom","toilet clean","बाथरूम","washroom","tiles")),
-            SubType("post_construction","Post-construction","कंस्ट्रक्शन के बाद","నిర్మాణం తర్వాత",listOf("construction","renovation","after build","kaam","नया घर","new house"))
+            SubType("deep_clean",     "Full home deep clean","पूरा घर",          "పూర్తి ఇల్లు",   listOf("full","deep","home","पूरा","घर","deep clean","whole house","sabkuch","पूरे घर की सफाई","घर साफ")),
+            SubType("sofa_carpet",    "Sofa / carpet",      "सोफा / कारपेट",    "సోఫా",            listOf("sofa","carpet","rug","couch","सोफा","कारपेट","गद्दा","सोफा साफ","carpet clean")),
+            SubType("kitchen",        "Kitchen",            "किचन",              "వంటగది",          listOf("kitchen","chimney","stove","hob","किचन","rasoi","रसोई","chimney","किचन साफ","रसोई साफ")),
+            SubType("bathroom",       "Bathroom",           "बाथरूम",            "బాత్‌రూమ్",      listOf("bathroom","toilet clean","बाथरूम","washroom","tiles","बाथरूम साफ","टाइल्स साफ")),
+            SubType("post_construction","Post-construction","कंस्ट्रक्शन के बाद","నిర్మాణం తర్వాత",listOf("construction","renovation","after build","kaam","नया घर","new house","नया मकान","renovation"))
         ),
 
         "AC_REPAIR" to listOf(
@@ -90,19 +90,60 @@ object ServiceVoiceHandler {
         ),
 
         "DOCTOR" to listOf(
-            SubType("general_physician","General physician","सामान्य डॉक्टर",  "జనరల్ డాక్టర్",  listOf("general","fever","cough","cold","medicine","बुखार","खांसी","सर्दी")),
-            SubType("dermatologist",  "Skin specialist",    "स्किन डॉक्टर",    "స్కిన్ స్పెషలిస్ట్",listOf("skin","rash","acne","allergy","itching","स्किन","चर्म","खुजली")),
-            SubType("pediatrician",   "Child doctor",       "बच्चों के डॉक्टर","చిన్నారుల డాక్టర్",listOf("child","baby","kids","बच्चे","children","बच्चा","infant")),
-            SubType("orthopedic",     "Bone / joint doctor","हड्डी / जोड़",    "ఎముక డాక్టర్",    listOf("bone","joint","knee","back","hadi","घुटना","पीठ","कमर","leg")),
-            SubType("gynecologist",   "Gynecologist",       "महिला डॉक्टर",    "స్త్రీ రోగ వైద్యుడు",listOf("women","pregnancy","periods","gynec","महिला","गर्भ","mc")),
-            SubType("dentist",        "Dentist",            "दांत के डॉक्टर",  "దంత వైద్యుడు",    listOf("tooth","teeth","dental","dant","दांत","cavity","toothache"))
+            SubType("general_physician","General physician","सामान्य डॉक्टर",  "జనరల్ డాక్టర్",  listOf("general","fever","cough","cold","medicine","बुखार","खांसी","सर्दी","बीमार","डॉक्टर चाहिए","सामान्य","general doctor","bukhar","khansi")),
+            SubType("dermatologist",  "Skin specialist",    "स्किन डॉक्टर",    "స్కిన్ స్పెషలిస్ట్",listOf("skin","rash","acne","allergy","itching","स्किन","चर्म","खुजली","दाने","चेहरे पर","skin problem")),
+            SubType("pediatrician",   "Child doctor",       "बच्चों के डॉक्टर","చిన్నారుల డాక్టర్",listOf("child","baby","kids","बच्चे","children","बच्चा","infant","बच्चों का डॉक्टर","छोटे बच्चे")),
+            SubType("orthopedic",     "Bone / joint doctor","हड्डी / जोड़",    "ఎముక డాక్టర్",    listOf("bone","joint","knee","back","hadi","घुटना","पीठ","कमर","leg","हड्डी","जोड़","घुटने में दर्द","कमर दर्द")),
+            SubType("gynecologist",   "Gynecologist",       "महिला डॉक्टर",    "స్త్రీ రోగ వైద్యుడు",listOf("women","pregnancy","periods","gynec","महिला","गर्भ","mc","महिला डॉक्टर","ladies doctor","प्रेगनेंसी")),
+            SubType("dentist",        "Dentist",            "दांत के डॉक्टर",  "దంత వైద్యుడు",    listOf("tooth","teeth","dental","dant","दांत","cavity","toothache","दांत दर्द","दांत का डॉक्टर","मसूड़े"))
         ),
 
         "MEDICINE" to listOf(
-            SubType("prescription",   "Upload prescription","पर्ची से दवाई",   "ప్రిస్క్రిప్షన్", listOf("prescription","parchi","parchee","doctor ne likha","upload")),
-            SubType("otc_medicine",   "Without prescription","बिना पर्ची",     "ప్రిస్క్రిప్షన్ లేకుండా",listOf("paracetamol","medicine","tablet","syrup","dawa","without","direct")),
-            SubType("vitamins",       "Vitamins & supplements","विटामिन",       "విటమిన్లు",       listOf("vitamin","supplement","protein","calcium","iron","multivitamin")),
-            SubType("baby_products",  "Baby / infant",      "बच्चों की दवाई",  "శిశు ఔషధం",       listOf("baby","infant","diaper","gripe water","cerelac","नवजात"))
+            SubType(
+                "prescription",   "Upload prescription", "पर्ची से दवाई",   "ప్రిస్క్రిప్షన్",
+                listOf(
+                    // English / romanized
+                    "prescription","parchi","parchee","doctor ne likha","upload","rx","doctor ka parcha",
+                    // Hindi Devanagari — the critical additions
+                    "पर्ची","पर्ची से","पर्ची से दवाई","डॉक्टर की पर्ची","दवाई की पर्ची","पर्चा",
+                    "अपलोड","पर्ची अपलोड",
+                    // Telugu
+                    "ప్రిస్క్రిప్షన్","చీటీ","చీటీ ద్వారా"
+                )
+            ),
+            SubType(
+                "otc_medicine",   "Without prescription", "बिना पर्ची",     "ప్రిస్క్రిప్షన్ లేకుండా",
+                listOf(
+                    // English / romanized
+                    "paracetamol","medicine","tablet","syrup","dawa","without","direct","otc","crocin","dolo",
+                    // Hindi Devanagari
+                    "बिना पर्ची","बिना","खुद","सीधे","बिना डॉक्टर","दवाई चाहिए","टेबलेट","सिरप","दवा",
+                    // Telugu
+                    "మందు","నేరుగా","ప్రిస్క్రిప్షన్ లేకుండా"
+                )
+            ),
+            SubType(
+                "vitamins",       "Vitamins & supplements","विटामिन",       "విటమిన్లు",
+                listOf(
+                    // English / romanized
+                    "vitamin","supplement","protein","calcium","iron","multivitamin","zinc","omega","health supplement",
+                    // Hindi Devanagari
+                    "विटामिन","सप्लीमेंट","प्रोटीन","कैल्शियम","आयरन","मल्टीविटामिन","स्वास्थ्य",
+                    // Telugu
+                    "విటమిన్","సప్లిమెంట్"
+                )
+            ),
+            SubType(
+                "baby_products",  "Baby / infant",      "बच्चों की दवाई",  "శిశు ఔషధం",
+                listOf(
+                    // English / romanized
+                    "baby","infant","diaper","gripe water","cerelac","newborn","child medicine","kids medicine",
+                    // Hindi Devanagari
+                    "बच्चों की दवाई","बच्चे की दवा","शिशु","नवजात","बच्चे के लिए","छोटे बच्चे",
+                    // Telugu
+                    "శిశువు","పిల్లల మందు","బేబీ"
+                )
+            )
         ),
 
         "FOOD" to listOf(

@@ -127,6 +127,7 @@ class MainActivity : ComponentActivity() {
     private var tempProduct : ApiClient.Product? = null
     private var currentState = AssistantState.IDLE
     private val recordRequestCode = 101
+    private var totalEmptyRetries = 0    // session-level hard cap for blank transcripts
 
     private fun toSpeakableAmount(amount: Double): String = "${amount.toInt()} rupees"
 
@@ -425,6 +426,7 @@ class MainActivity : ComponentActivity() {
         sessionLastQty     = 0
         serviceSubTypeSession = null
         currentMood = UserMood.CALM
+        totalEmptyRetries = 0
         MoodDetector.reset()
         FamilyProfileManager.clearActive()
         LanguageManager.reset()
@@ -567,17 +569,41 @@ class MainActivity : ComponentActivity() {
 
                     // ── EMPTY TRANSCRIPT ─────────────────────────────────────
                     if (transcript.isBlank()) {
+                        // Cancel any language flip that SarvamSTTManager may have triggered
+                        // from the empty audio's language_code (e.g. en-IN on silence)
+                        SessionLanguageManager.onBlankTranscript()
+
                         sttRetryCount++
+                        totalEmptyRetries++
                         val lang = LanguageManager.getLanguage()
+
+                        // Hard cap — after 5 consecutive empty transcripts, give up gracefully
+                        if (totalEmptyRetries >= 5) {
+                            totalEmptyRetries = 0
+                            sttRetryCount = 0
+                            MoodDetector.reset()
+                            val giveUpMsg = when {
+                                lang.startsWith("hi") ->
+                                    "ठीक है। जब बोलना हो तब hey butler बोलना।"
+                                lang.startsWith("te") ->
+                                    "సరే. మళ్ళీ అవసరమైతే hey butler చెప్పండి."
+                                else ->
+                                    "no problem. say hey butler when you're ready."
+                            }
+                            speak(giveUpMsg) { startWakeWordListening() }
+                            return@runOnUiThread
+                        }
+
                         if (sttRetryCount < 2) {
                             startListening()
                         } else {
                             sttRetryCount = 0
-                            val retryMsg = HumanFillerManager.getEmptyRetry(lang, sttRetryCount)
+                            val retryMsg = HumanFillerManager.getEmptyRetry(lang, totalEmptyRetries - 1)
                             speak(retryMsg) { startListening() }
                         }
                         return@runOnUiThread
                     }
+                    totalEmptyRetries = 0  // reset on any successful transcript
                     sttRetryCount = 0
                     setUiState(ButlerUiState.Thinking(transcript))
                     handleCommand(transcript)
