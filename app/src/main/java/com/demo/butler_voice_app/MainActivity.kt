@@ -558,8 +558,10 @@ class MainActivity : ComponentActivity() {
 
                         if (langSwitched) {
                             Log.d("Butler", "🔄 Language switched to ${SessionLanguageManager.lockedLanguage}")
-                            // To hot-swap ElevenLabs voice, add fun updateVoice(id: String) to TTSManager
-                            // then call: ttsManager.updateVoice(SessionLanguageManager.ttsVoiceId)
+                            // Bug 3 fix: sync LanguageManager so speak() / translate() use the new lang
+                            val newBase = SessionLanguageManager.ttsLanguage  // "hi", "te", "en" etc.
+                            LanguageManager.setLanguage(newBase)
+                            Log.d("Butler", "LanguageManager synced to $newBase")
                         }
                     }
 
@@ -721,9 +723,19 @@ class MainActivity : ComponentActivity() {
                                                             launchServiceFlow(enhancedQuery, session.sector, matched.id)
                                                         }
                                                     } else {
+                                                        // Bug 2 fix: user declined service booking
+                                                        // Do NOT fall into grocery cart logic
                                                         serviceSubTypeSession = null
                                                         currentState = AssistantState.LISTENING
-                                                        speak(ButlerPhraseBank.get("ask_item", lang)) { startListening() }
+                                                        val cancelMsg = when {
+                                                            lang.startsWith("hi") ->
+                                                                "theek hai. koi aur service chahiye, ya grocery order karein?"
+                                                            lang.startsWith("te") ->
+                                                                "సరే. వేరే సేవ కావాలా, లేదా గ్రోసరీ ఆర్డర్ చేయాలా?"
+                                                            else ->
+                                                                "no problem. want a different service, or can I help with something else?"
+                                                        }
+                                                        speak(cancelMsg) { startListening() }
                                                     }
                                                 }
                                             },
@@ -1291,7 +1303,10 @@ class MainActivity : ComponentActivity() {
                 if (recs.isNotEmpty()) {
                     runOnUiThread { setUiState(ButlerUiState.ShowingRecommendations(itemName, recs)) }
 
-                    if (MoodAdapter.shouldSkipOptions(currentMood)) {
+                    // Bug 1 fix: NEVER skip options when in service sub-type flow.
+                    // shouldSkipOptions() is only valid for grocery product selection.
+                    if (MoodAdapter.shouldSkipOptions(currentMood) &&
+                        currentState != AssistantState.IN_SERVICE_SUBTYPE_FLOW) {
                         val best = recs.minByOrNull { it.priceRs }!!
                         val ack  = if (currentMood == UserMood.FRUSTRATED) MoodAdapter.getFrustrationAck(lang) else ""
                         val msg  = MoodAdapter.buildRushedProductAnnouncement(best.productName, best.priceRs, best.storeName, lang)
