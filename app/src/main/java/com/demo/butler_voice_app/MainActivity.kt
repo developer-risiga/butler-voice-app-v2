@@ -153,10 +153,17 @@ class MainActivity : ComponentActivity() {
     // HUMAN HELPERS
     // ══════════════════════════════════════════════════════════════════════
 
+    // ── FIX: Gap between filler and response ─────────────────────────────
+    // Previously: speak("हम्म...") [1s] → [silence 1.5s] → speak(response)
+    // The filler and API call ran in parallel but filler finished first,
+    // leaving an awkward silence while waiting for OpenAI.
+    //
+    // Fix: Remove separate filler entirely. The acknowledgment is now
+    // prefixed directly into the response as one single TTS call.
+    // No gap is possible when it's one sentence.
+    // e.g. "हाँ! rice के 3 options — 1: Daawat Brown, ₹45, 10 min..."
     private fun speakFillerThen(action: () -> Unit) {
-        val lang   = LanguageManager.getLanguage()
-        val filler = HumanFillerManager.getThinkingFiller(lang)
-        ttsManager.speak(text = filler, language = lang, onDone = null)
+        // Just run the action directly — acknowledgment is now part of response
         action()
     }
 
@@ -172,10 +179,18 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun buildShortConfirm(lang: String): String {
-        val items  = cart.joinToString(", ") { "${it.quantity} ${it.product.name}" }
-        val total  = toSpeakableAmount(cart.sumOf { it.product.price * it.quantity })
-        val phrase = ButlerPhraseBank.get("confirm_order", lang)
-        return "$items. $total. $phrase"
+        val items = cart.joinToString(", ") { item ->
+            // Short name only
+            val name = item.product.name.lowercase().split(" ")
+                .take(2).joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
+            "${item.quantity} $name"
+        }
+        val total = toSpeakableAmount(cart.sumOf { it.product.price * it.quantity })
+        return when {
+            lang.startsWith("hi") -> "Cart में है: $items. कुल $total. Order करूँ?"
+            lang.startsWith("te") -> "Cart లో: $items. మొత్తం $total. Order చేయనా?"
+            else                  -> "Cart: $items. Total $total. Shall I order?"
+        }
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -595,11 +610,18 @@ class MainActivity : ComponentActivity() {
                     } else {
                         currentState = AssistantState.LISTENING
                         val lastProduct = history.firstOrNull()?.product_name?.takeIf { it.isNotBlank() }
+                        // Short product name only
+                        val shortLast = lastProduct?.lowercase()?.split(" ")?.take(2)
+                            ?.joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
                         val greeting = when {
-                            MoodAdapter.shouldSuggestReorder(currentMood) && lastProduct != null ->
-                                MoodAdapter.adaptGreeting(currentMood, name, lang)
-                            lastProduct != null ->
-                                "welcome back $name! last time $lastProduct. kya chahiye aaj?"
+                            lang.startsWith("hi") && shortLast != null ->
+                                "हाँ $name! पिछली बार $shortLast था। क्या चाहिए आज?"
+                            lang.startsWith("hi") ->
+                                "हाँ $name! क्या चाहिए?"
+                            lang.startsWith("te") && shortLast != null ->
+                                "హాయ్ $name! చివరిసారి $shortLast. ఈరోజు ఏం కావాలి?"
+                            shortLast != null ->
+                                "Hey $name! Last time you had $shortLast. What do you need today?"
                             else ->
                                 IndianLanguageProcessor.getWelcomeGreeting(lang, name)
                         }
@@ -609,7 +631,12 @@ class MainActivity : ComponentActivity() {
             }
         } else {
             currentState = AssistantState.LISTENING
-            speak(IndianLanguageProcessor.getWelcomeGreeting(lang, name)) { startListening() }
+            val greeting = when {
+                lang.startsWith("hi") -> "हाँ $name! क्या चाहिए?"
+                lang.startsWith("te") -> "హాయ్ $name! ఏం కావాలి?"
+                else -> IndianLanguageProcessor.getWelcomeGreeting(lang, name)
+            }
+            speak(greeting) { startListening() }
         }
     }
 
@@ -694,22 +721,23 @@ class MainActivity : ComponentActivity() {
                             sttRetryCount = 0
                             MoodDetector.reset()
                             val giveUpMsg = when {
-                                lang.startsWith("hi") -> "ठीक है। जब बोलना हो तब hey butler बोलना।"
-                                lang.startsWith("te") -> "సరే. మళ్ళీ అవసరమైతే hey butler చెప్పండి."
-                                else                  -> "no problem. say hey butler when you're ready."
+                                lang.startsWith("hi") -> "ठीक है, बाद में बात करते हैं।"
+                                lang.startsWith("te") -> "సరే, తర్వాత మాట్లాడదాం."
+                                else                  -> "No problem, talk to you later."
                             }
                             speak(giveUpMsg) { startWakeWordListening() }
                             return@runOnUiThread
                         }
 
-                        // ── BUG 2 FIX: sttRetryCount < 2 now safely retries
-                        // because sttListenId prevents the old callback from
-                        // triggering a phantom second retry.
                         if (sttRetryCount < 2) {
-                            startListening()   // safe — stale callbacks are guarded above
+                            startListening()
                         } else {
                             sttRetryCount = 0
-                            val retryMsg = HumanFillerManager.getEmptyRetry(lang, totalEmptyRetries - 1)
+                            val retryMsg = when {
+                                lang.startsWith("hi") -> "सुना नहीं, फिर बोलें।"
+                                lang.startsWith("te") -> "వినలేదు, మళ్ళీ చెప్పండి."
+                                else                  -> "Didn't catch that, please say again."
+                            }
                             speak(retryMsg) { startListening() }
                         }
                         return@runOnUiThread
@@ -1256,20 +1284,21 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handlePaidOrNotPaid(cleaned: String, mode: String) {
-        // ── Added Punjabi words (ਹਾਂ/ਨਹੀਂ) because Sarvam STT sometimes
-        // detects Hindi "हाँ हो गई" as Punjabi "ਹਾਂ ਹੋ ਗਈ" (pa-IN).
-        // Both scripts mean the same thing — treat them identically.
+        // Sarvam STT sometimes detects Hindi "हाँ" as Punjabi (ਹਾਂ) or
+        // Gujarati (હા) — all mean yes. Include all scripts.
         val paid    = listOf(
             "yes","paid","done","payment done","i paid","completed","transferred","confirm",
             "हाँ","हां","हो गया","ho gaya","kar diya","ha",
             "పేమెంట్ చేశాను","అవును","ஆம்",
-            "ਹਾਂ","ਹੋ ਗਈ","ਪੇਮੈਂਟ ਹੋ ਗਈ"  // Punjabi yes/done
+            "ਹਾਂ","ਹੋ ਗਈ","ਪੇਮੈਂਟ ਹੋ ਗਈ",   // Punjabi
+            "હા","કન્ફર્મ","ચૂકવ્યું","થઈ ગઈ"    // Gujarati
         )
         val notPaid = listOf(
             "no","not yet","haven't","wait","not done","failed",
             "नहीं","अभी नहीं","nahi","abhi nahi",
             "లేదు","ఇంకా",
-            "ਨਹੀਂ","ਨਹੀ"  // Punjabi no
+            "ਨਹੀਂ","ਨਹੀ",   // Punjabi
+            "ના","નહીં"        // Gujarati
         )
         val lang   = LanguageManager.getLanguage()
         val amount = toSpeakableAmount(pendingOrderTotal)
@@ -1440,30 +1469,32 @@ class MainActivity : ComponentActivity() {
     // ══════════════════════════════════════════════════════════════════════
 
     // ── Voice readout for top 3 products ─────────────────────────────────
-    // Shows readable name, price, store, and delivery time per option.
+    // Acknowledgment is prefixed HERE as part of the response — no separate
+    // filler TTS. One sentence = zero gap.
+    // Max ~10 words to keep audio under 5 seconds.
     private fun buildProductVoiceReadout(
         recs: List<ProductRecommendation>,
         itemName: String,
         lang: String
     ): String {
         val options = recs.mapIndexed { i, r ->
-            // Convert "DAAWAT BROWN BASMATI RICE" → "Daawat Brown Basmati Rice"
+            // First 2 words of product name only
             val name = r.productName.lowercase().split(" ")
-                .take(4).joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
+                .take(2).joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
             val price    = "₹${r.priceRs.toInt()}"
-            val store    = r.storeName
-            // Compute delivery time from distanceKm (8 min/km, min 10, max 60)
             val delivery = "${(r.distanceKm * 8).toInt().coerceIn(10, 60)} min"
-            if (lang.startsWith("hi"))
-                "${i + 1}: $name, $price, $store से, $delivery में"
-            else
-                "${i + 1}: $name, $price, $store, $delivery delivery"
-        }.joinToString(". ")
+            "${i + 1}: $name $price $delivery"
+        }.joinToString(", ")
 
-        return if (lang.startsWith("hi"))
-            "$itemName के ${recs.size} options: $options. कौनसा चाहिए? 1, 2, या 3 बोलें।"
-        else
-            "${recs.size} options for $itemName. $options. Say 1, 2, or 3."
+        // Natural acknowledgment built into the sentence — no separate filler
+        return when {
+            lang.startsWith("hi") ->
+                "हाँ! $itemName — $options. कौनसा?"
+            lang.startsWith("te") ->
+                "సరే! $itemName — $options. ఏది?"
+            else ->
+                "Sure! $itemName — $options. Which one?"
+        }
     }
 
     private fun searchAndAskQuantity(itemName: String, qty: Int = 0, unit: String? = null) {
@@ -1579,24 +1610,39 @@ class MainActivity : ComponentActivity() {
             val finalQty = if (qty > 0) qty else 1
             cart.add(CartItem(ApiClient.Product(id = pick.productId, name = pick.productName, price = pick.priceRs, unit = pick.unit), finalQty))
             sessionLastProduct = pick.productName; sessionLastQty = finalQty
+            currentState = AssistantState.ASKING_MORE
+
+            // Short readable name — "DAAWAT BROWN BASMATI RICE" → "Daawat Brown"
+            val shortName = pick.productName.lowercase().split(" ")
+                .take(2).joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
             val suggestion = HumanFillerManager.getRelatedSuggestion(pick.productName, lang)
-            currentState   = AssistantState.ASKING_MORE
-            val addedMsg   = ButlerPhraseBank.get("added_item", lang)
-            val askMore    = ButlerPhraseBank.get("ask_more", lang)
-            showCartAndSpeak(
-                if (suggestion != null && cart.size == 1) "$addedMsg ${pick.productName}. $suggestion bhi chahiye? $askMore"
-                else "$addedMsg ${pick.productName}. $askMore"
-            ) { startListening() }
+
+            val msg = when {
+                lang.startsWith("hi") -> {
+                    val extra = if (suggestion != null && cart.size == 1) " $suggestion भी लेना है?" else " कुछ और?"
+                    "ठीक है! $shortName cart में है.$extra"
+                }
+                lang.startsWith("te") -> {
+                    "సరే! $shortName cart లో ఉంది. ఇంకా?"
+                }
+                else -> {
+                    val extra = if (suggestion != null && cart.size == 1) " Need $suggestion too?" else " Anything else?"
+                    "Done! $shortName added.$extra"
+                }
+            }
+            showCartAndSpeak(msg) { startListening() }
         } else {
-            speakKeepingRecsVisible("1, 2 ya 3 mein se bolein.") {
+            speakKeepingRecsVisible(
+                if (LanguageManager.getLanguage().startsWith("hi")) "1, 2, या 3 बोलें।"
+                else "Say 1, 2, or 3."
+            ) {
                 startListeningForSelection(
                     onNumber = { n -> handleRecSelectionByIndex(n - 1, recs, qty, itemName) },
-                    onOther  = { _ -> speak("1, 2 ya 3 bolein.") {
-                        startListeningForSelection(
-                            onNumber = { n -> handleRecSelectionByIndex(n - 1, recs, qty, itemName) },
-                            onOther  = { _ -> speak(ButlerPhraseBank.get("ask_item", lang)) { currentState = AssistantState.LISTENING; startListening() } }
-                        )
-                    }}
+                    onOther  = { _ ->
+                        speak(ButlerPhraseBank.get("ask_item", LanguageManager.getLanguage())) {
+                            currentState = AssistantState.LISTENING; startListening()
+                        }
+                    }
                 )
             }
         }
