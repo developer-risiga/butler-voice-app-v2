@@ -1,7 +1,6 @@
 package com.demo.butler_voice_app.voice
 
 import com.demo.butler_voice_app.ai.SessionLanguageManager
-import com.demo.butler_voice_app.ai.MoodDetector
 import android.content.Context
 import android.content.pm.PackageManager
 import android.media.AudioFormat
@@ -114,7 +113,7 @@ class SarvamSTTManager(
         Log.d(TAG, "Recording started")
 
         val allBytes      = mutableListOf<Byte>()
-        val allShorts     = mutableListOf<Short>()   // ← for mood analysis
+        val allShorts     = mutableListOf<Short>()
         val buf           = ShortArray(bufSize / 2)
         val startMs       = System.currentTimeMillis()
         var lastSoundMs   = startMs
@@ -126,7 +125,6 @@ class SarvamSTTManager(
             val rms = sqrt(buf.take(read).sumOf { (it * it).toDouble() } / read)
             if (rms > 300) lastSoundMs = System.currentTimeMillis()
 
-            // Collect shorts for mood analysis
             for (i in 0 until read) allShorts.add(buf[i])
 
             val pcm = ByteArray(read * 2)
@@ -143,7 +141,6 @@ class SarvamSTTManager(
             if (now - startMs > MAX_REC_MS) break
         }
 
-        // ── Store for mood analysis ───────────────────────────────────────────
         val durationMs = System.currentTimeMillis() - startMs
         lastPcmBuffer           = allShorts.toShortArray()
         lastRecordingDurationMs = durationMs
@@ -178,11 +175,21 @@ class SarvamSTTManager(
                     }
                 }
                 obj.has("transcript") -> {
-                    val t        = obj.optString("transcript", "").trim()
+                    val t = obj.optString("transcript", "").trim()
+                    // ── Language detection is handled exclusively by MainActivity ──
+                    // Previously SarvamSTTManager called SessionLanguageManager.onDetection()
+                    // here, AND MainActivity called it again with the transcript. This
+                    // double-counted every detection hit, breaking the threshold logic.
+                    //
+                    // Now: SarvamSTTManager just returns the transcript. MainActivity
+                    // calls onDetection(langCode, transcript) with the full transcript
+                    // so word-count-based thresholds work correctly.
+                    //
+                    // The language_code from Sarvam is still logged for debugging.
                     val langCode = obj.optString("language_code", "en-IN")
-                    SessionLanguageManager.onDetection(langCode)
+                    Log.d(TAG, "Locked: $langCode")
                     if (t.isBlank()) Log.e(TAG, "No transcript found")
-                    else Log.d(TAG, "Transcript: $t")
+                    else             Log.d(TAG, "Transcript: $t")
                     return t
                 }
                 else -> {
@@ -205,6 +212,11 @@ class SarvamSTTManager(
                 .addFormDataPart("model", "saarika:v2.5")
                 .build()
 
+            // ── Pass locked language as hint to improve Sarvam accuracy ──────
+            // When Butler knows Roy speaks Hindi, it tells Sarvam to expect
+            // Hindi — this reduces mis-detections of short utterances.
+            // Returns null until language is confirmed (fresh session),
+            // so Sarvam auto-detects for the first utterance.
             val hint = SessionLanguageManager.sarvamHint
             val url  = if (hint != null) "$ENDPOINT?language_code=$hint" else ENDPOINT
 

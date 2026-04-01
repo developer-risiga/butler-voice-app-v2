@@ -43,9 +43,19 @@ object SessionLanguageManager {
     val ttsLanguage: String
         get() = lockedLanguage.substringBefore("-")
 
+    /**
+     * Language hint passed to Sarvam API as ?language_code= query param.
+     * Telling Sarvam what language to expect improves STT accuracy.
+     * Returns null when language hasn't been determined yet (fresh session)
+     * so Sarvam auto-detects instead of being locked to English by default.
+     */
+    val sarvamHint: String?
+        get() = if (languageExplicitlySet) lockedLanguage else null
+
     private var pendingLanguage: String  = ""
     private var consecutiveCount: Int    = 0
     private var pendingThreshold: Int    = 3
+    private var languageExplicitlySet: Boolean = false  // true after forceSet or confirmed switch
 
     /**
      * Call on every non-blank STT result.
@@ -107,6 +117,7 @@ object SessionLanguageManager {
             pendingLanguage  = ""
             consecutiveCount = 0
             pendingThreshold = 3
+            languageExplicitlySet = true
             Log.d("SessionLang", "Switched: $previous → $lockedLanguage ($wordCount words)")
             return true
         }
@@ -118,20 +129,22 @@ object SessionLanguageManager {
     }
 
     fun reset() {
-        lockedLanguage   = "en-IN"
-        pendingLanguage  = ""
-        consecutiveCount = 0
-        pendingThreshold = 3
+        lockedLanguage        = "en-IN"
+        pendingLanguage       = ""
+        consecutiveCount      = 0
+        pendingThreshold      = 3
+        languageExplicitlySet = false
         Log.d("SessionLang", "Reset")
     }
 
     fun forceSet(sarvamLangCode: String) {
         val base = sarvamLangCode.substringBefore("-").lowercase()
         if (base !in BLOCKED && base in ALLOWED) {
-            lockedLanguage   = sarvamLangCode
-            pendingLanguage  = ""
-            consecutiveCount = 0
-            pendingThreshold = 3
+            lockedLanguage        = sarvamLangCode
+            pendingLanguage       = ""
+            consecutiveCount      = 0
+            pendingThreshold      = 3
+            languageExplicitlySet = true
             Log.d("SessionLang", "Force-set: $sarvamLangCode")
         } else {
             Log.w("SessionLang", "forceSet ignored: $sarvamLangCode")
