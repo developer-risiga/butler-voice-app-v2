@@ -63,6 +63,7 @@ import com.demo.butler_voice_app.ui.ButlerScreen
 import com.demo.butler_voice_app.ui.ButlerUiState
 import com.demo.butler_voice_app.ui.CartDisplayItem
 import com.demo.butler_voice_app.utils.ButlerPhraseBank
+import com.demo.butler_voice_app.utils.ButlerPersonalityEngine
 import com.demo.butler_voice_app.utils.HumanFillerManager
 import com.demo.butler_voice_app.voice.SarvamSTTManager
 import com.demo.butler_voice_app.workers.ProactiveButlerWorker
@@ -182,17 +183,12 @@ class MainActivity : ComponentActivity() {
 
     private fun buildShortConfirm(lang: String): String {
         val items = cart.joinToString(", ") { item ->
-            // Short name only
             val name = item.product.name.lowercase().split(" ")
                 .take(2).joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
             "${item.quantity} $name"
         }
-        val total = toSpeakableAmount(cart.sumOf { it.product.price * it.quantity })
-        return when {
-            lang.startsWith("hi") -> "Cart में है: $items. कुल $total. Order करूँ?"
-            lang.startsWith("te") -> "Cart లో: $items. మొత్తం $total. Order చేయనా?"
-            else                  -> "Cart: $items. Total $total. Shall I order?"
-        }
+        val total = "${cart.sumOf { it.product.price * it.quantity }.toInt()} rupees"
+        return ButlerPersonalityEngine.confirmOrder(items, total, lang)
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -208,14 +204,25 @@ class MainActivity : ComponentActivity() {
         val emotionTone = detectEmotionTone(lower)
 
         // ── Emergency ─────────────────────────────────────────────────────
-        if (ServiceVoiceHandler.isEmergency(lower)) {
+        // ── EMERGENCY DETECTION — checks before any other routing ──────────
+        // Also checks detectEmotionTone for words like "dard" that might
+        // not be in ServiceVoiceHandler but are clearly medical emergencies.
+        val isEmergency = ServiceVoiceHandler.isEmergency(lower) ||
+                detectEmotionTone(lower) == EmotionTone.EMERGENCY
+        if (isEmergency) {
             val emergencyText = when {
                 lang.startsWith("hi") ->
-                    "घबराइए मत। अभी ambulance बुला रहा हूँ।"
+                    "घबराइए मत! अभी ambulance बुला रहा हूँ। एक 08 पर call हो रहा है।"
                 lang.startsWith("te") ->
-                    "భయపడకండి. ఇప్పుడే ambulance పిలుస్తున్నాను."
+                    "భయపడకండి! ఇప్పుడే ambulance పిలుస్తున్నాను. 108కు call అవుతోంది."
+                lang.startsWith("ta") ->
+                    "பயப்படாதீர்கள்! இப்போதே ambulance அழைக்கிறேன்."
+                lang.startsWith("kn") ->
+                    "ಭಯಪಡಬೇಡಿ! ಈಗಲೇ ambulance ಕರೆಯುತ್ತಿದ್ದೇನೆ."
+                lang.startsWith("ml") ->
+                    "പേടിക്കേണ്ട! ഇപ്പോൾ ambulance വിളിക്കുന്നു."
                 else ->
-                    "Don't worry. Calling ambulance right now."
+                    "Don't worry! Calling ambulance right now. Dialing 108."
             }
             speak(emergencyText, EmotionTone.EMERGENCY) { launchServiceFlow(text) }
             return true
@@ -495,6 +502,7 @@ class MainActivity : ComponentActivity() {
         FamilyProfileManager.clearActive()
         LanguageManager.reset()
         SessionLanguageManager.reset()
+        ButlerPersonalityEngine.resetSession()
         AIParser.resetDebounce()
         apiClient.clearProductCache()
         setUiState(ButlerUiState.Idle)
@@ -661,6 +669,19 @@ class MainActivity : ComponentActivity() {
                     }
                     SessionLanguageManager.forceSet(lockedCode)
 
+                    // ── DEMO WARMUP: pre-fetch top grocery results silently ───────
+                    // While Butler speaks the greeting (~3 seconds), warm the
+                    // Supabase cache for the most common demo products so the
+                    // first user command is served from cache — truly instant.
+                    lifecycleScope.launch(Dispatchers.IO) {
+                        try {
+                            productRepo.getTopRecommendations("rice", userLocation)
+                            productRepo.getTopRecommendations("dal",  userLocation)
+                            productRepo.getTopRecommendations("oil",  userLocation)
+                            Log.d("Butler", "Demo cache warmed: rice, dal, oil")
+                        } catch (_: Exception) {}
+                    }
+
                     if (smartMsg != null && suggestions.isNotEmpty()) {
                         pendingReorderSuggestions = suggestions
                         currentState = AssistantState.REORDER_CONFIRM
@@ -801,17 +822,7 @@ class MainActivity : ComponentActivity() {
                             totalEmptyRetries = 0
                             sttRetryCount = 0
                             MoodDetector.reset()
-                            val giveUpMsg = when {
-                                currentMood == UserMood.FRUSTRATED && lang.startsWith("hi") ->
-                                    "कोई बात नहीं, माइक की जाँच करें और जब तैयार हों तब hey butler बोलें।"
-                                currentMood == UserMood.FRUSTRATED ->
-                                    "No worries, check your mic and say hey butler when ready."
-                                lang.startsWith("hi") ->
-                                    "ठीक है, बाद में बात करते हैं।"
-                                lang.startsWith("te") ->
-                                    "సరే, తర్వాత మాట్లాడదాం."
-                                else -> "No problem, talk to you later."
-                            }
+                            val giveUpMsg = ButlerPersonalityEngine.giveUp(lang, currentMood)
                             val giveUpTone = if (currentMood == UserMood.FRUSTRATED)
                                 EmotionTone.EMPATHETIC else EmotionTone.NORMAL
                             speak(giveUpMsg, giveUpTone) { startWakeWordListening() }
@@ -828,36 +839,8 @@ class MainActivity : ComponentActivity() {
                             // retry 3-4 : empathetic "माफ करना, थोड़ा जोर से बोलें।"
                             // retry 5+  : very warm  "माइक के पास आकर बोलें।"
                             val retryTone: EmotionTone
-                            val retryMsg: String
-                            when {
-                                currentMood == UserMood.FRUSTRATED && totalEmptyRetries >= 4 -> {
-                                    retryTone = EmotionTone.EMPATHETIC
-                                    retryMsg = when {
-                                        lang.startsWith("hi") ->
-                                            "माफ करना, माइक के पास आकर जोर से बोलें।"
-                                        lang.startsWith("te") ->
-                                            "క్షమించండి, దగ్గరగా వచ్చి స్పష్టంగా చెప్పండి."
-                                        else ->
-                                            "Sorry about that. Please speak closer to the mic."
-                                    }
-                                }
-                                currentMood == UserMood.FRUSTRATED -> {
-                                    retryTone = EmotionTone.EMPATHETIC
-                                    retryMsg = when {
-                                        lang.startsWith("hi") -> "माफ करना, फिर बोलें।"
-                                        lang.startsWith("te") -> "క్షమించండి, మళ్ళీ చెప్పండి."
-                                        else                  -> "Sorry, please say that again."
-                                    }
-                                }
-                                else -> {
-                                    retryTone = EmotionTone.NORMAL
-                                    retryMsg = when {
-                                        lang.startsWith("hi") -> "सुना नहीं, फिर बोलें।"
-                                        lang.startsWith("te") -> "వినలేదు, మళ్ళీ చెప్పండి."
-                                        else                  -> "Didn't catch that, please say again."
-                                    }
-                                }
-                            }
+                            val retryMsg = ButlerPersonalityEngine.didntHear(lang, currentMood, totalEmptyRetries)
+                            retryTone = if (currentMood == UserMood.FRUSTRATED) EmotionTone.EMPATHETIC else EmotionTone.NORMAL
                             speak(retryMsg, retryTone) { startListening() }
                         }
                         return@runOnUiThread
@@ -1360,7 +1343,14 @@ class MainActivity : ComponentActivity() {
                     }
                     MultilingualMatcher.isNo(cleaned) -> {
                         pendingReorderSuggestions = emptyList(); currentState = AssistantState.LISTENING
-                        speak("no problem! ${ButlerPhraseBank.get("ask_item", LanguageManager.getLanguage())}") { startListening() }
+                        val noLang = LanguageManager.getLanguage()
+                        val noMsg = when {
+                            noLang.startsWith("hi") -> "ठीक है! क्या चाहिए?"
+                            noLang.startsWith("te") -> "సరే! ఏం కావాలి?"
+                            noLang.startsWith("ta") -> "சரி! என்ன வேணும்?"
+                            else -> "No problem! What would you like?"
+                        }
+                        speak(noMsg) { startListening() }
                     }
                     else -> {
                         pendingReorderSuggestions = emptyList()
@@ -1479,7 +1469,7 @@ class MainActivity : ComponentActivity() {
                 val amount = toSpeakableAmount(pendingOrderTotal)
                 currentState = AssistantState.WAITING_UPI_PAYMENT
                 setUiState(ButlerUiState.WaitingPaymentConfirm("upi", pendingOrderTotal))
-                speak("UPI app mein $amount pay karein butler at upi pe.") {
+                speak(ButlerPersonalityEngine.upiInstruction(amount, LanguageManager.getLanguage())) {
                     Handler(Looper.getMainLooper()).postDelayed({ askIfPaid("upi") }, 3000)
                 }
             }
@@ -1501,7 +1491,13 @@ class MainActivity : ComponentActivity() {
             "upi"  -> AssistantState.CONFIRMING_UPI_PAID
             else   -> AssistantState.CONFIRMING_QR_PAID
         }
-        speak(ButlerPhraseBank.get("payment_confirm_ask", LanguageManager.getLanguage())) { startListening() }
+        val paidLang = LanguageManager.getLanguage()
+        val paidMode = when (currentState) {
+            AssistantState.CONFIRMING_UPI_PAID  -> "upi"
+            AssistantState.CONFIRMING_CARD_PAID -> "card"
+            else -> "qr"
+        }
+        speak(ButlerPersonalityEngine.askIfPaid(paidLang, paidMode, toSpeakableAmount(pendingOrderTotal))) { startListening() }
     }
 
     private fun handlePaidOrNotPaid(cleaned: String, mode: String) {
@@ -1526,7 +1522,7 @@ class MainActivity : ComponentActivity() {
         val lang   = LanguageManager.getLanguage()
         val amount = toSpeakableAmount(pendingOrderTotal)
         when {
-            paid.any    { cleaned.contains(it) } -> speak(ButlerPhraseBank.get("payment_done", lang)) { placeOrder() }
+            paid.any    { cleaned.contains(it) } -> speak(ButlerPersonalityEngine.paymentDone(lang)) { placeOrder() }
             notPaid.any { cleaned.contains(it) } -> {
                 speak(when (mode) {
                     "card" -> "theek hai! card se $amount pay karein."
@@ -1550,7 +1546,7 @@ class MainActivity : ComponentActivity() {
     private fun handleCartEdit(cleaned: String, originalText: String) {
         val lang = LanguageManager.getLanguage()
         if (cart.isEmpty()) {
-            speak("cart khaali hai. ${ButlerPhraseBank.get("ask_item", lang)}") {
+            speak(ButlerPersonalityEngine.cartEmpty(lang)) {
                 currentState = AssistantState.LISTENING; startListening()
             }
             return
@@ -1711,18 +1707,7 @@ class MainActivity : ComponentActivity() {
                 // First item     → suggest a related category ("दाल, तेल, आटा?")
                 // Already 2+     → just ask what else, no suggestions
                 // No filler here — user just confirmed an item, keep momentum
-                val prompt = when {
-                    currentMood == UserMood.FRUSTRATED && lang.startsWith("hi") ->
-                        "और क्या?"
-                    currentMood == UserMood.FRUSTRATED ->
-                        "What else?"
-                    cart.size == 1 && shortLast != null && lang.startsWith("hi") ->
-                        "और $shortLast, या कुछ और? दाल, तेल, आटा?"
-                    cart.size == 1 && shortLast != null ->
-                        "More $shortLast, or something else? Dal, oil, flour?"
-                    lang.startsWith("hi") -> "और क्या चाहिए?"
-                    else -> ButlerPhraseBank.get("ask_item", lang)
-                }
+                val prompt = ButlerPersonalityEngine.askMore(lang, currentMood, cart.size, sessionLastProduct)
                 showCartAndSpeak(prompt) { startListening() }
             }
             isNoMoreIntent(cleaned) -> readCartAndConfirm()
@@ -1787,14 +1772,14 @@ class MainActivity : ComponentActivity() {
                 }
                 val intro = if (cart.isEmpty()) "देखो," else "और देखो,"
                 // Prompt: say the NAME, not a number
-                "$intro $itemName — $optionText। कौन सा चाहिए? नाम बोलें।"
+                "$intro $itemName — $optionText। ${ButlerPersonalityEngine.askSelection("hi", currentMood)}"
             }
             lang.startsWith("te") -> {
                 val optionText = recs.joinToString(", ") { r ->
                     "${shortName(r)} ₹${r.priceRs.toInt()}"
                 }
                 val intro = if (cart.isEmpty()) "చూడు," else "మరి చూడు,"
-                "$intro $itemName — $optionText. పేరు చెప్పండి."
+                "$intro $itemName — $optionText. ${ButlerPersonalityEngine.askSelection("te", currentMood)}"
             }
             lang.startsWith("ta") -> {
                 val optionText = recs.joinToString(", ") { r ->
@@ -2018,7 +2003,7 @@ class MainActivity : ComponentActivity() {
                                 speak("${product.name}? ${ButlerPhraseBank.get("ask_quantity", lang)}") { startListening() }
                             }
                         } else {
-                            speak(ButlerPhraseBank.get("ask_item", lang).let { "$itemName nahi mila. $it" }) { startListening() }
+                            speak(ButlerPersonalityEngine.productNotFound(itemName, lang)) { startListening() }
                         }
                     }
                 }
@@ -2040,41 +2025,11 @@ class MainActivity : ComponentActivity() {
             sessionLastProduct = pick.productName; sessionLastQty = finalQty
             currentState = AssistantState.ASKING_MORE
 
-            val shortName = pick.productName.lowercase().split(" ")
-                .take(2).joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
-            val suggestion = HumanFillerManager.getRelatedSuggestion(pick.productName, lang)
-
-            // ── Confirmation varies by cart position ──────────────────────
-            // First item  → warm, slightly enthusiastic — "बढ़िया! Daawat Brown cart में गया।"
-            // Second item → neutral, quick            — "और Tata Dal भी।"
-            // Third+ item → minimal, don't pad        — "ठीक।"
-            // Suggestion  → only offered on first item, not repeatedly
-            //
-            // NO filler words for confirmations — user just picked something,
-            // they want to confirm it and move on, not hear a speech.
-            val msg = when {
-                lang.startsWith("hi") -> when (cart.size) {
-                    1 -> {
-                        val extra = if (suggestion != null) " $suggestion भी लेना है?" else " कुछ और?"
-                        "बढ़िया! $shortName cart में गया।$extra"
-                    }
-                    2 -> "और $shortName भी। कुछ और?"
-                    else -> "ठीक। और कुछ?"
-                }
-                lang.startsWith("te") -> when (cart.size) {
-                    1 -> "బాగుంది! $shortName cart లో పడింది. ఇంకా?"
-                    2 -> "$shortName కూడా. మరేమైనా?"
-                    else -> "సరే. ఇంకా?"
-                }
-                else -> when (cart.size) {
-                    1 -> {
-                        val extra = if (suggestion != null) " Need $suggestion too?" else " Anything else?"
-                        "Got it! $shortName added.$extra"
-                    }
-                    2 -> "$shortName added too. More?"
-                    else -> "Done. Anything else?"
-                }
-            }
+            // ── Use ButlerPersonalityEngine for natural, varied responses ──
+            val addedMsg  = ButlerPersonalityEngine.itemAdded(pick.productName, lang, currentMood, cart.size)
+            val moreMsg   = ButlerPersonalityEngine.askMore(lang, currentMood, cart.size, pick.productName)
+            // Combine: "हाँ! Daawat ले लिया। दाल भी चाहिए?"
+            val msg = "$addedMsg $moreMsg"
             showCartAndSpeak(msg) { startListening() }
         } else {
             val lang = LanguageManager.getLanguage()
@@ -2172,7 +2127,7 @@ class MainActivity : ComponentActivity() {
 
     private fun readCartAndConfirm() {
         if (cart.isEmpty()) {
-            speak("cart khaali hai. ${ButlerPhraseBank.get("ask_item", LanguageManager.getLanguage())}") {
+            speak(ButlerPersonalityEngine.cartEmpty(LanguageManager.getLanguage())) {
                 currentState = AssistantState.LISTENING; startListening()
             }
             return
@@ -2421,12 +2376,26 @@ class MainActivity : ComponentActivity() {
 
         // Emergency / life-threatening
         val emergencyWords = listOf(
+            // English
             "emergency", "ambulance", "heart", "chest", "breathe", "breathing",
             "unconscious", "accident", "bleeding", "faint", "stroke", "attack",
+            "pain", "paining", "hurting", "dying", "help me", "urgent",
+            "please help", "not breathing", "collapsed", "seizure",
+            // Hindi — covers the exact demo phrase "mere dil mein dard hai"
             "दर्द", "दिल", "सांस", "बेहोश", "खून", "हादसा", "एम्बुलेंस",
+            "दर्द है", "दर्द हो", "दर्द हो रहा", "दिल में दर्द",
+            "मेरे दिल", "सीने में", "सांस नहीं", "गिर गया", "बचाओ",
+            "madad", "bachao", "जल्दी", "मदद करो",
+            // Hinglish — exactly what a Guntur user would say
+            "dard hai", "dard ho raha", "dil mein dard", "mere dil mein",
+            "seene mein", "sans nahi", "ambulance bulao", "doctor bulao",
+            "help karo", "bachao mujhe", "gir gaya", "behosh",
+            // Telugu
             "నొప్పి", "గుండె", "శ్వాస", "అపస్మారం", "రక్తం",
-            "pain", "paining", "hurting", "dying", "help me", "madad",
-            "urgent", "जल्दी", "please help", "bachao", "बचाओ"
+            "నొప్పిగా", "గుండె నొప్పి", "శ్వాస రావడం లేదు",
+            "అంబులెన్స్", "సహాయం", "పడిపోయాను",
+            // Tamil, Kannada, Malayalam basics
+            "வலி", "இதயம்", "ನೋವು", "ഹൃദയം", "വേദന"
         )
         if (emergencyWords.any { lower.contains(it) }) return EmotionTone.EMERGENCY
 
