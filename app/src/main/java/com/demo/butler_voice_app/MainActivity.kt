@@ -761,29 +761,24 @@ class MainActivity : ComponentActivity() {
                     if (transcript.isBlank()) MoodDetector.recordRetry()
 
                     // ── LANGUAGE DETECTION & SWITCHING ───────────────────
-                    // SessionLanguageManager requires HITS_TO_SWITCH (3) consecutive
-                    // same-language detections before switching. This prevents od/kn/bn
-                    // false detections from flipping the language on a single utterance.
-                    // Also blocks od-IN and bn-IN entirely (constant false detections
-                    // for Hindi short utterances in AP/Telangana).
+                    // SessionLanguageManager uses transcript word count to decide
+                    // the switching threshold. Long utterances (3+ words) switch
+                    // in 1 hit — genuine speaker. Short utterances (1-2 words)
+                    // need 2-3 hits — protection against false detections.
                     if (transcript.isNotBlank() && transcript.length > 2) {
-                        // Prefer Sarvam's own language_code over our script detector
-                        // when Sarvam is confident. Our script detector is used as
-                        // a sanity check — if Sarvam says "en-IN" but the text is
-                        // clearly Devanagari, trust the script detector.
                         val scriptLang     = MultilingualMatcher.detectScript(transcript)
                         val detected       = LanguageDetector.detect(transcript)
                         val rawLang        = if (scriptLang != "en") scriptLang else detected
 
                         val sarvamLangCode = "$rawLang-IN"
-                        val langSwitched   = SessionLanguageManager.onDetection(sarvamLangCode)
+                        // Pass the transcript so the manager can count words
+                        val langSwitched   = SessionLanguageManager.onDetection(sarvamLangCode, transcript)
                         if (langSwitched) {
                             val newBase = SessionLanguageManager.ttsLanguage
                             LanguageManager.setLanguage(newBase)
                             Log.d("Butler", "🔄 Language switched to ${SessionLanguageManager.lockedLanguage}")
                         } else {
-                            // Stay on locked language — don't let a single stray
-                            // detection push LanguageManager out of sync
+                            // Keep LanguageManager in sync with locked language
                             val locked = SessionLanguageManager.ttsLanguage
                             if (LanguageManager.getLanguage() != locked) {
                                 LanguageManager.setLanguage(locked)
