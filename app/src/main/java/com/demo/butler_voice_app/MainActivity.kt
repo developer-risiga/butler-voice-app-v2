@@ -247,7 +247,7 @@ class MainActivity : ComponentActivity() {
                 if (sector != null && ServiceVoiceHandler.hasSectorSubTypes(sector)) {
                     serviceSubTypeSession = ServiceSubTypeSession(sector, text)
                     currentState = AssistantState.IN_SERVICE_SUBTYPE_FLOW
-                    val prompt = ServiceVoiceHandler.buildSubTypePrompt(sector, lang)
+                    val prompt = com.demo.butler_voice_app.services.ServiceVoiceEngine.subTypePrompt(sector, lang)
                     // Use empathetic tone if distress was detected in the request
                     speak(prompt, emotionTone) { startListening() }
                 } else {
@@ -256,7 +256,7 @@ class MainActivity : ComponentActivity() {
                     } ?: "service"
                     val findText = when {
                         lang.startsWith("hi") -> "$sectorName ढूंढ रहा हूँ।"
-                        else -> "Finding $sectorName near you."
+                        else -> com.demo.butler_voice_app.services.ServiceVoiceEngine.sectorDetected(sector ?: com.demo.butler_voice_app.services.ServiceSector.ELECTRICIAN, lang)
                     }
                     speak(findText, emotionTone) {
                         launchServiceFlow(text, overrideSector = sector)
@@ -351,15 +351,13 @@ class MainActivity : ComponentActivity() {
             if (!bookingId.isNullOrBlank()) {
                 lastBookingId = bookingId
                 val lang = LanguageManager.getLanguage()
-                val confirmMsg = ButlerPhraseBank.get("service_booking_confirm", lang) +
-                        " ID $bookingId. ${ButlerPhraseBank.get("ask_item", lang)}"
-                speak(confirmMsg) {
+                speak(com.demo.butler_voice_app.services.ServiceVoiceEngine.returnToMain(bookingId, lang)) {
                     currentState = AssistantState.LISTENING
                     startListening()
                 }
             } else {
                 currentState = AssistantState.LISTENING
-                speak(ButlerPhraseBank.get("ask_item", LanguageManager.getLanguage())) { startListening() }
+                speak(com.demo.butler_voice_app.services.ServiceVoiceEngine.returnNoBooking(LanguageManager.getLanguage())) { startListening() }
             }
         }, 500)
     }
@@ -1033,7 +1031,8 @@ class MainActivity : ComponentActivity() {
                             onResult = { timeText ->
                                 runOnUiThread {
                                     val timeSlot      = extractTimeSlotFromSpeech(timeText.trim())
-                                    val bookingPrompt = ServiceVoiceHandler.buildBookingConfirmPrompt(session.sector, matched, timeSlot, lang)
+                                    val subTypeName = matched.displayEn.ifBlank { matched.id }
+                                    val bookingPrompt = com.demo.butler_voice_app.services.ServiceVoiceEngine.bookingConfirmPrompt(session.sector, subTypeName, timeSlot, lang)
                                     speak(bookingPrompt) {
                                         sarvamSTT.startListening(
                                             onResult = { confirmText ->
@@ -1044,7 +1043,7 @@ class MainActivity : ComponentActivity() {
                                                         c.contains("ok") || c.contains("pakka")) {
                                                         val enhancedQuery  = "${session.originalTranscript} ${matched.displayEn} $timeSlot"
                                                         val sectorDisplay  = com.demo.butler_voice_app.ai.HindiSectorNames.get(session.sector.name, lang)
-                                                        speak("Finding $sectorDisplay near you.") {
+                                                        speak(com.demo.butler_voice_app.services.ServiceVoiceEngine.sectorDetected(session.sector, lang)) {
                                                             launchServiceFlow(enhancedQuery, session.sector, matched.id)
                                                         }
                                                     } else {
@@ -1072,11 +1071,11 @@ class MainActivity : ComponentActivity() {
                 } else {
                     session.retryCount++
                     if (session.retryCount <= 2) {
-                        speak(ServiceVoiceHandler.buildSubTypeRetryPrompt(session.sector, lang)) { startListening() }
+                        speak(com.demo.butler_voice_app.services.ServiceVoiceEngine.subTypeRetry(session.sector, lang)) { startListening() }
                     } else {
                         serviceSubTypeSession = null
                         val sectorName = com.demo.butler_voice_app.ai.HindiSectorNames.get(session.sector.name, lang)
-                        speak("Finding $sectorName near you.") { launchServiceFlow(session.originalTranscript, session.sector, null) }
+                        speak(com.demo.butler_voice_app.services.ServiceVoiceEngine.sectorDetected(session.sector, lang)) { launchServiceFlow(session.originalTranscript, session.sector, null) }
                     }
                 }
             }
@@ -1569,7 +1568,7 @@ class MainActivity : ComponentActivity() {
                 runOnUiThread {
                     when (val routing = fullParsed.routing) {
                         is IntentRouting.GoToService -> {
-                            speak("Finding ${routing.category} providers near you.") {
+                            speak(com.demo.butler_voice_app.services.ServiceVoiceEngine.categoryPrompt(LanguageManager.getLanguage())) {
                                 launchServiceFlow(text)
                             }
                         }
