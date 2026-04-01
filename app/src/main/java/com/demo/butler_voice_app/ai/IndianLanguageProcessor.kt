@@ -41,7 +41,7 @@ object IndianLanguageProcessor {
         "नहीं","नहीं यार","नही","ना","मत","रहने दो","छोड़ो","cancel",
         "नहीं चाहिए","नहीं करना","बंद करो","नो","मत करो","रद्द करो",
         // Telugu daily
-        "వద్దు","వద్దులే","కాదు","వेण्ड","క్యాన్సిల్","వదిలేయ్",
+        "వద్దు","వద్దులే","కాదు","వेण్ड","క్యాన్సిల్","వదిలేయ్",
         "వద్దు నండి","కాదు లేండి",
         // Kannada daily
         "ಬೇಡ","ಬೇಡ ಬಿಡಿ","ಇಲ್ಲ","ಕ್ಯಾನ್ಸಲ್","ಬಿಡಿ","ಬೇಡ ಮಾಡಿ",
@@ -305,22 +305,22 @@ object IndianLanguageProcessor {
             ).random()
             "te" -> listOf(
                 "నమస్కారం$n! ఏమి కావాలి?",
-                "చెప్పండి$n! ఏమి ఆర్డర్ చేయాలి?",
+                "చెప్పండి$n! ఏమి order చేయాలి?",
                 "అడగండి$n! ఏమి తీసుకోవాలి?"
             ).random()
             "kn" -> listOf(
                 "ನಮಸ್ಕಾರ$n! ಏನು ಬೇಕು?",
                 "ಹೇಳಿ$n! ಇಂದು ಏನು ತರಲಿ?",
-                "ಒಳ್ಳೇದು$n! ಏನು ಆರ್ಡರ್ ಮಾಡಬೇಕು?"
+                "ಒಳ್ಳೇದು$n! ಏನು order ಮಾಡಬೇಕು?"
             ).random()
             "ta" -> listOf(
                 "வணக்கம்$n! என்ன வேணும்?",
-                "சொல்லுங்கள்$n! என்ன ஆர்டர் பண்ணணும்?",
+                "சொல்லுங்கள்$n! என்ன order பண்ணணும்?",
                 "கேளுங்கள்$n! இன்னைக்கு என்ன வேணும்?"
             ).random()
             "ml" -> listOf(
                 "നമസ്കാരം$n! എന്ത് വേണം?",
-                "പറയൂ$n! ഇന്ന് എന്ത് ഓർഡർ ചെയ്യണം?",
+                "പറയൂ$n! ഇന്ന് എന്ത് order ചെയ്യണം?",
                 "ചോദിക്കൂ$n! എന്ത് കൊണ്ടുവരണം?"
             ).random()
             "pa" -> listOf(
@@ -330,7 +330,7 @@ object IndianLanguageProcessor {
             ).random()
             "or" -> listOf(
                 "ନମସ୍କାର$n! କଣ ଦରକାର?",
-                "କୁହନ୍ତୁ$n! ଆଜି କଣ ଅର୍ଡର ହବ?"
+                "କୁହନ୍ତୁ$n! ଆଜି କଣ order ହବ?"
             ).random()
             else -> if (name.isNotBlank()) "Welcome back $name! What would you like today?"
             else "Welcome! What would you like to order?"
@@ -338,17 +338,24 @@ object IndianLanguageProcessor {
     }
 
     fun getOrderConfirmation(lang: String, name: String = "", orderId: String = ""): String {
-        val n = if (name.isNotBlank()) " $name" else ""
-        val id = if (orderId.isNotBlank()) " आपका ID है $orderId." else ""
+        // ── FIX: Name goes FIRST so TTS reads naturally ───────────────────
+        // Before: "ऑर्डर दे दिया Roy!" → TTS says "Or de diya Roy" ❌
+        // After:  "Roy, आपका order हो गया!" → TTS says correctly ✅
+        //
+        // "ऑर्डर" removed entirely — TTS normalizer in TTSManager handles
+        // any remaining occurrences, but source text uses "order" (Latin)
+        // which ElevenLabs always pronounces correctly.
+        val prefix = if (name.isNotBlank()) "$name, " else ""
+        val id     = if (orderId.isNotBlank()) " ID: $orderId." else ""
         return when (lang) {
-            "hi" -> "ऑर्डर दे दिया$n!$id थोड़ी देर में घर पहुँच जाएगा। शुक्रिया!"
-            "te" -> "ఆర్డర్ పెట్టాం$n! ${if (orderId.isNotBlank()) "మీ ID: $orderId." else ""} కొంచెం సేపట్లో వస్తుంది. ధన్యవాదాలు!"
-            "kn" -> "ಆರ್ಡರ್ ಮಾಡಿದ್ದೇವೆ$n! ${if (orderId.isNotBlank()) "ನಿಮ್ಮ ID: $orderId." else ""} ಬೇಗ ತಲುಪಿಸುತ್ತೇವೆ. ಧನ್ಯವಾದ!"
-            "ta" -> "ஆர்டர் பண்ணிட்டோம்$n! ${if (orderId.isNotBlank()) "உங்கள் ID: $orderId." else ""} கொஞ்ச நேரத்தில் வரும். நன்றி!"
-            "ml" -> "ഓർഡർ ചെയ്തു$n! ${if (orderId.isNotBlank()) "നിങ്ങളുടെ ID: $orderId." else ""} ഉടൻ എത്തും. നന്ദി!"
-            "pa" -> "ਆਰਡਰ ਕਰ ਦਿੱਤਾ$n! ${if (orderId.isNotBlank()) "ਤੁਹਾਡਾ ID: $orderId." else ""} ਜਲਦੀ ਪਹੁੰਚ ਜਾਵੇਗਾ. ਧੰਨਵਾਦ!"
-            "or" -> "ଅର୍ଡର ଦିଆଗଲା$n! ${if (orderId.isNotBlank()) "ଆପଣଙ୍କ ID: $orderId." else ""} ଶୀଘ୍ର ପହଞ୍ଚିବ. ଧନ୍ୟବାଦ!"
-            else -> "Order placed$n! ${if (orderId.isNotBlank()) "Your ID is $orderId." else ""} Arriving soon. Thank you!"
+            "hi" -> "${prefix}आपका order हो गया!$id थोड़ी देर में घर पहुँच जाएगा। शुक्रिया!"
+            "te" -> "${prefix}మీ order అయిపోయింది!$id కొంచెం సేపట్లో వస్తుంది. ధన్యవాదాలు!"
+            "kn" -> "${prefix}ನಿಮ್ಮ order ಆಯ್ತು!$id ಬೇಗ ತಲುಪಿಸುತ್ತೇವೆ. ಧನ್ಯವಾದ!"
+            "ta" -> "${prefix}உங்கள் order ஆச்சு!$id கொஞ்ச நேரத்தில் வரும். நன்றி!"
+            "ml" -> "${prefix}നിങ്ങളുടെ order ആയി!$id ഉടൻ എത്തും. നന്ദി!"
+            "pa" -> "${prefix}ਤੁਹਾਡਾ order ਹੋ ਗਿਆ!$id ਜਲਦੀ ਪਹੁੰਚ ਜਾਵੇਗਾ. ਧੰਨਵਾਦ!"
+            "or" -> "${prefix}ଆପଣଙ୍କ order ହୋଇଗଲା!$id ଶୀଘ୍ର ପହଞ୍ଚିବ. ଧନ୍ୟବାଦ!"
+            else -> "${prefix}Your order is placed!$id Arriving soon. Thank you!"
         }
     }
 
