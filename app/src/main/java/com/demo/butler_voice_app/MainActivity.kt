@@ -71,6 +71,7 @@ import kotlinx.coroutines.withContext
 import com.demo.butler_voice_app.api.PriceComparisonEngine
 import com.demo.butler_voice_app.api.StorePrice
 import com.demo.butler_voice_app.api.PriceComparison
+import com.demo.butler_voice_app.api.ProductRecommendation
 import java.util.concurrent.TimeUnit
 
 enum class AssistantState {
@@ -1255,10 +1256,22 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handlePaidOrNotPaid(cleaned: String, mode: String) {
-        val paid    = listOf("yes","paid","done","payment done","i paid","completed","transferred","confirm",
-            "हाँ","हां","हो गया","పేమెంట్ చేశాను","అవును","ஆம்","ha","kar diya","ho gaya")
-        val notPaid = listOf("no","not yet","haven't","wait","not done","failed","नहीं","अभी नहीं","లేదు","ఇంకా","nahi","abhi nahi")
-        val lang = LanguageManager.getLanguage()
+        // ── Added Punjabi words (ਹਾਂ/ਨਹੀਂ) because Sarvam STT sometimes
+        // detects Hindi "हाँ हो गई" as Punjabi "ਹਾਂ ਹੋ ਗਈ" (pa-IN).
+        // Both scripts mean the same thing — treat them identically.
+        val paid    = listOf(
+            "yes","paid","done","payment done","i paid","completed","transferred","confirm",
+            "हाँ","हां","हो गया","ho gaya","kar diya","ha",
+            "పేమెంట్ చేశాను","అవును","ஆம்",
+            "ਹਾਂ","ਹੋ ਗਈ","ਪੇਮੈਂਟ ਹੋ ਗਈ"  // Punjabi yes/done
+        )
+        val notPaid = listOf(
+            "no","not yet","haven't","wait","not done","failed",
+            "नहीं","अभी नहीं","nahi","abhi nahi",
+            "లేదు","ఇంకా",
+            "ਨਹੀਂ","ਨਹੀ"  // Punjabi no
+        )
+        val lang   = LanguageManager.getLanguage()
         val amount = toSpeakableAmount(pendingOrderTotal)
         when {
             paid.any    { cleaned.contains(it) } -> speak(ButlerPhraseBank.get("payment_done", lang)) { placeOrder() }
@@ -1426,6 +1439,33 @@ class MainActivity : ComponentActivity() {
     // PRODUCT SEARCH
     // ══════════════════════════════════════════════════════════════════════
 
+    // ── Voice readout for top 3 products ─────────────────────────────────
+    // Shows readable name, price, store, and delivery time per option.
+    private fun buildProductVoiceReadout(
+        recs: List<ProductRecommendation>,
+        itemName: String,
+        lang: String
+    ): String {
+        val options = recs.mapIndexed { i, r ->
+            // Convert "DAAWAT BROWN BASMATI RICE" → "Daawat Brown Basmati Rice"
+            val name = r.productName.lowercase().split(" ")
+                .take(4).joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
+            val price    = "₹${r.priceRs.toInt()}"
+            val store    = r.storeName
+            // Compute delivery time from distanceKm (8 min/km, min 10, max 60)
+            val delivery = "${(r.distanceKm * 8).toInt().coerceIn(10, 60)} min"
+            if (lang.startsWith("hi"))
+                "${i + 1}: $name, $price, $store से, $delivery में"
+            else
+                "${i + 1}: $name, $price, $store, $delivery delivery"
+        }.joinToString(". ")
+
+        return if (lang.startsWith("hi"))
+            "$itemName के ${recs.size} options: $options. कौनसा चाहिए? 1, 2, या 3 बोलें।"
+        else
+            "${recs.size} options for $itemName. $options. Say 1, 2, or 3."
+    }
+
     private fun searchAndAskQuantity(itemName: String, qty: Int = 0, unit: String? = null) {
         val lang = LanguageManager.getLanguage()
         speakFillerThen {
@@ -1434,11 +1474,19 @@ class MainActivity : ComponentActivity() {
                 if (recs.isNotEmpty()) {
                     runOnUiThread { setUiState(ButlerUiState.ShowingRecommendations(itemName, recs)) }
 
-                    if (MoodAdapter.shouldSkipOptions(currentMood) &&
+                    // ── FIX: Only skip to single option when FRUSTRATED (angry user).
+                    // Previously TIRED mood (silence > 95%) also triggered the skip,
+                    // meaning top 3 were never spoken in normal quiet usage.
+                    // TIRED simply means the mic captured low-energy audio — not that
+                    // the user wants to skip the comparison. Only FRUSTRATED (retry
+                    // count >= 2 + high variance) should fast-path to the best option.
+                    if (currentMood == UserMood.FRUSTRATED &&
                         currentState != AssistantState.IN_SERVICE_SUBTYPE_FLOW) {
-                        val best = recs.minByOrNull { it.priceRs }!!
-                        val ack  = if (currentMood == UserMood.FRUSTRATED) MoodAdapter.getFrustrationAck(lang) else ""
-                        val msg  = MoodAdapter.buildRushedProductAnnouncement(best.productName, best.priceRs, best.storeName, lang)
+                        val best = recs.first()   // already ranked cheapest+nearest first
+                        val ack  = MoodAdapter.getFrustrationAck(lang)
+                        val msg  = MoodAdapter.buildRushedProductAnnouncement(
+                            best.productName, best.priceRs, best.storeName, lang
+                        )
                         runOnUiThread {
                             speakKeepingRecsVisible("$ack $msg".trim()) {
                                 startListeningForSelection(
@@ -1450,42 +1498,48 @@ class MainActivity : ComponentActivity() {
                         return@launch
                     }
 
-                    val comparison = productRepo.getPriceComparison(itemName, userLocation)
-                    val readout = if (comparison != null && comparison.allPrices.size > 1) {
-                        PriceComparisonEngine.buildVoiceAnnouncement(comparison, lang)
-                    } else {
-                        "${recs.size} options mila $itemName ke liye. " +
-                                recs.mapIndexed { i, r ->
-                                    val shortName = r.productName.split(" ").take(3).joinToString(" ")
-                                    "${i + 1}: $shortName, ${toSpeakableAmount(r.priceRs)}"
-                                }.joinToString(". ") + ". 1, 2 ya 3 bolein."
-                    }
+                    // ── Build comparison from existing recs (NO second RPC call) ──
+                    val comparison = productRepo.buildComparison(itemName, recs)
+
+                    // ── Build voice readout with price + store + delivery ──────────
+                    val readout = buildProductVoiceReadout(recs, itemName, lang)
 
                     speakKeepingRecsVisible(readout) {
                         startListeningForSelection(
                             onNumber = { num -> handleRecSelectionByIndex(num - 1, recs, qty, itemName) },
                             onOther  = { spoken ->
                                 val sLow = spoken.lowercase()
-                                if (comparison != null && (sLow.contains("haan") || sLow.contains("yes") ||
-                                            sLow.contains("sasta") || sLow.contains("theek"))) {
-                                    val bestIdx = recs.indexOfFirst { it.storeId == comparison.cheapest.storeId }
-                                    handleRecSelectionByIndex(if (bestIdx >= 0) bestIdx else 0, recs, qty, itemName)
+                                // "sasta wala" / "nearest" / "haan" → pick best
+                                if (sLow.contains("haan") || sLow.contains("yes") ||
+                                    sLow.contains("sasta") || sLow.contains("theek") ||
+                                    sLow.contains("best") || sLow.contains("sabse")) {
+                                    handleRecSelectionByIndex(0, recs, qty, itemName)
                                 } else {
                                     val pick = recs.firstOrNull { r ->
                                         val rw = r.productName.lowercase().split(" ")
                                         val sw = spoken.lowercase().split(" ").filter { it.length > 2 }
                                         sw.any { s -> rw.any { w -> w.contains(s) || s.contains(w) } }
                                     }
-                                    if (pick != null) handleRecSelectionByIndex(recs.indexOf(pick), recs, qty, itemName)
-                                    else speakKeepingRecsVisible("1, 2 ya 3 bolein.") {
-                                        startListeningForSelection(
-                                            onNumber = { n -> handleRecSelectionByIndex(n - 1, recs, qty, itemName) },
-                                            onOther  = { _ -> speak(ButlerPhraseBank.get("ask_item", lang)) { currentState = AssistantState.LISTENING; startListening() } }
-                                        )
+                                    if (pick != null) {
+                                        handleRecSelectionByIndex(recs.indexOf(pick), recs, qty, itemName)
+                                    } else {
+                                        speakKeepingRecsVisible(
+                                            if (lang.startsWith("hi")) "1, 2, या 3 बोलें।"
+                                            else "Say 1, 2, or 3."
+                                        ) {
+                                            startListeningForSelection(
+                                                onNumber = { n -> handleRecSelectionByIndex(n - 1, recs, qty, itemName) },
+                                                onOther  = { _ ->
+                                                    speak(ButlerPhraseBank.get("ask_item", lang)) {
+                                                        currentState = AssistantState.LISTENING; startListening()
+                                                    }
+                                                }
+                                            )
+                                        }
                                     }
                                 }
                             },
-                            retryPrompt = "1, 2 ya 3 bolein."
+                            retryPrompt = if (lang.startsWith("hi")) "1, 2, या 3 बोलें।" else "Say 1, 2, or 3."
                         )
                     }
                 } else {
