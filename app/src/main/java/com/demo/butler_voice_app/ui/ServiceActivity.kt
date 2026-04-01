@@ -16,6 +16,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.lifecycleScope
 import com.demo.butler_voice_app.BuildConfig
+import com.demo.butler_voice_app.EmotionTone
 import com.demo.butler_voice_app.TTSManager
 import com.demo.butler_voice_app.api.SupabaseClient
 import com.demo.butler_voice_app.api.UserSessionManager
@@ -545,7 +546,18 @@ Do NOT include instructions or frequency — only names and doses."""
 
     private fun handleEmergency() {
         currentSector = ServiceSector.AMBULANCE
-        speak(ServiceVoiceHandler.buildEmergencyPrompt(LanguageManager.getLanguage())) {
+        val lang = LanguageManager.getLanguage()
+        // ── EMERGENCY tone: serious, no expressiveness, controlled ────────
+        // Butler must NEVER sound cheerful when someone is in a medical emergency.
+        val emergencyText = when {
+            lang.startsWith("hi") ->
+                "घबराइए मत! अभी ambulance बुला रहा हूँ। 108 dial कर रहा हूँ।"
+            lang.startsWith("te") ->
+                "భయపడకండి! వెంటనే ambulance పిలుస్తున్నాను."
+            else ->
+                "Don't panic. Calling ambulance right now. Dialling 108."
+        }
+        speak(emergencyText, EmotionTone.EMERGENCY) {
             startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:108")))
             lifecycleScope.launch {
                 providers   = ServiceManager.searchProviders(
@@ -790,16 +802,23 @@ Do NOT include instructions or frequency — only names and doses."""
 
     // ── Speak helper ──────────────────────────────────────────────────────
 
-    private fun speak(text: String, onDone: (() -> Unit)? = null) {
+    private fun speak(
+        text: String,
+        tone: EmotionTone = EmotionTone.NORMAL,
+        onDone: (() -> Unit)? = null
+    ) {
         lifecycleScope.launch {
             val lang      = LanguageManager.getLanguage()
             val finalText = TranslationManager.translate(text, lang)
-            Log.d("ServiceActivity", "Speaking: $finalText")
+            Log.d("ServiceActivity", "Speaking [$tone]: $finalText")
             runOnUiThread {
-                ttsManager.speak(text = finalText, language = lang, onDone = { onDone?.invoke() })
+                ttsManager.speak(text = finalText, language = lang, tone = tone, onDone = { onDone?.invoke() })
             }
         }
     }
+
+    // Backward-compat overload
+    private fun speak(text: String, onDone: (() -> Unit)?) = speak(text, EmotionTone.NORMAL, onDone)
 }
 
 sealed class ServiceScreenState {

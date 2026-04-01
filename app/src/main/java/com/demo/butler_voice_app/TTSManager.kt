@@ -14,6 +14,21 @@ import java.io.File
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 
+// ── Emotion tone controls ElevenLabs voice_settings ──────────────────────────
+// Never use a cheerful/expressive tone for emergencies or distress.
+//
+// EMERGENCY  → high stability, zero style  → serious, controlled, urgent
+// EMPATHETIC → medium stability, low style → gentle, calm, caring
+// NORMAL     → default (ordering, greetings, questions)
+// WARM       → used for order confirmed, booking done
+// ─────────────────────────────────────────────────────────────────────────────
+enum class EmotionTone {
+    EMERGENCY,    // "Ambulance bula raha hoon" — serious, no cheerfulness
+    EMPATHETIC,   // "Samajh gaye, tension mat lo" — gentle
+    NORMAL,       // Default for ordering/questions
+    WARM          // Order placed, booking confirmed — positive but not giddy
+}
+
 class TTSManager(
     private val context: Context,
     private val elevenLabsApiKey: String,
@@ -22,82 +37,87 @@ class TTSManager(
     companion object {
         private const val TAG = "TTS"
 
+        // Shreya — female, multilingual. Same voice for all languages.
+        private const val VOICE_EN = "RwXLkVKnRloV1UPh3Ccx"
+        private const val VOICE_HI = "RwXLkVKnRloV1UPh3Ccx"
 
-        private const val VOICE_EN = "RwXLkVKnRloV1UPh3Ccx"   // Shreya — female
-        private const val VOICE_HI = "RwXLkVKnRloV1UPh3Ccx"   // Shreya — same, multilingual
-
-        // eleven_multilingual_v2: supports hi, te, en, mr, kn, ml, ta
-        // Never use eleven_monolingual_v1 for Indian languages — it mispronounces
         private const val ELEVEN_MODEL = "eleven_multilingual_v2"
-
-        // Devanagari Unicode block: U+0900–U+097F
         private val DEVANAGARI = Regex("[\\u0900-\\u097F]")
+
+        // ── Voice settings per emotion tone ──────────────────────────────────
+        // stability  : 0.0 (variable/expressive) → 1.0 (monotone/stable)
+        // style      : 0.0 (neutral) → 1.0 (exaggerated)
+        // Higher stability + lower style = serious, controlled voice
+        // Lower stability + higher style = expressive, warm voice
+        private data class VoiceSettings(
+            val stability: Double,
+            val similarityBoost: Double,
+            val style: Double,
+            val useSpeakerBoost: Boolean = true
+        )
+
+        private val TONE_SETTINGS = mapOf(
+            EmotionTone.EMERGENCY  to VoiceSettings(0.85, 0.90, 0.00), // serious, no emotion
+            EmotionTone.EMPATHETIC to VoiceSettings(0.70, 0.85, 0.05), // gentle, calm
+            EmotionTone.NORMAL     to VoiceSettings(0.50, 0.80, 0.15), // neutral
+            EmotionTone.WARM       to VoiceSettings(0.40, 0.80, 0.25)  // positive, warm
+        )
     }
 
-    // ── HTTP client — shared, not recreated per call ───────────────────────
     private val http = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(30,  TimeUnit.SECONDS)
         .build()
 
-    // Strong reference — survives GC until onCompletion fires
     private var player: MediaPlayer? = null
-
-    // Fallback Android TTS (used if ElevenLabs fails or no internet)
     private var androidTts: TextToSpeech? = null
     private var androidTtsReady = false
 
-    // ══════════════════════════════════════════════════════════════════════
-    // INIT
-    // ══════════════════════════════════════════════════════════════════════
+    // ── INIT ──────────────────────────────────────────────────────────────────
 
     fun init(onReady: () -> Unit) {
         androidTts = TextToSpeech(context) { status ->
             androidTtsReady = (status == TextToSpeech.SUCCESS)
-            if (androidTtsReady) {
-                androidTts?.language = Locale("hi", "IN")
-            }
+            if (androidTtsReady) androidTts?.language = Locale("hi", "IN")
             onReady()
         }
     }
 
-    // ══════════════════════════════════════════════════════════════════════
-    // PUBLIC speak()
-    // ══════════════════════════════════════════════════════════════════════
+    // ── PUBLIC speak() ────────────────────────────────────────────────────────
+    // tone defaults to NORMAL so all existing call sites compile unchanged.
 
-    fun speak(text: String, language: String, onDone: (() -> Unit)? = null) {
-        if (text.isBlank()) {
-            Log.w(TAG, "speak() called with blank text — skipping")
-            onDone?.invoke()
-            return
-        }
+    fun speak(
+        text: String,
+        language: String,
+        tone: EmotionTone = EmotionTone.NORMAL,
+        onDone: (() -> Unit)? = null
+    ) {
+        if (text.isBlank()) { Log.w(TAG, "speak() blank — skip"); onDone?.invoke(); return }
 
         val resolvedVoice = resolveVoice(text, language)
-        Log.d(TAG, "ElevenLabs [$language] voice=$resolvedVoice → \"${text.take(60)}\"")
+        val settings      = TONE_SETTINGS[tone] ?: TONE_SETTINGS[EmotionTone.NORMAL]!!
+        Log.d(TAG, "ElevenLabs [$language] tone=$tone voice=$resolvedVoice → \"${text.take(60)}\"")
 
         val appContext = context.applicationContext
         Thread {
             try {
-                val audioBytes = fetchElevenLabsAudio(text, resolvedVoice)
+                val audioBytes = fetchElevenLabsAudio(text, resolvedVoice, settings)
                 if (audioBytes != null && audioBytes.isNotEmpty()) {
                     playAudioBytes(appContext, audioBytes, onDone)
                 } else {
-                    Log.w(TAG, "ElevenLabs returned empty audio — using Android TTS fallback")
+                    Log.w(TAG, "ElevenLabs empty — fallback to Android TTS")
                     speakWithAndroidTts(text, language, onDone)
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "ElevenLabs fetch error: ${e.message} — using Android TTS fallback")
+                Log.e(TAG, "ElevenLabs error: ${e.message} — fallback")
                 speakWithAndroidTts(text, language, onDone)
             }
         }.start()
     }
 
-    // ══════════════════════════════════════════════════════════════════════
-    // VOICE RESOLUTION
-    // ══════════════════════════════════════════════════════════════════════
+    // ── VOICE RESOLUTION ──────────────────────────────────────────────────────
 
     private fun resolveVoice(text: String, language: String): String {
-        // Devanagari script → Hindi voice (Shreya, multilingual)
         if (DEVANAGARI.containsMatchIn(text)) return VOICE_HI
         return when {
             language.startsWith("hi") || language.startsWith("mr") -> VOICE_HI
@@ -105,19 +125,21 @@ class TTSManager(
         }
     }
 
-    // ══════════════════════════════════════════════════════════════════════
-    // ELEVENLABS HTTP CALL
-    // ══════════════════════════════════════════════════════════════════════
+    // ── ELEVENLABS HTTP ───────────────────────────────────────────────────────
 
-    private fun fetchElevenLabsAudio(text: String, voice: String): ByteArray? {
+    private fun fetchElevenLabsAudio(
+        text: String,
+        voice: String,
+        settings: VoiceSettings
+    ): ByteArray? {
         val body = JSONObject().apply {
             put("text", text)
             put("model_id", ELEVEN_MODEL)
             put("voice_settings", JSONObject().apply {
-                put("stability",        0.45)   // slightly lower = more natural Hindi
-                put("similarity_boost", 0.80)
-                put("style",            0.20)   // adds expressiveness
-                put("use_speaker_boost", true)
+                put("stability",        settings.stability)
+                put("similarity_boost", settings.similarityBoost)
+                put("style",            settings.style)
+                put("use_speaker_boost", settings.useSpeakerBoost)
             })
         }.toString().toRequestBody("application/json".toMediaType())
 
@@ -137,22 +159,14 @@ class TTSManager(
         return response.body?.bytes()
     }
 
-    // ══════════════════════════════════════════════════════════════════════
-    // MEDIAPLAYER
-    // ══════════════════════════════════════════════════════════════════════
+    // ── MEDIAPLAYER ───────────────────────────────────────────────────────────
 
     private fun playAudioBytes(context: Context, audioBytes: ByteArray, onDone: (() -> Unit)?) {
         val tmp = File(context.cacheDir, "butler_tts_${System.currentTimeMillis()}.mp3")
-        try {
-            tmp.writeBytes(audioBytes)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to write temp audio: ${e.message}")
-            onDone?.invoke()
-            return
-        }
+        try { tmp.writeBytes(audioBytes) }
+        catch (e: Exception) { Log.e(TAG, "Temp file write failed: ${e.message}"); onDone?.invoke(); return }
 
         releasePlayer()
-
         player = MediaPlayer().apply {
             try {
                 setAudioAttributes(
@@ -163,100 +177,50 @@ class TTSManager(
                 )
                 setDataSource(tmp.absolutePath)
                 prepare()
-
-                setOnCompletionListener {
-                    Log.d(TAG, "Playback complete")
-                    tmp.delete()
-                    releasePlayer()
-                    onDone?.invoke()
-                }
-
+                setOnCompletionListener { tmp.delete(); releasePlayer(); onDone?.invoke() }
                 setOnErrorListener { _, what, extra ->
                     Log.e(TAG, "MediaPlayer error what=$what extra=$extra")
-                    tmp.delete()
-                    releasePlayer()
-                    onDone?.invoke()
-                    true
+                    tmp.delete(); releasePlayer(); onDone?.invoke(); true
                 }
-
                 start()
                 Log.d(TAG, "Playback started (${audioBytes.size} bytes)")
-
             } catch (e: Exception) {
                 Log.e(TAG, "MediaPlayer setup failed: ${e.message}")
-                tmp.delete()
-                releasePlayer()
-                onDone?.invoke()
+                tmp.delete(); releasePlayer(); onDone?.invoke()
             }
         }
     }
-
-    // ══════════════════════════════════════════════════════════════════════
-    // RELEASE
-    // ══════════════════════════════════════════════════════════════════════
 
     private fun releasePlayer() {
-        try {
-            player?.apply {
-                if (isPlaying) stop()
-                reset()
-                release()
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "releasePlayer error: ${e.message}")
-        } finally {
-            player = null
-        }
+        try { player?.apply { if (isPlaying) stop(); reset(); release() } }
+        catch (e: Exception) { Log.e(TAG, "releasePlayer: ${e.message}") }
+        finally { player = null }
     }
 
-    // ══════════════════════════════════════════════════════════════════════
-    // ANDROID TTS FALLBACK
-    // ══════════════════════════════════════════════════════════════════════
+    // ── ANDROID TTS FALLBACK ──────────────────────────────────────────────────
 
     private fun speakWithAndroidTts(text: String, language: String, onDone: (() -> Unit)?) {
         val tts = androidTts
-        if (tts == null || !androidTtsReady) {
-            Log.e(TAG, "Android TTS not ready — invoking onDone directly")
-            onDone?.invoke()
-            return
-        }
-
+        if (tts == null || !androidTtsReady) { onDone?.invoke(); return }
         try {
-            val locale = when {
+            tts.language = when {
                 language.startsWith("hi") -> Locale("hi", "IN")
-                language.startsWith("mr") -> Locale("mr", "IN")
                 language.startsWith("te") -> Locale("te", "IN")
+                language.startsWith("mr") -> Locale("mr", "IN")
                 else -> Locale.ENGLISH
             }
-            tts.language = locale
-
-            val utteranceId = "butler_${System.currentTimeMillis()}"
+            val id = "butler_${System.currentTimeMillis()}"
             tts.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
                 override fun onStart(id: String?) {}
                 override fun onDone(id: String?)  { onDone?.invoke() }
                 override fun onError(id: String?) { onDone?.invoke() }
             })
-            tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
-
-        } catch (e: Exception) {
-            Log.e(TAG, "Android TTS exception: ${e.message}")
-            onDone?.invoke()
-        }
+            tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, id)
+        } catch (e: Exception) { Log.e(TAG, "Android TTS: ${e.message}"); onDone?.invoke() }
     }
 
-    // ══════════════════════════════════════════════════════════════════════
-    // STOP / SHUTDOWN
-    // ══════════════════════════════════════════════════════════════════════
+    // ── STOP / SHUTDOWN ───────────────────────────────────────────────────────
 
-    fun stop() {
-        releasePlayer()
-        androidTts?.stop()
-    }
-
-    fun shutdown() {
-        releasePlayer()
-        androidTts?.stop()
-        androidTts?.shutdown()
-        androidTts = null
-    }
+    fun stop()     { releasePlayer(); androidTts?.stop() }
+    fun shutdown() { releasePlayer(); androidTts?.stop(); androidTts?.shutdown(); androidTts = null }
 }

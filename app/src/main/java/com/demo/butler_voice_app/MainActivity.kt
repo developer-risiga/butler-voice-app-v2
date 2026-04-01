@@ -46,6 +46,7 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.demo.butler_voice_app.BuildConfig
+import com.demo.butler_voice_app.EmotionTone
 import com.demo.butler_voice_app.ai.AIOrderParser
 import com.demo.butler_voice_app.ai.AIParser
 import com.demo.butler_voice_app.ai.IntentRouting
@@ -200,16 +201,36 @@ class MainActivity : ComponentActivity() {
     private fun routeTranscript(text: String, lower: String): Boolean {
         val lang = LanguageManager.getLanguage()
 
+        // ── Detect emotion FIRST before any routing ───────────────────────
+        // This ensures Butler never responds with a cheerful voice to someone
+        // who is in pain, scared, or facing an emergency.
+        val emotionTone = detectEmotionTone(lower)
+
+        // ── Emergency ─────────────────────────────────────────────────────
         if (ServiceVoiceHandler.isEmergency(lower)) {
-            speak(ServiceVoiceHandler.buildEmergencyPrompt(lang)) { launchServiceFlow(text) }
+            val emergencyText = when {
+                lang.startsWith("hi") ->
+                    "घबराइए मत। अभी ambulance बुला रहा हूँ।"
+                lang.startsWith("te") ->
+                    "భయపడకండి. ఇప్పుడే ambulance పిలుస్తున్నాను."
+                else ->
+                    "Don't worry. Calling ambulance right now."
+            }
+            speak(emergencyText, EmotionTone.EMERGENCY) { launchServiceFlow(text) }
             return true
         }
 
+        // ── Prescription ──────────────────────────────────────────────────
         if (ServiceVoiceHandler.isPrescriptionRequest(lower)) {
-            speak("I will help you order from your prescription. Opening camera now.") { launchServiceFlow(text) }
+            val rxText = when {
+                lang.startsWith("hi") -> "ठीक है, prescription के लिए camera खोल रहा हूँ।"
+                else -> "Opening camera for your prescription."
+            }
+            speak(rxText, EmotionTone.EMPATHETIC) { launchServiceFlow(text) }
             return true
         }
 
+        // ── Service request ───────────────────────────────────────────────
         if (currentState == AssistantState.LISTENING || currentState == AssistantState.REORDER_CONFIRM) {
             if (ServiceVoiceHandler.isServiceRequest(lower)) {
                 val intent = ServiceManager.detectServiceIntent(text)
@@ -219,25 +240,17 @@ class MainActivity : ComponentActivity() {
                     serviceSubTypeSession = ServiceSubTypeSession(sector, text)
                     currentState = AssistantState.IN_SERVICE_SUBTYPE_FLOW
                     val prompt = ServiceVoiceHandler.buildSubTypePrompt(sector, lang)
-                    speak(prompt) { startListening() }
+                    // Use empathetic tone if distress was detected in the request
+                    speak(prompt, emotionTone) { startListening() }
                 } else {
                     val sectorName = sector?.let {
                         com.demo.butler_voice_app.ai.HindiSectorNames.get(it.name, lang)
                     } ?: "service"
-                    speak("Finding $sectorName providers near you.") {
-                        // ── BUG 3 FIX ──────────────────────────────────────────
-                        // Previously: launchServiceFlow(text) with no overrideSector.
-                        // Inside launchServiceFlow, ServiceManager.detectServiceIntent()
-                        // was called AGAIN on the same transcript. On that second
-                        // call it returned sector=null (e.g. for "मुझे इलेक्ट्रिशियन
-                        // चाहिए।"), causing EXTRA_SECTOR="" to be passed to
-                        // ServiceActivity. ServiceActivity then fell through to the
-                        // else branch and asked "which service do you need?" — even
-                        // though the user had already said "electrician".
-                        //
-                        // Fix: pass the already-detected sector as overrideSector so
-                        // the second detection is skipped entirely.
-                        // ─────────────────────────────────────────────────────
+                    val findText = when {
+                        lang.startsWith("hi") -> "$sectorName ढूंढ रहा हूँ।"
+                        else -> "Finding $sectorName near you."
+                    }
+                    speak(findText, emotionTone) {
                         launchServiceFlow(text, overrideSector = sector)
                     }
                 }
@@ -245,6 +258,7 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        // ── Status query ──────────────────────────────────────────────────
         if (StatusCheckHandler.isStatusQuery(lower) &&
             (currentState == AssistantState.LISTENING || currentState == AssistantState.REORDER_CONFIRM)) {
             handleStatusQuery(text)
@@ -1673,7 +1687,7 @@ class MainActivity : ComponentActivity() {
                 }
                 val cartItems = cart.map { CartDisplayItem(it.product.name, it.quantity, it.product.price) }
                 setUiState(ButlerUiState.OrderPlaced(shortId, orderResult.total_amount, cartItems, 30, firstName))
-                speak(IndianLanguageProcessor.getOrderConfirmation(lang, firstName, shortId)) {
+                speak(IndianLanguageProcessor.getOrderConfirmation(lang, firstName, shortId), EmotionTone.WARM) {
                     try { stopLockTask() } catch (_: Exception) {}
                     startActivity(Intent(this@MainActivity, DeliveryTrackingActivity::class.java).apply {
                         putExtra("order_id", lastOrderId); putExtra("public_id", lastPublicId)
@@ -1844,7 +1858,43 @@ class MainActivity : ComponentActivity() {
 
     private fun setUiState(s: ButlerUiState) = runOnUiThread { uiState.value = s }
 
-    private fun speak(text: String, onDone: (() -> Unit)? = null) {
+    // ── Emotion detection from transcript ─────────────────────────────────
+    // Checks for distress/emergency signals BEFORE routing the transcript.
+    // Used to set the correct TTS tone so Butler never sounds cheerful when
+    // someone is in pain or in an emergency.
+    private fun detectEmotionTone(text: String): EmotionTone {
+        val lower = text.lowercase()
+
+        // Emergency / life-threatening
+        val emergencyWords = listOf(
+            "emergency", "ambulance", "heart", "chest", "breathe", "breathing",
+            "unconscious", "accident", "bleeding", "faint", "stroke", "attack",
+            "दर्द", "दिल", "सांस", "बेहोश", "खून", "हादसा", "एम्बुलेंस",
+            "నొప్పి", "గుండె", "శ్వాస", "అపస్మారం", "రక్తం",
+            "pain", "paining", "hurting", "dying", "help me", "madad",
+            "urgent", "जल्दी", "please help", "bachao", "बचाओ"
+        )
+        if (emergencyWords.any { lower.contains(it) }) return EmotionTone.EMERGENCY
+
+        // Distress / worry but not life-threatening
+        val distressWords = listOf(
+            "worried", "scared", "tension", "anxious", "upset", "crying",
+            "lost", "stolen", "problem", "trouble", "issue", "pareshan",
+            "परेशान", "डर", "घबराहट", "चिंता", "problem hai",
+            "సమస్య", "భయం", "ఆందోళన"
+        )
+        if (distressWords.any { lower.contains(it) }) return EmotionTone.EMPATHETIC
+
+        return EmotionTone.NORMAL
+    }
+
+    // ── speak() with optional tone override ───────────────────────────────
+    // tone defaults to NORMAL so all existing call sites compile unchanged.
+    private fun speak(
+        text: String,
+        tone: EmotionTone = EmotionTone.NORMAL,
+        onDone: (() -> Unit)? = null
+    ) {
         sarvamSTT.stop()
         lifecycleScope.launch {
             val lang      = LanguageManager.getLanguage()
@@ -1853,10 +1903,13 @@ class MainActivity : ComponentActivity() {
             Log.d("Butler", "Translated ($lang): $finalText")
             runOnUiThread {
                 setUiState(ButlerUiState.Speaking(finalText))
-                ttsManager.speak(text = finalText, language = lang, onDone = { onDone?.invoke() })
+                ttsManager.speak(text = finalText, language = lang, tone = tone, onDone = { onDone?.invoke() })
             }
         }
     }
+
+    // Backward-compat overload — keeps all existing speak("text") { } calls working
+    private fun speak(text: String, onDone: (() -> Unit)?) = speak(text, EmotionTone.NORMAL, onDone)
 
     private fun speakKeepingRecsVisible(text: String, onDone: (() -> Unit)? = null) {
         sarvamSTT.stop()
