@@ -3,140 +3,147 @@ package com.demo.butler_voice_app.ai
 import android.util.Log
 
 /**
- * Tracks language across a session.
+ * Manages language detection stability across a session.
  *
- * Key behaviour:
- * - Scripts like Devanagari (hi), Telugu (te), Tamil (ta), Malayalam (ml), Kannada (kn)
- *   are detected with certainty from the Unicode range → switch immediately (threshold = 1).
- * - Roman-script ambiguity (e.g. Hinglish vs English) → require 2 consecutive hits before
- *   switching, to avoid false flips on code-mixed sentences.
- * - Once switched, the TTS voice must also be updated. Call ttsVoiceId after onDetection.
+ * PROBLEM this class solves:
+ * Sarvam STT frequently mis-identifies short Hindi utterances as Odia (od-IN),
+ * Kannada (kn-IN), or Bengali (bn-IN). A single word like "हाँ" (yes) can be
+ * returned as "ହଁ" (od-IN). This caused Butler to switch languages mid-session.
+ *
+ * SOLUTION — different thresholds per switch type:
+ *
+ * 1. → English: 1 hit required. Sarvam's English detection is highly accurate.
+ *    This ensures the investor can pick up the phone and get English immediately.
+ *
+ * 2. English → Indic: 2 hits required. Prevents one accidental Indic detection
+ *    from flipping an English session (e.g., typing noise mis-detected as Hindi).
+ *
+ * 3. Indic → Indic (same script family): 3 hits required. This is where false
+ *    detections happen — "हाँ" → od-IN, short Hindi → kn-IN, bn-IN. Requires 3
+ *    consecutive same-language detections before accepting the switch.
+ *
+ * 4. Odia (od), Bengali (bn): BLOCKED entirely. Near-zero legitimate speakers
+ *    in AP/Telangana, and they are the #1 false detection for Hindi short words.
  */
 object SessionLanguageManager {
 
-    private const val TAG = "SessionLang"
+    // ── Blocked languages (never legitimate in Butler's target market) ────────
+    private val BLOCKED_LANGUAGES = setOf("od", "bn")
 
-    // How many consecutive different detections needed before switching — for roman script
-    private const val ROMAN_CONSECUTIVE_NEEDED = 2
+    // ── Allowed languages ─────────────────────────────────────────────────────
+    private val ALLOWED_LANGUAGES = setOf(
+        "hi", "en", "te", "ta", "kn", "ml", "pa", "gu", "mr"
+    )
 
-    // Currently confirmed session language (BCP-47 e.g. "hi-IN", "en-IN")
-    var lockedLanguage: String? = null
+    // ── Script families (for threshold calculation) ───────────────────────────
+    // Indic-to-Indic switches have the most false detections, so need more hits.
+    private val INDIC_LANGUAGES = setOf("hi", "te", "ta", "kn", "ml", "pa", "gu", "mr")
+
+    // ── State ─────────────────────────────────────────────────────────────────
+
+    var lockedLanguage: String = "en-IN"
         private set
 
-    // Convenience: base language code e.g. "hi", "en", "te"
-    val ttsLanguage: String get() = lockedLanguage?.substringBefore("-") ?: "en"
+    val ttsLanguage: String
+        get() = lockedLanguage.substringBefore("-")
 
-    // ElevenLabs voice ID for the current locked language
-    val ttsVoiceId: String get() = voiceFor(lockedLanguage ?: "en-IN")
+    private var pendingLanguage: String  = ""
+    private var consecutiveCount: Int    = 0
 
-    // Optional: pass to Sarvam as language hint for faster / more accurate STT
-    val sarvamHint: String? get() = lockedLanguage
-
-    private var pendingLanguage: String? = null
-    private var consecutiveCount = 0
-
-    // ── Called after every Sarvam STT response ──────────────────────────────
+    // ── Core logic ────────────────────────────────────────────────────────────
 
     /**
-     * @param languageCode  BCP-47 code returned by Sarvam e.g. "hi-IN", "en-IN"
-     * @return true if the locked language changed (caller should update TTS voice)
+     * Returns true if the locked language changed.
+     * Threshold depends on the type of switch:
+     *   any → English       = 1 hit  (fast, reliable, investor-friendly)
+     *   English → Indic     = 2 hits (moderate protection)
+     *   Indic → Indic       = 3 hits (maximum protection against false detections)
      */
-    fun onDetection(languageCode: String): Boolean {
-        val current = lockedLanguage
+    fun onDetection(sarvamLangCode: String): Boolean {
+        val base      = sarvamLangCode.substringBefore("-").lowercase()
+        val lockedBase = lockedLanguage.substringBefore("-").lowercase()
 
-        // First detection — lock immediately regardless of script
-        if (current == null) {
-            lockedLanguage = languageCode
-            pendingLanguage = null
-            consecutiveCount = 0
-            Log.d(TAG, "Locked: $languageCode")
-            return true
+        // ── Blocked entirely ──────────────────────────────────────────────────
+        if (base in BLOCKED_LANGUAGES) {
+            Log.d("SessionLang", "Blocked: $sarvamLangCode")
+            return false
         }
 
-        // Same as current — no change, reset pending
-        if (languageCode == current) {
-            pendingLanguage = null
+        // ── Not in our supported set ──────────────────────────────────────────
+        if (base !in ALLOWED_LANGUAGES) {
+            Log.d("SessionLang", "Unsupported: $sarvamLangCode — ignored")
+            return false
+        }
+
+        // ── Already locked to this language ───────────────────────────────────
+        if (base == lockedBase) {
+            pendingLanguage  = ""
             consecutiveCount = 0
             return false
         }
 
-        // Different language detected — decide threshold based on script
-        val threshold = if (isNonRomanScript(languageCode)) 1 else ROMAN_CONSECUTIVE_NEEDED
-
-        when {
-            languageCode == pendingLanguage -> {
-                consecutiveCount++
-                if (consecutiveCount >= threshold) {
-                    Log.d(TAG, "Language switched: $current → $languageCode (after $consecutiveCount hits)")
-                    lockedLanguage = languageCode
-                    pendingLanguage = null
-                    consecutiveCount = 0
-                    return true
-                }
-            }
-            else -> {
-                pendingLanguage = languageCode
-                consecutiveCount = 1
-                // Non-roman script detected once → switch immediately
-                if (threshold == 1) {
-                    Log.d(TAG, "Language switched (script-based): $current → $languageCode")
-                    lockedLanguage = languageCode
-                    pendingLanguage = null
-                    consecutiveCount = 0
-                    return true
-                }
-            }
+        // ── Calculate threshold for this switch type ──────────────────────────
+        val threshold = when {
+            base == "en"                                       -> 1  // → English: always fast
+            lockedBase == "en" && base in INDIC_LANGUAGES     -> 2  // English → Indic
+            lockedBase in INDIC_LANGUAGES && base in INDIC_LANGUAGES -> 3  // Indic → Indic
+            else                                               -> 2
         }
+
+        // ── Accumulate consecutive hits ───────────────────────────────────────
+        if (base == pendingLanguage.substringBefore("-").lowercase()) {
+            consecutiveCount++
+            Log.d("SessionLang",
+                "Candidate $sarvamLangCode: $consecutiveCount/$threshold hits")
+        } else {
+            pendingLanguage  = sarvamLangCode
+            consecutiveCount = 1
+            Log.d("SessionLang",
+                "New candidate: $sarvamLangCode (1/$threshold needed)")
+        }
+
+        // ── Threshold reached — switch ────────────────────────────────────────
+        if (consecutiveCount >= threshold) {
+            val previous     = lockedLanguage
+            lockedLanguage   = sarvamLangCode
+            pendingLanguage  = ""
+            consecutiveCount = 0
+            Log.d("SessionLang", "Language switched: $previous → $lockedLanguage")
+            return true
+        }
+
         return false
     }
 
     /**
-     * Call this when Sarvam STT returns an empty transcript.
-     * SarvamSTTManager may have already called onDetection() with the language_code
-     * from empty audio (e.g. en-IN). This cancels any pending switch from that blank hit
-     * without touching the currently locked language.
+     * Blank transcripts are neutral — do not change locked language or counter.
      */
     fun onBlankTranscript() {
-        pendingLanguage = null
-        consecutiveCount = 0
-        Log.d(TAG, "Blank transcript — pending language reset, locked=$lockedLanguage stays")
+        Log.d("SessionLang",
+            "Blank transcript — pending language reset, locked=$lockedLanguage stays")
     }
 
+    /** Reset at session start (after wake word). */
     fun reset() {
-        lockedLanguage = null
-        pendingLanguage = null
+        lockedLanguage   = "en-IN"
+        pendingLanguage  = ""
         consecutiveCount = 0
-        Log.d(TAG, "Reset")
+        Log.d("SessionLang", "Reset")
     }
-
-    // ── Script detection ─────────────────────────────────────────────────────
 
     /**
-     * Languages where even a single detection is reliable enough to switch immediately,
-     * because their Unicode script range can't be confused with another language.
+     * Force-lock a language immediately (used at greeting time so first response
+     * is already in the correct language without needing accumulation hits).
      */
-    private fun isNonRomanScript(code: String): Boolean = when {
-        code.startsWith("hi") -> true   // Devanagari
-        code.startsWith("te") -> true   // Telugu
-        code.startsWith("ta") -> true   // Tamil
-        code.startsWith("ml") -> true   // Malayalam
-        code.startsWith("kn") -> true   // Kannada
-        code.startsWith("mr") -> true   // Marathi (also Devanagari)
-        code.startsWith("pa") -> true   // Punjabi (Gurmukhi)
-        code.startsWith("gu") -> true   // Gujarati
-        code.startsWith("bn") -> true   // Bengali
-        else -> false
-    }
-
-    // ── ElevenLabs voice mapping ─────────────────────────────────────────────
-
-    fun voiceFor(langCode: String): String = when {
-        langCode.startsWith("hi") -> "pqHfZKP75CvOlQylNhV4"   // Hindi
-        langCode.startsWith("te") -> "YOUR_TELUGU_VOICE_ID"
-        langCode.startsWith("ta") -> "YOUR_TAMIL_VOICE_ID"
-        langCode.startsWith("ml") -> "YOUR_MALAYALAM_VOICE_ID"
-        langCode.startsWith("kn") -> "YOUR_KANNADA_VOICE_ID"
-        langCode.startsWith("mr") -> "pqHfZKP75CvOlQylNhV4"   // Marathi uses Hindi voice
-        else                      -> "RwXLkVKnRloV1UPh3Ccx"   // English default
+    fun forceSet(sarvamLangCode: String) {
+        val base = sarvamLangCode.substringBefore("-").lowercase()
+        if (base !in BLOCKED_LANGUAGES && base in ALLOWED_LANGUAGES) {
+            lockedLanguage   = sarvamLangCode
+            pendingLanguage  = ""
+            consecutiveCount = 0
+            Log.d("SessionLang", "Force-set: $sarvamLangCode")
+        } else {
+            Log.w("SessionLang", "forceSet ignored — $sarvamLangCode blocked/unsupported")
+        }
     }
 }

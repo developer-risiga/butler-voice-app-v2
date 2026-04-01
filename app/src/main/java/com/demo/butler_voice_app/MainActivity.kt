@@ -645,6 +645,22 @@ class MainActivity : ComponentActivity() {
                     }
                 } else null
                 runOnUiThread {
+                    // Force-lock the language at greeting time. This means the user's
+                    // FIRST response is already in the right language context without
+                    // needing 3 consecutive hits to confirm. Critical for demo flow.
+                    val lockedCode = when {
+                        lang.startsWith("hi") -> "hi-IN"
+                        lang.startsWith("te") -> "te-IN"
+                        lang.startsWith("ta") -> "ta-IN"
+                        lang.startsWith("kn") -> "kn-IN"
+                        lang.startsWith("ml") -> "ml-IN"
+                        lang.startsWith("pa") -> "pa-IN"
+                        lang.startsWith("gu") -> "gu-IN"
+                        lang.startsWith("mr") -> "mr-IN"
+                        else                  -> "en-IN"
+                    }
+                    SessionLanguageManager.forceSet(lockedCode)
+
                     if (smartMsg != null && suggestions.isNotEmpty()) {
                         pendingReorderSuggestions = suggestions
                         currentState = AssistantState.REORDER_CONFIRM
@@ -745,19 +761,33 @@ class MainActivity : ComponentActivity() {
                     if (transcript.isBlank()) MoodDetector.recordRetry()
 
                     // ── LANGUAGE DETECTION & SWITCHING ───────────────────
-                    if (transcript.isNotBlank() && transcript.length > 3) {
-                        val scriptLang = MultilingualMatcher.detectScript(transcript)
-                        val detected   = LanguageDetector.detect(transcript)
-                        val rawLang    = if (scriptLang != "en") scriptLang else detected
-                        LanguageManager.setLanguage(rawLang)
+                    // SessionLanguageManager requires HITS_TO_SWITCH (3) consecutive
+                    // same-language detections before switching. This prevents od/kn/bn
+                    // false detections from flipping the language on a single utterance.
+                    // Also blocks od-IN and bn-IN entirely (constant false detections
+                    // for Hindi short utterances in AP/Telangana).
+                    if (transcript.isNotBlank() && transcript.length > 2) {
+                        // Prefer Sarvam's own language_code over our script detector
+                        // when Sarvam is confident. Our script detector is used as
+                        // a sanity check — if Sarvam says "en-IN" but the text is
+                        // clearly Devanagari, trust the script detector.
+                        val scriptLang     = MultilingualMatcher.detectScript(transcript)
+                        val detected       = LanguageDetector.detect(transcript)
+                        val rawLang        = if (scriptLang != "en") scriptLang else detected
 
                         val sarvamLangCode = "$rawLang-IN"
                         val langSwitched   = SessionLanguageManager.onDetection(sarvamLangCode)
                         if (langSwitched) {
-                            Log.d("Butler", "🔄 Language switched to ${SessionLanguageManager.lockedLanguage}")
                             val newBase = SessionLanguageManager.ttsLanguage
                             LanguageManager.setLanguage(newBase)
-                            Log.d("Butler", "LanguageManager synced to $newBase")
+                            Log.d("Butler", "🔄 Language switched to ${SessionLanguageManager.lockedLanguage}")
+                        } else {
+                            // Stay on locked language — don't let a single stray
+                            // detection push LanguageManager out of sync
+                            val locked = SessionLanguageManager.ttsLanguage
+                            if (LanguageManager.getLanguage() != locked) {
+                                LanguageManager.setLanguage(locked)
+                            }
                         }
                     }
 
