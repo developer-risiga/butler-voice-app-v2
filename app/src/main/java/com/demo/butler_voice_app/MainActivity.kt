@@ -1330,37 +1330,57 @@ class MainActivity : ComponentActivity() {
 
         speakFillerThen {
             lifecycleScope.launch {
+                // ── RESPONSE TIME FIX ─────────────────────────────────────
+                // Previously: AIParser.parse() + AIOrderParser.parse() = 2 sequential
+                // GPT calls = 5+ seconds per voice command.
+                //
+                // Fix: use ONLY AIParser.parse() result. It already returns items
+                // for grocery orders (GoToGrocery routing). AIOrderParser is removed
+                // from this path entirely, saving ~3 seconds per interaction.
+                // ─────────────────────────────────────────────────────────
                 val fullParsed = AIParser.parse(text)
-                if (fullParsed.routing is IntentRouting.GoToService) {
-                    val cat = (fullParsed.routing as IntentRouting.GoToService).category
-                    runOnUiThread { speak("Finding $cat providers near you.") { launchServiceFlow(text) } }
-                    return@launch
-                }
-                val parsed = AIOrderParser.parse(text)
-                LanguageManager.setLanguage(parsed.detectedLanguage)
+                LanguageManager.setLanguage(fullParsed.language)
+
                 runOnUiThread {
-                    when (parsed.intent) {
-                        "finish_order"  -> {
+                    when (val routing = fullParsed.routing) {
+                        is IntentRouting.GoToService -> {
+                            speak("Finding ${routing.category} providers near you.") {
+                                launchServiceFlow(text)
+                            }
+                        }
+                        is IntentRouting.GoToGrocery -> {
+                            // Items come from AIParser directly — no second GPT call
+                            val items = routing.items
+                            when {
+                                items.isEmpty() -> {
+                                    val fb = keywordFallback(cleaned)
+                                    if (fb != null) searchAndAskQuantity(fb)
+                                    else speak(ButlerPhraseBank.get("ask_item", lang)) { startListening() }
+                                }
+                                items.size == 1 -> {
+                                    val i = items.first()
+                                    searchAndAskQuantity(i.name, i.quantity, i.unit)
+                                }
+                                else -> lifecycleScope.launch { addMultipleItemsToCart(items) }
+                            }
+                        }
+                        is IntentRouting.FinishOrder -> {
                             if (cart.isEmpty()) speak("cart khaali hai. ${ButlerPhraseBank.get("ask_item", lang)}") { startListening() }
                             else readCartAndConfirm()
                         }
-                        "confirm_order" -> {
-                            if (currentState == AssistantState.CONFIRMING) askPaymentMode() else readCartAndConfirm()
+                        is IntentRouting.ConfirmOrder -> {
+                            if (currentState == AssistantState.CONFIRMING) askPaymentMode()
+                            else readCartAndConfirm()
                         }
-                        "cancel_order"  -> speak("theek hai, cancel.") { startWakeWordListening() }
-                        "history"       -> readOrderHistory()
-                        "order", "add_more" -> {
-                            if (parsed.items.isEmpty()) {
-                                val fb = keywordFallback(cleaned)
-                                if (fb != null) searchAndAskQuantity(fb)
-                                else speak(ButlerPhraseBank.get("ask_item", lang)) { startListening() }
-                            } else if (parsed.items.size == 1) {
-                                val i = parsed.items.first(); searchAndAskQuantity(i.name, i.quantity, i.unit)
-                            } else {
-                                lifecycleScope.launch { addMultipleItemsToCart(parsed.items) }
-                            }
+                        is IntentRouting.CancelOrder -> {
+                            speak("theek hai, cancel.") { startWakeWordListening() }
                         }
-                        else -> speak(ButlerPhraseBank.get("ask_item", lang)) { startListening() }
+                        else -> {
+                            // Unknown / AskClarify / ShowMenu — try keyword fallback first
+                            val fb = keywordFallback(cleaned)
+                            if (fb != null) searchAndAskQuantity(fb)
+                            else speak(ButlerPhraseBank.get("ask_item", lang)) { startListening() }
+                        }
                     }
                 }
             }

@@ -46,17 +46,10 @@ object UserSessionManager {
     fun currentUserId() : String? = currentUid
     fun getToken()      : String? = currentToken
 
-    // ─── RESTORE SAVED SESSION ────────────────────────────────
+    // ── RESTORE SAVED SESSION ──────────────────────────────────────────────
 
-    /**
-     * Try to restore a previously saved session from disk.
-     * Returns true if session was valid and restored.
-     * Call this on every wake word detection.
-     */
     suspend fun tryRestoreSession(): Boolean {
-        // Already in memory
         if (isLoggedIn() && currentProfile != null) return true
-        // Nothing saved
         if (!SessionStore.hasSession()) return false
 
         val savedToken = SessionStore.getToken() ?: return false
@@ -94,7 +87,6 @@ object UserSessionManager {
                 }
 
                 loadPurchaseHistory()
-
                 Log.d("Session", "Session restored: ${currentProfile?.full_name}")
                 true
 
@@ -106,7 +98,7 @@ object UserSessionManager {
         }
     }
 
-    // ─── LOGIN ────────────────────────────────────────────────
+    // ── LOGIN ──────────────────────────────────────────────────────────────
 
     suspend fun login(email: String, password: String): Result<UserProfile> {
         return withContext(Dispatchers.IO) {
@@ -128,16 +120,26 @@ object UserSessionManager {
                     return@withContext Result.failure(Exception("Login failed: $resBody"))
                 }
 
-                val obj      = json.parseToJsonElement(resBody).jsonObject
-                currentToken = obj["access_token"]?.jsonPrimitive?.content
-                currentUid   = obj["user"]?.jsonObject?.get("id")?.jsonPrimitive?.content
+                val obj          = json.parseToJsonElement(resBody).jsonObject
+                currentToken     = obj["access_token"]?.jsonPrimitive?.content
+                currentUid       = obj["user"]?.jsonObject?.get("id")?.jsonPrimitive?.content
+                // ── BUG 7 FIX: extract and save refresh_token ─────────────
+                // Previously refresh_token was never saved → SessionStore.hasRefreshToken()
+                // always returned false → silent token refresh never attempted →
+                // user was forced to fully log in on every access token expiry.
+                val refreshToken = obj["refresh_token"]?.jsonPrimitive?.content ?: ""
 
                 Log.d("Session", "Login success. UID: $currentUid")
 
                 val userEmail = obj["user"]?.jsonObject?.get("email")?.jsonPrimitive?.content
                 val profile   = loadProfile()
-                // Persist session so next wake word auto-logs in
-                SessionStore.save(currentToken!!, currentUid!!, profile.full_name, userEmail)
+                SessionStore.save(
+                    token        = currentToken!!,
+                    uid          = currentUid!!,
+                    name         = profile.full_name,
+                    email        = userEmail,
+                    refreshToken = refreshToken   // ← now saved
+                )
                 Result.success(profile)
 
             } catch (e: Exception) {
@@ -147,7 +149,7 @@ object UserSessionManager {
         }
     }
 
-    // ─── SIGNUP ───────────────────────────────────────────────
+    // ── SIGNUP ─────────────────────────────────────────────────────────────
 
     suspend fun signup(
         email   : String,
@@ -177,10 +179,12 @@ object UserSessionManager {
                     return@withContext Result.failure(Exception("Signup failed ${res.code}: $resBody"))
                 }
 
-                val obj      = json.parseToJsonElement(resBody).jsonObject
-                currentToken = obj["access_token"]?.jsonPrimitive?.content
-                currentUid   = obj["user"]?.jsonObject?.get("id")?.jsonPrimitive?.content
+                val obj          = json.parseToJsonElement(resBody).jsonObject
+                currentToken     = obj["access_token"]?.jsonPrimitive?.content
+                currentUid       = obj["user"]?.jsonObject?.get("id")?.jsonPrimitive?.content
                     ?: obj["id"]?.jsonPrimitive?.content
+                // ── BUG 7 FIX: save refresh_token from signup response too ─
+                val refreshToken = obj["refresh_token"]?.jsonPrimitive?.content ?: ""
 
                 Log.d("Session", "Signup success. UID: $currentUid, token: ${currentToken?.take(20)}")
 
@@ -203,8 +207,13 @@ object UserSessionManager {
                 val profile = UserProfile(id = userId, full_name = name, phone = phone)
                 currentProfile = profile
 
-                // Persist session
-                SessionStore.save(token, userId, name, email)
+                SessionStore.save(
+                    token        = token,
+                    uid          = userId,
+                    name         = name,
+                    email        = email,
+                    refreshToken = refreshToken   // ← now saved
+                )
                 Result.success(profile)
 
             } catch (e: Exception) {
@@ -214,7 +223,7 @@ object UserSessionManager {
         }
     }
 
-    // ─── LOAD PROFILE ─────────────────────────────────────────
+    // ── LOAD PROFILE ──────────────────────────────────────────────────────
 
     suspend fun loadProfile(): UserProfile {
         return withContext(Dispatchers.IO) {
@@ -253,7 +262,7 @@ object UserSessionManager {
         }
     }
 
-    // ─── PURCHASE HISTORY ─────────────────────────────────────
+    // ── PURCHASE HISTORY ──────────────────────────────────────────────────
 
     private suspend fun loadPurchaseHistory() {
         val userId = currentUid ?: return
@@ -273,8 +282,8 @@ object UserSessionManager {
             val arr  = json.parseToJsonElement(body).jsonArray
 
             arr.mapNotNull {
-                val name = it.jsonObject["product_name"]?.jsonPrimitive?.content
-                if (!name.isNullOrBlank()) PurchaseSummary(product_name = name) else null
+                val n = it.jsonObject["product_name"]?.jsonPrimitive?.content
+                if (!n.isNullOrBlank()) PurchaseSummary(product_name = n) else null
             }.distinctBy { it.product_name }
 
         } catch (e: Exception) {
@@ -283,7 +292,7 @@ object UserSessionManager {
         }
     }
 
-    // ─── PERSONALIZATION ──────────────────────────────────────
+    // ── PERSONALIZATION ───────────────────────────────────────────────────
 
     fun buildPersonalizationContext(): String {
         val profile = currentProfile ?: return ""
@@ -297,9 +306,8 @@ object UserSessionManager {
         }
     }
 
-    // ─── LOGOUT ───────────────────────────────────────────────
+    // ── LOGOUT ────────────────────────────────────────────────────────────
 
-    /** Soft logout — clears memory, keeps disk session for next visit */
     fun logout() {
         currentToken    = null
         currentUid      = null
@@ -308,7 +316,6 @@ object UserSessionManager {
         Log.d("Session", "Logged out (session persisted on disk)")
     }
 
-    /** Hard logout — clears memory AND disk */
     fun hardLogout() {
         logout()
         SessionStore.clear()
