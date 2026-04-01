@@ -1345,9 +1345,11 @@ class MainActivity : ComponentActivity() {
     private fun handlePaidOrNotPaid(cleaned: String, mode: String) {
         // Sarvam STT sometimes detects Hindi "हाँ" as Punjabi (ਹਾਂ) or
         // Gujarati (હા) — all mean yes. Include all scripts.
+        // Also added "हो गई" (feminine) — "हो गया" (masculine) was present
+        // but "payment हो गई?" gets "हो गई।" as response which wasn't matched.
         val paid    = listOf(
             "yes","paid","done","payment done","i paid","completed","transferred","confirm",
-            "हाँ","हां","हो गया","ho gaya","kar diya","ha",
+            "हाँ","हां","हो गया","हो गई","ho gaya","ho gayi","kar diya","ha","kar di",
             "పేమెంట్ చేశాను","అవును","ஆம்",
             "ਹਾਂ","ਹੋ ਗਈ","ਪੇਮੈਂਟ ਹੋ ਗਈ",   // Punjabi
             "હા","કન્ફર્મ","ચૂકવ્યું","થઈ ગઈ"    // Gujarati
@@ -1883,8 +1885,16 @@ class MainActivity : ComponentActivity() {
     private fun isNoMoreIntent(s: String): Boolean {
         if (MultilingualMatcher.isDone(s)) return true
         if (IndianLanguageProcessor.DONE_PHRASES.any { s.contains(it, ignoreCase = true) }) return true
-        return listOf("no","nope","done","nothing","finish","stop","checkout","place order",
-            "बस","हो गया","bas","nahi","kar do").any { s.contains(it) }
+        // ── Added: "ऑर्डर करो" / "order karo" — user explicitly asking to place order
+        // Previously AIParser returned intent=unknown for these, causing Butler
+        // to ask "कुछ और?" in a loop instead of going to checkout.
+        return listOf(
+            "no","nope","done","nothing","finish","stop","checkout","place order",
+            "बस","हो गया","bas","nahi","kar do",
+            "ऑर्डर करो","order karo","order kar do","order kardo",
+            "ऑर्डर कर दो","ऑर्डर कर","place karo","place kar",
+            "bas karo","ho gaya","theek hai ab","ab karo"
+        ).any { s.contains(it, ignoreCase = true) }
     }
 
     private fun extractTimeSlotFromSpeech(text: String): String? {
