@@ -442,7 +442,7 @@ Do NOT include instructions or frequency — only names and doses."""
                 val lang   = LanguageManager.getLanguage()
                 // ── HUMANISED: use ServiceVoiceEngine for pharmacy list prompts ──
                 // prescriptionFound = "Prescription se mila: X. 3 pharmacy paas mein. Kaun si?"
-                // prescriptionManual = "Aapne bataya: X. 3 pharmacy available. 1, 2, ya 3?"
+                // prescriptionManual = "Aapne bataya: X. 3 pharmacy available. Naam bolein."
                 val prompt = if (medicinesFromOcr) {
                     ServiceVoiceEngine.prescriptionFound(medicines, providers.size, lang)
                 } else {
@@ -541,16 +541,39 @@ Do NOT include instructions or frequency — only names and doses."""
         sarvamSTT.startListening(
             onResult = { transcript ->
                 runOnUiThread {
-                    // Logic stays in ServiceVoiceHandler
+                    val lower = transcript.lowercase().trim()
+
+                    // 1. Filter commands (nearest/cheapest/etc) — logic stays in ServiceVoiceHandler
                     val filter = ServiceVoiceHandler.parseFilterCommand(transcript)
                     if (filter != null) { applyFilter(filter); return@runOnUiThread }
+
+                    // 2. Back / cancel
+                    if (lower.contains("back") || lower.contains("cancel") ||
+                        lower.contains("वापस") || lower.contains("రద్దు") ||
+                        lower.contains("wapas") || lower.contains("nahi")) {
+                        goBack(); return@runOnUiThread
+                    }
+
+                    // 3. Match by PROVIDER NAME — user says "ABC" or "pehla wala"
+                    //    Split provider name into words, check if any word (length > 2)
+                    //    appears in the transcript. First match wins.
+                    val nameMatch = providers.indexOfFirst { provider ->
+                        val nameWords = provider.name.lowercase().split(" ", "-")
+                        nameWords.any { word ->
+                            word.length > 2 && lower.contains(word)
+                        }
+                    }
+                    if (nameMatch >= 0) { onProviderChosen(nameMatch + 1); return@runOnUiThread }
+
+                    // 4. Fallback: still accept "pehla"/"first"/"one" ordinal words
+                    //    so users who instinctively say a number still work
                     val num = ServiceVoiceHandler.parseNumberSelection(transcript)
                     if (num != null) { onProviderChosen(num); return@runOnUiThread }
-                    val lower = transcript.lowercase()
-                    if (lower.contains("back") || lower.contains("cancel") ||
-                        lower.contains("वापस") || lower.contains("రద్దు")) { goBack(); return@runOnUiThread }
-                    // ── HUMANISED: "1, 2, ya 3 bolein." / "Say 1, 2, or 3."
-                    speak(ServiceVoiceEngine.selectionRetry(LanguageManager.getLanguage())) { startListeningForSelection() }
+
+                    // 5. No match — ask again with name prompt
+                    speak(ServiceVoiceEngine.selectionRetry(LanguageManager.getLanguage())) {
+                        startListeningForSelection()
+                    }
                 }
             },
             onError = { runOnUiThread { startListeningForSelection() } }

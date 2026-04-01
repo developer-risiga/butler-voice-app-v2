@@ -190,40 +190,40 @@ object ServiceVoiceEngine {
         val sName = sectorLabel(sector.name, lang)
         val base  = lang.substringBefore("-").take(2)
 
-        val items = providers.take(count).mapIndexed { i, p ->
-            val num   = i + 1
-            val name  = p.name.split(" ").take(3).joinToString(" ")
-            val eta   = p.eta.ifBlank { "" }
-            val dist  = try { if (p.distanceKm > 0) "${p.distanceKm}km" else "" } catch (_: Exception) { "" }
+        // Build name-only list — NO numbers, user selects by saying the name
+        val items = providers.take(count).joinToString(", ") { p ->
+            val name = p.name.split(" ").take(3).joinToString(" ")
+            val eta  = p.eta.ifBlank { "" }
+            val dist = try { if (p.distanceKm > 0) "${p.distanceKm}km" else "" } catch (_: Exception) { "" }
             val extra = when (base) {
                 "hi" -> listOfNotNull(dist.ifBlank { null }, if (eta.isNotBlank()) "$eta mein" else null)
                 "te" -> listOfNotNull(dist.ifBlank { null }, if (eta.isNotBlank()) "$eta lo" else null)
                 else -> listOfNotNull(dist.ifBlank { null }, if (eta.isNotBlank()) "$eta away" else null)
             }
-            "$num: $name${if (extra.isNotEmpty()) " — ${extra.joinToString(", ")}" else ""}"
-        }.joinToString(". ")
+            "$name${if (extra.isNotEmpty()) " — ${extra.joinToString(", ")}" else ""}"
+        }
 
         return when {
             lang.startsWith("hi") -> pick("hi_prov_list", listOf(
-                "$count $sName mile hain paas mein. $items. Kaun sa chahiye?",
-                "Mila diya — $count $sName. $items. 1, 2, ya 3 bolein.",
-                "$count options hain. $items. Kaun sa lein?",
-                "Yeh raha — $items. Naam ya number bolein."
+                "$count $sName mile hain paas mein — $items. Kaun sa chahiye? Naam bolein.",
+                "$count options hain — $items. Kaunsa $sName chahiye?",
+                "Mil gaye — $items. Naam bolein.",
+                "Paas mein hain — $items. Kaunsa bhejoon?"
             ))
             lang.startsWith("te") -> pick("te_prov_list", listOf(
-                "$count $sName dorukunnaru. $items. Edi kavali?",
-                "Ilaa — $items. 1, 2, leda 3 cheppandi."
+                "$count $sName dorukunnaru — $items. Edi kavali? Peyru cheppandi.",
+                "Ilaa — $items. Meeru edi antaru?"
             ))
             lang.startsWith("ta") -> pick("ta_prov_list", listOf(
-                "$count $sName kidaichal. $items. Edu vendum?",
-                "$items. 1, 2, illaa 3 sollunga."
+                "$count $sName kidaichal — $items. Edu vendum? Peyar sollunga.",
+                "$items — edu vendum?"
             ))
-            lang.startsWith("kn") -> "$count $sName sigitu. $items. Yavudu beku?"
-            lang.startsWith("ml") -> "$count $sName kitti. $items. Etha veno?"
+            lang.startsWith("kn") -> "$count $sName sigitu — $items. Yavudu beku? Hesaru heli."
+            lang.startsWith("ml") -> "$count $sName kitti — $items. Etha veno? Peru parayo."
             else -> pick("en_prov_list", listOf(
-                "Found $count $sName nearby. $items. Which one?",
-                "Here are your options — $items. Say 1, 2, or 3.",
-                "$count nearby. $items. Which would you like?"
+                "Found $count $sName nearby — $items. Which one? Say the name.",
+                "$count options — $items. Which would you like?",
+                "Here you go — $items. Say the name you want."
             ))
         }
     }
@@ -484,14 +484,14 @@ object ServiceVoiceEngine {
     fun filterResult(sortName: String, count: Int, lang: String): String {
         return when {
             lang.startsWith("hi") -> pick("hi_filter", listOf(
-                "$sortName wale $count option hain. Kaun sa?",
-                "Theek hai, $sortName providers. $count options — 1, 2, ya 3?",
-                "$sortName filter — $count mila. Kaun sa lein?"
+                "$sortName wale $count option hain. Naam bolein.",
+                "$sortName providers — $count options. Kaunsa chahiye?",
+                "$sortName filter — $count mila. Provider ka naam batao."
             ))
-            lang.startsWith("te") -> "$sortName providers — $count options. Edi kavali?"
+            lang.startsWith("te") -> "$sortName providers — $count options. Peyru cheppandi."
             else -> pick("en_filter", listOf(
-                "Showing $sortName — $count options. Which one? Say 1, 2, or 3.",
-                "$sortName providers: $count nearby. 1, 2, or 3?"
+                "Showing $sortName — $count options. Say the name you want.",
+                "$sortName providers: $count nearby. Which one?"
             ))
         }
     }
@@ -569,14 +569,14 @@ object ServiceVoiceEngine {
         val more = if (medicines.size > 4) " aur ${medicines.size - 4} aur" else ""
         return when {
             lang.startsWith("hi") -> pick("hi_rx_found", listOf(
-                "Prescription se mila: $list$more. $pharmacyCount pharmacy paas mein. Kaun si?",
-                "Padhh liya — $list$more. $pharmacyCount pharmacy available. 1, 2, ya 3?",
-                "$list$more — yeh sab mill jayenge. $pharmacyCount pharmacy mili. Kaun si?"
+                "Prescription se mila: $list$more. $pharmacyCount pharmacy paas mein. Naam bolein.",
+                "Padhh liya — $list$more. $pharmacyCount pharmacy available. Kaunsi chahiye?",
+                "$list$more — $pharmacyCount pharmacy mili. Pharmacy ka naam bolein."
             ))
-            lang.startsWith("te") -> "$list$more dorukunnaayi. $pharmacyCount pharmacy daggara undi. Edi?"
+            lang.startsWith("te") -> "$list$more dorukunnaayi. $pharmacyCount pharmacy daggara undi. Peyru cheppandi."
             else -> pick("en_rx_found", listOf(
-                "Read your prescription: $list$more. $pharmacyCount pharmacy nearby. Which one?",
-                "Found $list$more in your prescription. $pharmacyCount pharmacies available. Say 1, 2, or 3."
+                "Read your prescription: $list$more. $pharmacyCount pharmacy nearby. Say the name.",
+                "Found $list$more. $pharmacyCount pharmacies available — which one?"
             ))
         }
     }
@@ -585,14 +585,14 @@ object ServiceVoiceEngine {
         val list = medicines.joinToString(", ")
         return when {
             lang.startsWith("hi") -> pick("hi_rx_manual", listOf(
-                "Aapne bataya: $list. $pharmacyCount pharmacy paas mein. Kaun si?",
-                "Theek hai — $list. $pharmacyCount pharmacy available. 1, 2, ya 3?",
-                "$list — dhundh raha hoon. $pharmacyCount pharmacy mili. Kaun si lein?"
+                "Aapne bataya: $list. $pharmacyCount pharmacy paas mein. Naam bolein.",
+                "Theek hai — $list. $pharmacyCount pharmacy available. Kaunsi chahiye?",
+                "$list — $pharmacyCount pharmacy mili. Pharmacy ka naam batao."
             ))
-            lang.startsWith("te") -> "Meeru chepparu: $list. $pharmacyCount pharmacy daggaraga undi. Edi?"
+            lang.startsWith("te") -> "Meeru chepparu: $list. $pharmacyCount pharmacy daggaraga undi. Peyru cheppandi."
             else -> pick("en_rx_manual", listOf(
-                "You said: $list. $pharmacyCount pharmacy nearby. Which one?",
-                "Looking for $list — found $pharmacyCount pharmacy. Say 1, 2, or 3."
+                "You said: $list. $pharmacyCount pharmacy nearby. Say the name.",
+                "Found $pharmacyCount pharmacy for $list — which one?"
             ))
         }
     }
@@ -624,11 +624,21 @@ object ServiceVoiceEngine {
     fun selectionRetry(lang: String): String {
         return when {
             lang.startsWith("hi") -> pick("hi_sel_retry", listOf(
-                "1, 2, ya 3 bolein.", "Number bolein — 1, 2, ya 3?", "Kaunsa? 1, 2, ya 3 mein se."
+                "Naam bolein — kaun sa chahiye?",
+                "Kaunsa? Provider ka naam batao.",
+                "Naam bolein please."
             ))
-            lang.startsWith("te") -> "1, 2, leda 3 cheppandi."
+            lang.startsWith("te") -> pick("te_sel_retry", listOf(
+                "Peyru cheppandi — edi kavali?",
+                "Provider peyru cheppandi."
+            ))
+            lang.startsWith("ta") -> "Peyar sollunga — edu vendum?"
+            lang.startsWith("kn") -> "Hesaru heli — yavudu beku?"
+            lang.startsWith("ml") -> "Peru parayo — etha veno?"
             else -> pick("en_sel_retry", listOf(
-                "Say 1, 2, or 3.", "Which one — 1, 2, or 3?", "Please say a number — 1, 2, or 3."
+                "Say the name — which one do you want?",
+                "Which provider? Say the name.",
+                "Please say the name."
             ))
         }
     }
