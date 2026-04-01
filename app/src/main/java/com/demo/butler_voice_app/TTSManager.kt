@@ -87,6 +87,7 @@ class TTSManager(
             "एमरजेंसी"   to "emergency",
             "फार्मेसी"   to "pharmacy",
             // Common Hinglish
+            "परफेक्ट"    to "perfect",
             "ओके"        to "okay",
             "प्लीज़"      to "please",
             "थैंक्यू"    to "thank you",

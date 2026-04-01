@@ -801,6 +801,9 @@ class MainActivity : ComponentActivity() {
 
                     totalEmptyRetries = 0
                     sttRetryCount = 0
+                    // Reset mood retry counter so FRUSTRATED from blank
+                    // transcripts doesn't carry over to successful commands
+                    MoodDetector.reset()
                     setUiState(ButlerUiState.Thinking(transcript))
                     handleCommand(transcript)
                 }
@@ -1496,14 +1499,24 @@ class MainActivity : ComponentActivity() {
                     cleaned.contains("और") || cleaned.contains("aur") -> {
                 currentState = AssistantState.LISTENING
                 val lastProd = sessionLastProduct
-                // Short product name — "DAAWAT BROWN BASMATI RICE 1 KG JAR" → "Daawat Brown"
                 val shortLast = lastProd?.lowercase()?.split(" ")
                     ?.take(2)?.joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
+
+                // ── "More?" prompt is context-aware ───────────────────────
+                // FRUSTRATED     → shortest possible, no filler
+                // First item     → suggest a related category ("दाल, तेल, आटा?")
+                // Already 2+     → just ask what else, no suggestions
+                // No filler here — user just confirmed an item, keep momentum
                 val prompt = when {
-                    shortLast != null && cart.size == 1 && lang.startsWith("hi") ->
-                        "और $shortLast लेना है, या कुछ और?"
-                    shortLast != null && cart.size == 1 ->
-                        "More $shortLast, or something else?"
+                    currentMood == UserMood.FRUSTRATED && lang.startsWith("hi") ->
+                        "और क्या?"
+                    currentMood == UserMood.FRUSTRATED ->
+                        "What else?"
+                    cart.size == 1 && shortLast != null && lang.startsWith("hi") ->
+                        "और $shortLast, या कुछ और? दाल, तेल, आटा?"
+                    cart.size == 1 && shortLast != null ->
+                        "More $shortLast, or something else? Dal, oil, flour?"
+                    lang.startsWith("hi") -> "और क्या चाहिए?"
                     else -> ButlerPhraseBank.get("ask_item", lang)
                 }
                 showCartAndSpeak(prompt) { startListening() }
@@ -1511,7 +1524,6 @@ class MainActivity : ComponentActivity() {
             isNoMoreIntent(cleaned) -> readCartAndConfirm()
             isCartEditIntent(cleaned) -> { currentState = AssistantState.EDITING_CART; handleCartEdit(cleaned, originalText) }
             else -> {
-                // ── Use AIParser instead of AIOrderParser — single GPT call ──
                 lifecycleScope.launch {
                     val fullParsed = AIParser.parse(originalText)
                     LanguageManager.setLanguage(fullParsed.language)
@@ -1543,32 +1555,53 @@ class MainActivity : ComponentActivity() {
     // PRODUCT SEARCH
     // ══════════════════════════════════════════════════════════════════════
 
-    // ── Voice readout for top 3 products ─────────────────────────────────
-    // Acknowledgment is prefixed HERE as part of the response — no separate
-    // filler TTS. One sentence = zero gap.
-    // Max ~10 words to keep audio under 5 seconds.
+    // ── Products exploring phase — voice readout ─────────────────────────
+    //
+    // FILLER RULES:
+    //   • "देखो," — only when presenting options for the FIRST time (cart empty)
+    //   • "और देखो," — when user already has items and is adding more
+    //   • NO filler for frustrated user — they get direct answer, no preamble
+    //   • Filler is always PART of the sentence, never a separate TTS call
+    //
+    // FUMBLE RULES:
+    //   • Never fake fumbles — sounds patronizing
+    //   • Natural variation in phrasing across calls is enough
+    //
     private fun buildProductVoiceReadout(
         recs: List<ProductRecommendation>,
         itemName: String,
         lang: String
     ): String {
-        val options = recs.mapIndexed { i, r ->
-            // First 2 words of product name only
-            val name = r.productName.lowercase().split(" ")
-                .take(2).joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
-            val price    = "₹${r.priceRs.toInt()}"
-            val delivery = "${(r.distanceKm * 8).toInt().coerceIn(10, 60)} min"
-            "${i + 1}: $name $price $delivery"
-        }.joinToString(", ")
+        fun shortName(r: ProductRecommendation) = r.productName.lowercase().split(" ")
+            .take(2).joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
 
-        // Natural acknowledgment built into the sentence — no separate filler
         return when {
-            lang.startsWith("hi") ->
-                "हाँ! $itemName — $options. कौनसा?"
-            lang.startsWith("te") ->
-                "సరే! $itemName — $options. ఏది?"
-            else ->
-                "Sure! $itemName — $options. Which one?"
+            lang.startsWith("hi") -> {
+                // Natural shopkeeper presentation — not a robotic numbered list
+                // Format: "देखो, rice के 3 options — Daawat ₹45, India Gate ₹52, Fortune ₹38। कौनसा?"
+                val optionText = recs.mapIndexed { i, r ->
+                    "${i + 1}: ${shortName(r)} ₹${r.priceRs.toInt()}"
+                }.joinToString(", ")
+
+                // Filler only where it sounds natural:
+                // - Cart empty = first search, use "देखो,"
+                // - Cart has items = continuing session, use "और देखो,"
+                val intro = if (cart.isEmpty()) "देखो," else "और देखो,"
+                "$intro $itemName के 3 options — $optionText। कौनसा?"
+            }
+            lang.startsWith("te") -> {
+                val optionText = recs.mapIndexed { i, r ->
+                    "${i + 1}: ${shortName(r)} ₹${r.priceRs.toInt()}"
+                }.joinToString(", ")
+                val intro = if (cart.isEmpty()) "చూడు," else "మరి చూడు,"
+                "$intro $itemName కి 3 options — $optionText. ఏది?"
+            }
+            else -> {
+                val optionText = recs.mapIndexed { i, r ->
+                    "${i + 1}: ${shortName(r)} ₹${r.priceRs.toInt()}"
+                }.joinToString(", ")
+                "$itemName — $optionText. Which one?"
+            }
         }
     }
 
@@ -1581,23 +1614,24 @@ class MainActivity : ComponentActivity() {
                     runOnUiThread { setUiState(ButlerUiState.ShowingRecommendations(itemName, recs)) }
 
                     // ── Only skip to single option when FRUSTRATED ────────
-                    // TIRED mood no longer triggers skip.
                     if (currentMood == UserMood.FRUSTRATED &&
                         currentState != AssistantState.IN_SERVICE_SUBTYPE_FLOW) {
                         val best = recs.first()
-                        // Short name — "DAAWAT BROWN BASMATI RICE 1KG" → "Daawat Brown"
                         val shortName = best.productName.lowercase().split(" ")
                             .take(2).joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
                         val price = "₹${best.priceRs.toInt()}"
 
-                        // Empathetic acknowledgment — not robotic, not cheerful
+                        // ── FRUSTRATED: direct and helpful — NO filler, NO "माफ करना"
+                        // A frustrated user wants the answer immediately.
+                        // "माफ करना" sounds apologetic and wastes their time.
+                        // Just give the best option directly.
                         val msg = when {
                             lang.startsWith("hi") ->
-                                "माफ करना। सबसे अच्छा option: $shortName $price. लेना है?"
+                                "$shortName $price — सबसे अच्छा है। लेना है?"
                             lang.startsWith("te") ->
-                                "క్షమించండి. అత్యుత్తమ option: $shortName $price. తీసుకోనా?"
+                                "$shortName $price — అత్యుత్తమం. తీసుకోనా?"
                             else ->
-                                "Sorry for the trouble. Best option: $shortName $price. Want this?"
+                                "$shortName $price — best option. Want it?"
                         }
                         runOnUiThread {
                             speakKeepingRecsVisible(msg, EmotionTone.EMPATHETIC) {
@@ -1693,22 +1727,39 @@ class MainActivity : ComponentActivity() {
             sessionLastProduct = pick.productName; sessionLastQty = finalQty
             currentState = AssistantState.ASKING_MORE
 
-            // Short readable name — "DAAWAT BROWN BASMATI RICE" → "Daawat Brown"
             val shortName = pick.productName.lowercase().split(" ")
                 .take(2).joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
             val suggestion = HumanFillerManager.getRelatedSuggestion(pick.productName, lang)
 
+            // ── Confirmation varies by cart position ──────────────────────
+            // First item  → warm, slightly enthusiastic — "बढ़िया! Daawat Brown cart में गया।"
+            // Second item → neutral, quick            — "और Tata Dal भी।"
+            // Third+ item → minimal, don't pad        — "ठीक।"
+            // Suggestion  → only offered on first item, not repeatedly
+            //
+            // NO filler words for confirmations — user just picked something,
+            // they want to confirm it and move on, not hear a speech.
             val msg = when {
-                lang.startsWith("hi") -> {
-                    val extra = if (suggestion != null && cart.size == 1) " $suggestion भी लेना है?" else " कुछ और?"
-                    "ठीक है! $shortName cart में है.$extra"
+                lang.startsWith("hi") -> when (cart.size) {
+                    1 -> {
+                        val extra = if (suggestion != null) " $suggestion भी लेना है?" else " कुछ और?"
+                        "बढ़िया! $shortName cart में गया।$extra"
+                    }
+                    2 -> "और $shortName भी। कुछ और?"
+                    else -> "ठीक। और कुछ?"
                 }
-                lang.startsWith("te") -> {
-                    "సరే! $shortName cart లో ఉంది. ఇంకా?"
+                lang.startsWith("te") -> when (cart.size) {
+                    1 -> "బాగుంది! $shortName cart లో పడింది. ఇంకా?"
+                    2 -> "$shortName కూడా. మరేమైనా?"
+                    else -> "సరే. ఇంకా?"
                 }
-                else -> {
-                    val extra = if (suggestion != null && cart.size == 1) " Need $suggestion too?" else " Anything else?"
-                    "Done! $shortName added.$extra"
+                else -> when (cart.size) {
+                    1 -> {
+                        val extra = if (suggestion != null) " Need $suggestion too?" else " Anything else?"
+                        "Got it! $shortName added.$extra"
+                    }
+                    2 -> "$shortName added too. More?"
+                    else -> "Done. Anything else?"
                 }
             }
             showCartAndSpeak(msg) { startListening() }
