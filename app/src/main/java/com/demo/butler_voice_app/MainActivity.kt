@@ -100,7 +100,9 @@ class MainActivity : ComponentActivity() {
     private var tempName    = ""
     private var tempEmail   = ""
     private var tempPhone   = ""
-    private var sttRetryCount = 0
+    private var sttRetryCount    = 0
+    private var totalEmptyRetries = 0
+    private var sttErrorCount    = 0   // tracks consecutive STT errors for rate limit detection
 
     private var pendingReorderSuggestions: List<ReorderSuggestion> = emptyList()
     private var lastOrderId    = ""
@@ -131,7 +133,6 @@ class MainActivity : ComponentActivity() {
     private var tempProduct : ApiClient.Product? = null
     private var currentState = AssistantState.IDLE
     private val recordRequestCode = 101
-    private var totalEmptyRetries = 0
 
     // ── BUG 2 FIX ─────────────────────────────────────────────────────────
     // STT retry race condition: when a blank transcript fires, startListening()
@@ -615,16 +616,42 @@ class MainActivity : ComponentActivity() {
                 val userId = FamilyProfileManager.activeProfile?.userId
                     ?: UserSessionManager.currentUserId() ?: ""
                 val suggestions = SmartReorderManager.getSuggestions(userId)
-                val smartMsg    = SmartReorderManager.buildReorderGreeting(suggestions, name)
+                // Build language-aware reorder greeting instead of using the
+                // English-only SmartReorderManager.buildReorderGreeting()
+                val smartMsg = if (suggestions.isNotEmpty()) {
+                    val items = suggestions.take(3).joinToString(", ") { s ->
+                        s.productName.lowercase().split(" ")
+                            .take(2).joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
+                    }
+                    when {
+                        lang.startsWith("hi") ->
+                            "$name, पिछली बार $items मंगाया था। फिर से चाहिए?"
+                        lang.startsWith("te") ->
+                            "$name, మీరు చివరిసారి $items తీసుకున్నారు. మళ్ళీ కావాలా?"
+                        lang.startsWith("ta") ->
+                            "$name, கடைசியாக $items வாங்கினீர்கள். மீண்டும் வேணுமா?"
+                        lang.startsWith("kn") ->
+                            "$name, ಕೊನೆಯ ಬಾರಿ $items ತರಿಸಿದ್ದೀರಿ. ಮತ್ತೆ ಬೇಕೇ?"
+                        lang.startsWith("ml") ->
+                            "$name, കഴിഞ്ഞ തവണ $items വാങ്ങി. വീണ്ടും വേണോ?"
+                        lang.startsWith("pa") ->
+                            "$name, ਪਿਛਲੀ ਵਾਰ $items ਮੰਗਵਾਏ ਸਨ। ਫਿਰ ਚਾਹੀਦਾ?"
+                        lang.startsWith("gu") ->
+                            "$name, છેલ્લી વાર $items મંગાવ્યા હતા। ફરી જોઈએ?"
+                        lang.startsWith("mr") ->
+                            "$name, मागच्या वेळी $items मागवलं होतं. पुन्हा हवं का?"
+                        else ->
+                            "$name, last time you ordered $items. Want to reorder?"
+                    }
+                } else null
                 runOnUiThread {
                     if (smartMsg != null && suggestions.isNotEmpty()) {
                         pendingReorderSuggestions = suggestions
                         currentState = AssistantState.REORDER_CONFIRM
-                        speak(smartMsg) { startListening() }
+                        speak(smartMsg, EmotionTone.WARM) { startListening() }
                     } else {
                         currentState = AssistantState.LISTENING
                         val lastProduct = history.firstOrNull()?.product_name?.takeIf { it.isNotBlank() }
-                        // Short product name only
                         val shortLast = lastProduct?.lowercase()?.split(" ")?.take(2)
                             ?.joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
                         val greeting = when {
@@ -634,12 +661,24 @@ class MainActivity : ComponentActivity() {
                                 "हाँ $name! क्या चाहिए?"
                             lang.startsWith("te") && shortLast != null ->
                                 "హాయ్ $name! చివరిసారి $shortLast. ఈరోజు ఏం కావాలి?"
+                            lang.startsWith("ta") && shortLast != null ->
+                                "$name! கடைசியா $shortLast வாங்கினீர். இன்னைக்கு என்ன வேணும்?"
+                            lang.startsWith("kn") && shortLast != null ->
+                                "$name! ಕೊನೆಯ ಬಾರಿ $shortLast. ಇಂದು ಏನು ಬೇಕು?"
+                            lang.startsWith("ml") && shortLast != null ->
+                                "$name! കഴിഞ്ഞ തവണ $shortLast. ഇന്ന് എന്ത് വേണം?"
+                            lang.startsWith("pa") && shortLast != null ->
+                                "$name! ਪਿਛਲੀ ਵਾਰ $shortLast ਸੀ। ਅੱਜ ਕੀ ਚਾਹੀਦਾ?"
+                            lang.startsWith("gu") && shortLast != null ->
+                                "$name! છેલ્લે $shortLast હતું. આજે શું જોઈએ?"
+                            lang.startsWith("mr") && shortLast != null ->
+                                "$name! मागच्यावेळी $shortLast होतं. आज काय पाहिजे?"
                             shortLast != null ->
                                 "Hey $name! Last time you had $shortLast. What do you need today?"
                             else ->
                                 IndianLanguageProcessor.getWelcomeGreeting(lang, name)
                         }
-                        speak(greeting) { startListening() }
+                        speak(greeting, EmotionTone.WARM) { startListening() }
                     }
                 }
             }
@@ -801,6 +840,7 @@ class MainActivity : ComponentActivity() {
 
                     totalEmptyRetries = 0
                     sttRetryCount = 0
+                    sttErrorCount = 0  // reset error counter on successful transcript
                     // Reset mood retry counter so FRUSTRATED from blank
                     // transcripts doesn't carry over to successful commands
                     MoodDetector.reset()
@@ -808,7 +848,49 @@ class MainActivity : ComponentActivity() {
                     handleCommand(transcript)
                 }
             },
-            onError = { runOnUiThread { speak("Something went wrong") { startWakeWordListening() } } }
+            onError = {
+                runOnUiThread {
+                    val lang = LanguageManager.getLanguage()
+                    // ── Use consecutive error counter to detect rate limiting ──
+                    // SarvamSTT doesn't pass error message to callback (it's () -> Unit).
+                    // If errors happen back-to-back rapidly, it's likely rate limiting.
+                    // Single error = network blip → just retry.
+                    sttErrorCount++
+                    val isLikelyRateLimit = sttErrorCount >= 2
+
+                    if (isLikelyRateLimit) {
+                        sttErrorCount = 0
+                        val waitMsg = when {
+                            lang.startsWith("hi") -> "एक पल..."
+                            lang.startsWith("te") -> "ఒక్క నిమిషం..."
+                            lang.startsWith("ta") -> "ஒரு நிமிடம்..."
+                            lang.startsWith("kn") -> "ಒಂದು ನಿಮಿಷ..."
+                            lang.startsWith("ml") -> "ഒരു നിമിഷം..."
+                            lang.startsWith("pa") -> "ਇੱਕ ਪਲ..."
+                            lang.startsWith("gu") -> "એક ક્ષણ..."
+                            lang.startsWith("mr") -> "एक क्षण..."
+                            else                  -> "One moment..."
+                        }
+                        speak(waitMsg) {
+                            Handler(Looper.getMainLooper()).postDelayed(
+                                { startListening() }, 3000
+                            )
+                        }
+                    } else {
+                        val errReply = when {
+                            lang.startsWith("hi") -> "फिर से बोलें।"
+                            lang.startsWith("te") -> "మళ్ళీ చెప్పండి."
+                            lang.startsWith("ta") -> "மீண்டும் சொல்லுங்கள்."
+                            lang.startsWith("kn") -> "ಮತ್ತೆ ಹೇಳಿ."
+                            lang.startsWith("ml") -> "വീണ്ടും പറയൂ."
+                            lang.startsWith("pa") -> "ਫਿਰ ਦੱਸੋ।"
+                            lang.startsWith("gu") -> "ફરી બોલો."
+                            else                  -> "Please say that again."
+                        }
+                        speak(errReply) { startListening() }
+                    }
+                }
+            }
         )
     }
 
@@ -829,7 +911,18 @@ class MainActivity : ComponentActivity() {
                 runOnUiThread {
                     val transcript = text.trim()
                     if (transcript.isBlank()) {
-                        speak("I didn't hear you. Please say 1, 2, or 3 clearly.") {
+                        val lang = LanguageManager.getLanguage()
+                        val blankMsg = when {
+                            lang.startsWith("hi") -> "screen पर दिखा नाम बोलें।"
+                            lang.startsWith("te") -> "screen మీద పేరు చెప్పండి."
+                            lang.startsWith("ta") -> "screen-ல் பெயர் சொல்லுங்கள்."
+                            lang.startsWith("kn") -> "screen ಮೇಲಿನ ಹೆಸರು ಹೇಳಿ."
+                            lang.startsWith("ml") -> "screen-ൽ കാണുന്ന പേര് പറയൂ."
+                            lang.startsWith("pa") -> "screen ਤੇ ਦਿਖਾ ਨਾਮ ਦੱਸੋ।"
+                            lang.startsWith("gu") -> "screen પર દેખાતું નામ બોલો."
+                            else -> "Say the brand name you see on screen."
+                        }
+                        speak(blankMsg) {
                             Handler(Looper.getMainLooper()).postDelayed({
                                 sarvamSTT.startListening(
                                     onResult = { t2 ->
@@ -853,24 +946,68 @@ class MainActivity : ComponentActivity() {
                     if (num > 0) onNumber(num) else onOther(transcript)
                 }
             },
-            onError = { runOnUiThread { speak("Didn't catch that. Say 1, 2, or 3.") { startListeningForSelection(onNumber, onOther, retryPrompt) } } }
+            onError = {
+                runOnUiThread {
+                    val lang = LanguageManager.getLanguage()
+                    sttErrorCount++
+                    if (sttErrorCount >= 2) {
+                        sttErrorCount = 0
+                        val waitMsg = when {
+                            lang.startsWith("hi") -> "एक पल..."
+                            lang.startsWith("te") -> "ఒక్క నిమిషం..."
+                            else                  -> "One moment..."
+                        }
+                        speak(waitMsg) {
+                            Handler(Looper.getMainLooper()).postDelayed(
+                                { startListeningForSelection(onNumber, onOther, retryPrompt) }, 3000
+                            )
+                        }
+                    } else {
+                        speak(retryPrompt) { startListeningForSelection(onNumber, onOther, retryPrompt) }
+                    }
+                }
+            }
         )
     }
 
     private fun detectNumberFromSpeech(spoken: String): Int {
-        val s = spoken.lowercase().trim().replace(Regex("[,।.!?]"), "").trim()
+        val s = spoken.lowercase().trim().replace(Regex("[,।.!?॥]"), "").trim()
+
+        // Direct digit match first
         val digit = Regex("\\b([123])\\b").find(s)?.groupValues?.get(1)?.toIntOrNull()
         if (digit != null) return digit
+
         return when {
-            s.contains("one")   || s.contains("wan")    || s.contains("won")    || s.contains("first")  ||
-                    s.contains("pehla") || s.contains("ek")     || s.contains("एक")     || s.contains("ఒకటి")   ||
-                    s.contains("ஒன்று") || s.contains("option one") || s.contains("number one") -> 1
-            s.contains("two")   || s.contains("too")    || s.contains("second") || s.contains("doosra") ||
-                    s.contains("do")    || s.contains("दो")     || s.contains("రెండు")  || s.contains("இரண்டு") ||
-                    s.contains("option two") || s.contains("number two") -> 2
-            s.contains("three") || s.contains("tree")   || s.contains("third")  || s.contains("teesra") ||
-                    s.contains("teen")  || s.contains("तीन")    || s.contains("మూడు")   || s.contains("மூன்று") ||
-                    s.contains("option three") || s.contains("number three") -> 3
+            // ── 1 — Hindi + Hinglish + Telugu + Tamil + Kannada + Malayalam + Punjabi + Gujarati + Odia
+            s.contains("one")    || s.contains("wan")    || s.contains("won")     ||
+                    s.contains("first")  || s.contains("pehla")  || s.contains("pehli")   ||
+                    s.contains("ek")     || s.contains("एक")     || s.contains("पहला")    ||
+                    s.contains("pehle")  || s.contains("pehli")  || s.contains("number one") ||
+                    s.contains("ఒకటి")   || s.contains("మొదటి") || s.contains("ஒன்று")   ||
+                    s.contains("முதல்") || s.contains("ಒಂದು")   || s.contains("ಮೊದಲ")    ||
+                    s.contains("ഒന്ന്")  || s.contains("ഒന്നാ") || s.contains("ਇੱਕ")     ||
+                    s.contains("ਪਹਿਲਾ") || s.contains("એક")     || s.contains(" prva")    ||
+                    s.contains("ek no")  || s.contains("option 1") || s.contains("number 1") -> 1
+
+            // ── 2 — all languages
+            s.contains("two")    || s.contains("too")    || s.contains("to")      ||
+                    s.contains("second") || s.contains("doosra") || s.contains("doosri")  ||
+                    s.contains("do")     || s.contains("दो")     || s.contains("दूसरा")   ||
+                    s.contains("రెండు")  || s.contains("రెండో")  || s.contains("இரண்டு")  ||
+                    s.contains("இரண்டாவது") || s.contains("ಎರಡು") || s.contains("రెండు")  ||
+                    s.contains("രണ്ട്")  || s.contains("ਦੋ")     || s.contains("ਦੂਜਾ")   ||
+                    s.contains("બે")     || s.contains("ਦੋਵੇਂ")  ||
+                    s.contains("option 2") || s.contains("number 2") -> 2
+
+            // ── 3 — all languages
+            s.contains("three")  || s.contains("tree")   || s.contains("third")   ||
+                    s.contains("teesra") || s.contains("teesri") || s.contains("teen")    ||
+                    s.contains("तीन")    || s.contains("तीसरा")  || s.contains("మూడు")   ||
+                    s.contains("మూడో")   || s.contains("மூன்று") || s.contains("மூன்றாவது") ||
+                    s.contains("ಮೂರು")  || s.contains("മൂന്ന്") || s.contains("ਤਿੰਨ")   ||
+                    s.contains("ਤੀਜਾ")  || s.contains("ત્રણ")   ||
+                    s.contains("option 3") || s.contains("number 3") -> 3
+
             else -> -1
         }
     }
@@ -1479,10 +1616,36 @@ class MainActivity : ComponentActivity() {
                             speak("theek hai, cancel.") { startWakeWordListening() }
                         }
                         else -> {
-                            // Unknown / AskClarify / ShowMenu — try keyword fallback first
+                            // Unknown / AskClarify — try keyword fallback first,
+                            // then ask clearly in the user's language.
+                            // Never say "कुछ और?" here — this is the LISTENING state,
+                            // user hasn't ordered anything yet.
                             val fb = keywordFallback(cleaned)
-                            if (fb != null) searchAndAskQuantity(fb)
-                            else speak(ButlerPhraseBank.get("ask_item", lang)) { startListening() }
+                            if (fb != null) {
+                                searchAndAskQuantity(fb)
+                            } else {
+                                val clarifyMsg = when {
+                                    lang.startsWith("hi") ->
+                                        "क्या मँगाना है? rice, dal, तेल, या कुछ और?"
+                                    lang.startsWith("te") ->
+                                        "ఏమి కావాలి? rice, dal, oil, లేదా ఇంకేమైనా?"
+                                    lang.startsWith("ta") ->
+                                        "என்ன வேணும்? rice, dal, oil, அல்லது வேற ஏதாவது?"
+                                    lang.startsWith("kn") ->
+                                        "ಏನು ಬೇಕು? rice, dal, oil, ಅಥವಾ ಬೇರೇನಾದರೂ?"
+                                    lang.startsWith("ml") ->
+                                        "എന്ത് വേണം? rice, dal, oil, അല്ലെങ്കിൽ മറ്റെന്തെങ്കിലും?"
+                                    lang.startsWith("pa") ->
+                                        "ਕੀ ਚਾਹੀਦਾ? rice, dal, oil, ਜਾਂ ਕੁਝ ਹੋਰ?"
+                                    lang.startsWith("gu") ->
+                                        "શું જોઈએ? rice, dal, oil, અથવા બીજું કંઈ?"
+                                    lang.startsWith("mr") ->
+                                        "काय हवं? rice, dal, oil, किंवा आणखी काही?"
+                                    else ->
+                                        "What would you like? Say rice, dal, oil, or any grocery item."
+                                }
+                                speak(clarifyMsg) { startListening() }
+                            }
                         }
                     }
                 }
@@ -1579,30 +1742,56 @@ class MainActivity : ComponentActivity() {
 
         return when {
             lang.startsWith("hi") -> {
-                // Natural shopkeeper presentation — not a robotic numbered list
-                // Format: "देखो, rice के 3 options — Daawat ₹45, India Gate ₹52, Fortune ₹38। कौनसा?"
-                val optionText = recs.mapIndexed { i, r ->
-                    "${i + 1}: ${shortName(r)} ₹${r.priceRs.toInt()}"
-                }.joinToString(", ")
-
-                // Filler only where it sounds natural:
-                // - Cart empty = first search, use "देखो,"
-                // - Cart has items = continuing session, use "और देखो,"
+                // Show brand name + price — user says the brand name to select
+                val optionText = recs.joinToString(", ") { r ->
+                    "${shortName(r)} ₹${r.priceRs.toInt()}"
+                }
                 val intro = if (cart.isEmpty()) "देखो," else "और देखो,"
-                "$intro $itemName के 3 options — $optionText। कौनसा?"
+                // Prompt: say the NAME, not a number
+                "$intro $itemName — $optionText। कौन सा चाहिए? नाम बोलें।"
             }
             lang.startsWith("te") -> {
-                val optionText = recs.mapIndexed { i, r ->
-                    "${i + 1}: ${shortName(r)} ₹${r.priceRs.toInt()}"
-                }.joinToString(", ")
+                val optionText = recs.joinToString(", ") { r ->
+                    "${shortName(r)} ₹${r.priceRs.toInt()}"
+                }
                 val intro = if (cart.isEmpty()) "చూడు," else "మరి చూడు,"
-                "$intro $itemName కి 3 options — $optionText. ఏది?"
+                "$intro $itemName — $optionText. పేరు చెప్పండి."
+            }
+            lang.startsWith("ta") -> {
+                val optionText = recs.joinToString(", ") { r ->
+                    "${shortName(r)} ₹${r.priceRs.toInt()}"
+                }
+                "$itemName — $optionText. எந்த brand வேணும்?"
+            }
+            lang.startsWith("kn") -> {
+                val optionText = recs.joinToString(", ") { r ->
+                    "${shortName(r)} ₹${r.priceRs.toInt()}"
+                }
+                "$itemName — $optionText. ಯಾವ brand ಬೇಕು?"
+            }
+            lang.startsWith("ml") -> {
+                val optionText = recs.joinToString(", ") { r ->
+                    "${shortName(r)} ₹${r.priceRs.toInt()}"
+                }
+                "$itemName — $optionText. ഏത് brand വേണം?"
+            }
+            lang.startsWith("pa") -> {
+                val optionText = recs.joinToString(", ") { r ->
+                    "${shortName(r)} ₹${r.priceRs.toInt()}"
+                }
+                "$itemName — $optionText. ਕਿਹੜਾ ਚਾਹੀਦਾ? ਨਾਮ ਦੱਸੋ।"
+            }
+            lang.startsWith("gu") -> {
+                val optionText = recs.joinToString(", ") { r ->
+                    "${shortName(r)} ₹${r.priceRs.toInt()}"
+                }
+                "$itemName — $optionText. કયું જોઈએ? નામ બોલો."
             }
             else -> {
-                val optionText = recs.mapIndexed { i, r ->
-                    "${i + 1}: ${shortName(r)} ₹${r.priceRs.toInt()}"
-                }.joinToString(", ")
-                "$itemName — $optionText. Which one?"
+                val optionText = recs.joinToString(", ") { r ->
+                    "${shortName(r)} ₹${r.priceRs.toInt()}"
+                }
+                "$itemName — $optionText. Which brand do you want?"
             }
         }
     }
@@ -1639,55 +1828,138 @@ class MainActivity : ComponentActivity() {
                             speakKeepingRecsVisible(msg, EmotionTone.EMPATHETIC) {
                                 startListeningForSelection(
                                     onNumber = { handleRecSelectionByIndex(0, recs, qty, itemName) },
-                                    onOther  = { _ -> handleRecSelectionByIndex(0, recs, qty, itemName) }
+                                    onOther  = { spoken ->
+                                        // Even in FRUSTRATED path, try name match first
+                                        val spokenWords = spoken.lowercase().split(" ").filter { it.length >= 3 }
+                                        val pick = recs.maxByOrNull { rec ->
+                                            val recWords = rec.productName.lowercase().split(" ")
+                                            spokenWords.count { sw -> recWords.any { rw -> rw.startsWith(sw) || sw.startsWith(rw) } }
+                                        }?.takeIf { rec ->
+                                            val recWords = rec.productName.lowercase().split(" ")
+                                            spokenWords.any { sw -> recWords.any { rw -> rw.startsWith(sw) || sw.startsWith(rw) } }
+                                        }
+                                        handleRecSelectionByIndex(
+                                            if (pick != null) recs.indexOf(pick) else 0,
+                                            recs, qty, itemName
+                                        )
+                                    }
                                 )
                             }
                         }
                         return@launch
                     }
 
-                    // ── Build comparison from existing recs (NO second RPC call) ──
-                    val comparison = productRepo.buildComparison(itemName, recs)
-
-                    // ── Build voice readout with price + store + delivery ──────────
+                    // ── Build voice readout with price (no numbers) ──────────
                     val readout = buildProductVoiceReadout(recs, itemName, lang)
+
+                    // ── Name retry prompts — language-aware ───────────────────
+                    val nameRetryPrompt = when {
+                        lang.startsWith("hi") -> "screen पर दिखा नाम बोलें।"
+                        lang.startsWith("te") -> "screen మీద పేరు చెప్పండి."
+                        lang.startsWith("ta") -> "screen-ல் பெயர் சொல்லுங்கள்."
+                        lang.startsWith("kn") -> "screen ಮೇಲಿನ ಹೆಸರು ಹೇಳಿ."
+                        lang.startsWith("ml") -> "screen-ൽ കാണുന്ന പേര് പറയൂ."
+                        lang.startsWith("pa") -> "screen ਤੇ ਦਿਖਾ ਨਾਮ ਦੱਸੋ।"
+                        lang.startsWith("gu") -> "screen પર દેખાતું નામ બોલો."
+                        else                  -> "Say the brand name you see on screen."
+                    }
 
                     speakKeepingRecsVisible(readout) {
                         startListeningForSelection(
-                            onNumber = { num -> handleRecSelectionByIndex(num - 1, recs, qty, itemName) },
-                            onOther  = { spoken ->
-                                val sLow = spoken.lowercase()
-                                // "sasta wala" / "nearest" / "haan" → pick best
-                                if (sLow.contains("haan") || sLow.contains("yes") ||
-                                    sLow.contains("sasta") || sLow.contains("theek") ||
-                                    sLow.contains("best") || sLow.contains("sabse")) {
-                                    handleRecSelectionByIndex(0, recs, qty, itemName)
-                                } else {
-                                    val pick = recs.firstOrNull { r ->
-                                        val rw = r.productName.lowercase().split(" ")
-                                        val sw = spoken.lowercase().split(" ").filter { it.length > 2 }
-                                        sw.any { s -> rw.any { w -> w.contains(s) || s.contains(w) } }
-                                    }
-                                    if (pick != null) {
-                                        handleRecSelectionByIndex(recs.indexOf(pick), recs, qty, itemName)
-                                    } else {
-                                        speakKeepingRecsVisible(
-                                            if (lang.startsWith("hi")) "1, 2, या 3 बोलें।"
-                                            else "Say 1, 2, or 3."
-                                        ) {
-                                            startListeningForSelection(
-                                                onNumber = { n -> handleRecSelectionByIndex(n - 1, recs, qty, itemName) },
-                                                onOther  = { _ ->
-                                                    speak(ButlerPhraseBank.get("ask_item", lang)) {
-                                                        currentState = AssistantState.LISTENING; startListening()
-                                                    }
+                            onNumber = { num ->
+                                // Numbers still work silently as fallback
+                                handleRecSelectionByIndex(num - 1, recs, qty, itemName)
+                            },
+                            onOther = { spoken ->
+                                val sLow = spoken.lowercase().trim()
+                                    .replace(Regex("[।,.!?]"), "")
+
+                                // ── Priority 1: "cheapest/sasta/best" → first result ──
+                                val wantsCheapest = sLow.contains("sasta") ||
+                                        sLow.contains("cheap") || sLow.contains("best") ||
+                                        sLow.contains("sabse") || sLow.contains("सबसे") ||
+                                        sLow.contains("first") || sLow.contains("pehla") ||
+                                        sLow.contains("పర్వాలేదు") || sLow.contains("చెప్పింది")
+
+                                // ── Priority 2: "last one/teesra wala" → third result ──
+                                val wantsLast = sLow.contains("last") || sLow.contains("teesra") ||
+                                        sLow.contains("third") || sLow.contains("teen") ||
+                                        sLow.contains("तीसरा") || sLow.contains("అది చివరిది")
+
+                                // ── Priority 3: "yes/haan/ok/theek" → first result ──
+                                val wantsFirst = sLow.contains("haan") || sLow.contains("yes") ||
+                                        sLow.contains("theek") || sLow.contains("ok") ||
+                                        sLow.contains("wahi") || sLow.contains("yahi") ||
+                                        sLow.contains("అవును") || sLow.contains("ஆம்") ||
+                                        sLow.contains("ಹೌದು") || sLow.contains("ഹ")
+
+                                when {
+                                    wantsCheapest -> handleRecSelectionByIndex(0, recs, qty, itemName)
+                                    wantsLast     -> handleRecSelectionByIndex(2, recs, qty, itemName)
+                                    wantsFirst    -> handleRecSelectionByIndex(0, recs, qty, itemName)
+                                    else -> {
+                                        // ── Priority 4: name matching ────────────────────
+                                        // Try to match what user said against product names.
+                                        // Split user's speech into words, match against
+                                        // any word in product name. Works for:
+                                        //   "Daawat wala"  → matches "DAAWAT BROWN BASMATI"
+                                        //   "India Gate"   → matches "INDIA GATE SUPER RICE"
+                                        //   "Fortune"      → matches "FORTUNE BASMATI"
+                                        //   "वाला सस्ता"   → falls through to cheapest
+                                        val spokenWords = sLow.split(" ")
+                                            .filter { it.length >= 3 }  // ignore short words
+
+                                        val pick = recs.maxByOrNull { rec ->
+                                            val recWords = rec.productName.lowercase().split(" ")
+                                            // Score = how many spoken words match product words
+                                            spokenWords.count { sw ->
+                                                recWords.any { rw ->
+                                                    rw.startsWith(sw) || sw.startsWith(rw)
                                                 }
-                                            )
+                                            }
+                                        }?.takeIf { rec ->
+                                            // Only accept if at least 1 word matched
+                                            val recWords = rec.productName.lowercase().split(" ")
+                                            spokenWords.any { sw ->
+                                                recWords.any { rw ->
+                                                    rw.startsWith(sw) || sw.startsWith(rw)
+                                                }
+                                            }
+                                        }
+
+                                        if (pick != null) {
+                                            handleRecSelectionByIndex(recs.indexOf(pick), recs, qty, itemName)
+                                        } else {
+                                            // No match — show names again and ask
+                                            val recapNames = recs.joinToString(", ") { r ->
+                                                r.productName.lowercase().split(" ")
+                                                    .take(2).joinToString(" ") {
+                                                        it.replaceFirstChar { c -> c.uppercase() }
+                                                    }
+                                            }
+                                            val recapMsg = when {
+                                                lang.startsWith("hi") ->
+                                                    "screen पर है: $recapNames। कौन सा?"
+                                                lang.startsWith("te") ->
+                                                    "screen లో: $recapNames. ఏది?"
+                                                else ->
+                                                    "Options are: $recapNames. Which one?"
+                                            }
+                                            speakKeepingRecsVisible(recapMsg) {
+                                                startListeningForSelection(
+                                                    onNumber = { n -> handleRecSelectionByIndex(n - 1, recs, qty, itemName) },
+                                                    onOther  = { n ->
+                                                        // Second failed attempt — just pick best
+                                                        handleRecSelectionByIndex(0, recs, qty, itemName)
+                                                    },
+                                                    retryPrompt = nameRetryPrompt
+                                                )
+                                            }
                                         }
                                     }
                                 }
                             },
-                            retryPrompt = if (lang.startsWith("hi")) "1, 2, या 3 बोलें।" else "Say 1, 2, or 3."
+                            retryPrompt = nameRetryPrompt
                         )
                     }
                 } else {
@@ -1766,13 +2038,23 @@ class MainActivity : ComponentActivity() {
             }
             showCartAndSpeak(msg) { startListening() }
         } else {
+            val lang = LanguageManager.getLanguage()
             speakKeepingRecsVisible(
-                if (LanguageManager.getLanguage().startsWith("hi")) "1, 2, या 3 बोलें।"
-                else "Say 1, 2, or 3."
+                when {
+                    lang.startsWith("hi") -> "screen पर दिखा नाम बोलें।"
+                    lang.startsWith("te") -> "screen మీద పేరు చెప్పండి."
+                    lang.startsWith("ta") -> "screen-ல் பெயர் சொல்லுங்கள்."
+                    lang.startsWith("kn") -> "screen ಮೇಲಿನ ಹೆಸರು ಹೇಳಿ."
+                    lang.startsWith("ml") -> "screen-ൽ കാണുന്ന പേര് പറയൂ."
+                    lang.startsWith("pa") -> "screen ਤੇ ਦਿਖਾ ਨਾਮ ਦੱਸੋ।"
+                    lang.startsWith("gu") -> "screen પર દેખાતું નામ બોલો."
+                    else                  -> "Say the brand name you see on screen."
+                }
             ) {
                 startListeningForSelection(
                     onNumber = { n -> handleRecSelectionByIndex(n - 1, recs, qty, itemName) },
                     onOther  = { _ ->
+                        // Second failed attempt — just go back to main listening
                         speak(ButlerPhraseBank.get("ask_item", LanguageManager.getLanguage())) {
                             currentState = AssistantState.LISTENING; startListening()
                         }
