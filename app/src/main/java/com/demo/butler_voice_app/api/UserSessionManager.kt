@@ -1,8 +1,11 @@
+@file:OptIn(kotlinx.serialization.InternalSerializationApi::class)
+
 package com.demo.butler_voice_app.api
 
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.InternalSerializationApi
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
@@ -70,6 +73,17 @@ object UserSessionManager {
                 val body = res.body?.string() ?: "[]"
 
                 if (!res.isSuccessful) {
+                    if (res.code == 401) {
+                        // ── Token expired — try silent refresh before giving up ──
+                        // This prevents the forced login screen from appearing
+                        // during a session. If refresh succeeds, user never notices.
+                        Log.w("Session", "Access token expired (401), attempting silent refresh...")
+                        val refreshed = attemptTokenRefresh(savedUid, savedName)
+                        if (refreshed) {
+                            Log.d("Session", "Silent refresh succeeded — session restored")
+                            return@withContext true
+                        }
+                    }
                     Log.w("Session", "Saved token invalid (${res.code}), clearing")
                     SessionStore.clear()
                     return@withContext false
@@ -95,6 +109,84 @@ object UserSessionManager {
                 SessionStore.clear()
                 false
             }
+        }
+    }
+
+    // ── SILENT TOKEN REFRESH ───────────────────────────────────────────────
+    // Called automatically when access token returns 401.
+    // Uses the stored refresh_token to get a new access_token from Supabase.
+    // Returns true on success (session fully restored), false if refresh fails.
+    private suspend fun attemptTokenRefresh(savedUid: String, savedName: String?): Boolean {
+        val refreshToken = SessionStore.getRefreshToken() ?: run {
+            Log.w("Session", "No refresh token stored — cannot silently refresh")
+            return false
+        }
+
+        return try {
+            val body = """{"refresh_token":"$refreshToken"}"""
+                .toRequestBody("application/json".toMediaType())
+
+            val req = Request.Builder()
+                .url("$url/auth/v1/token?grant_type=refresh_token")
+                .addHeader("apikey", key)
+                .addHeader("Content-Type", "application/json")
+                .post(body)
+                .build()
+
+            val res     = http.newCall(req).execute()
+            val resBody = res.body?.string() ?: ""
+
+            if (!res.isSuccessful) {
+                Log.e("Session", "Refresh token rejected (${res.code}) — must re-login")
+                SessionStore.clear()
+                return false
+            }
+
+            val obj              = json.parseToJsonElement(resBody).jsonObject
+            val newAccessToken   = obj["access_token"]?.jsonPrimitive?.content
+            val newRefreshToken  = obj["refresh_token"]?.jsonPrimitive?.content ?: refreshToken
+
+            if (newAccessToken == null) {
+                Log.e("Session", "Refresh response missing access_token")
+                SessionStore.clear()
+                return false
+            }
+
+            currentToken = newAccessToken
+            currentUid   = savedUid
+
+            // Load profile with the new token
+            val arr   = json.parseToJsonElement(
+                http.newCall(
+                    Request.Builder()
+                        .url("$url/rest/v1/profiles?id=eq.$savedUid&select=*")
+                        .addHeader("apikey", key)
+                        .addHeader("Authorization", "Bearer $newAccessToken")
+                        .addHeader("Accept", "application/json")
+                        .get().build()
+                ).execute().body?.string() ?: "[]"
+            ).jsonArray
+
+            currentProfile = arr.firstOrNull()
+                ?.let { json.decodeFromJsonElement(UserProfile.serializer(), it) }
+                ?: UserProfile(id = savedUid, full_name = savedName)
+
+            // Save the new tokens
+            SessionStore.save(
+                token        = newAccessToken,
+                uid          = savedUid,
+                name         = currentProfile?.full_name,
+                email        = SessionStore.getEmail(),
+                refreshToken = newRefreshToken
+            )
+
+            loadPurchaseHistory()
+            Log.d("Session", "Token refreshed silently for ${currentProfile?.full_name}")
+            true
+
+        } catch (e: Exception) {
+            Log.e("Session", "Silent refresh exception: ${e.message}")
+            false
         }
     }
 
@@ -264,7 +356,7 @@ object UserSessionManager {
 
     // ── PURCHASE HISTORY ──────────────────────────────────────────────────
 
-    private suspend fun loadPurchaseHistory() {
+    private fun loadPurchaseHistory() {
         val userId = currentUid ?: return
         val token  = currentToken ?: return
 
