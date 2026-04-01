@@ -1593,6 +1593,20 @@ class MainActivity : ComponentActivity() {
         val regional = IndianLanguageProcessor.normalizeProduct(cleaned)
         if (regional != cleaned && regional.isNotBlank()) { searchAndAskQuantity(regional); return }
 
+        // ── INSTANT KEYWORD BYPASS ─────────────────────────────────────────
+        // Skip OpenAI entirely for known grocery keywords.
+        // This cuts response time from 3-5 seconds → under 1 second for the
+        // most common demo commands like "rice chahiye", "मुझे दाल चाहिए".
+        // Covers Hindi, Telugu, Hinglish + quantity extraction in the same pass.
+        // If keyword is found → go straight to product search.
+        // If not found → fall through to AIParser (handles complex/multi-item).
+        val instant = instantGroceryDetect(cleaned, lang)
+        if (instant != null) {
+            searchAndAskQuantity(instant.first, instant.second)
+            return
+        }
+        // ──────────────────────────────────────────────────────────────────
+
         speakFillerThen {
             lifecycleScope.launch {
                 // ── RESPONSE TIME FIX ─────────────────────────────────────
@@ -2232,6 +2246,102 @@ class MainActivity : ComponentActivity() {
             s.contains("eggs")  || s.contains("egg")   || s.contains("अंडा")   -> "eggs"
             else -> null
         }
+    }
+
+    /**
+     * Instant grocery detection — bypasses OpenAI entirely for common items.
+     * Returns Pair(productName, quantity) or null if not a simple grocery request.
+     *
+     * Covers Hindi, Telugu, Hinglish, English and common brand names.
+     * Quantity is extracted from the same transcript (e.g. "2 kilo rice" → qty=2).
+     *
+     * This saves 3-5 seconds on every common demo command:
+     *   "rice chahiye"         → ("rice", 0) in ~50ms instead of 4000ms
+     *   "मुझे दाल चाहिए"       → ("dal", 0)
+     *   "2 kilo chawal de do" → ("rice", 2)
+     *   "నాకు పాలు కావాలి"      → ("milk", 0)
+     */
+    private fun instantGroceryDetect(s: String, lang: String): Pair<String, Int>? {
+        // ── Quantity extraction ────────────────────────────────────────────
+        val qty = extractQuantity(s)   // returns 1 as default, not 0
+        val detectedQty = when {
+            Regex("\\d+").containsMatchIn(s) -> qty
+            listOf("do","दो","రెండు","two","2 kilo","2 kg").any { s.contains(it) } -> 2
+            listOf("teen","तीन","మూడు","three").any { s.contains(it) } -> 3
+            else -> 0   // 0 = "ask quantity" mode
+        }
+
+        // ── Product matching — ordered by demo priority ────────────────────
+        // Rice first — it's the #1 demo product
+        if (s.contains("rice") || s.contains("chawal") || s.contains("चावल") ||
+            s.contains("అన్నం") || s.contains("basmati") || s.contains("baasmati"))
+            return Pair("rice", detectedQty)
+
+        if (s.contains("dal") || s.contains("daal") || s.contains("दाल") ||
+            s.contains("పప్పు") || s.contains("pappu") || s.contains("lentil"))
+            return Pair("dal", detectedQty)
+
+        if (s.contains("oil") || s.contains("tel") || s.contains("तेल") ||
+            s.contains("నూనె") || s.contains("nune") || s.contains("cooking oil") ||
+            s.contains("sarso") || s.contains("sunflower"))
+            return Pair("oil", detectedQty)
+
+        if (s.contains("milk") || s.contains("doodh") || s.contains("दूध") ||
+            s.contains("పాలు") || s.contains("paalu"))
+            return Pair("milk", detectedQty)
+
+        if (s.contains("atta") || s.contains("aata") || s.contains("आटा") ||
+            s.contains("flour") || s.contains("wheat") || s.contains("గోధుమ"))
+            return Pair("wheat flour", detectedQty)
+
+        if (s.contains("sugar") || s.contains("cheeni") || s.contains("chini") ||
+            s.contains("चीनी") || s.contains("చక్కెర") || s.contains("shakkar"))
+            return Pair("sugar", detectedQty)
+
+        if (s.contains("salt") || s.contains("namak") || s.contains("नमक") ||
+            s.contains("ఉప్పు") || s.contains("uppu"))
+            return Pair("salt", detectedQty)
+
+        if (s.contains("tea") || s.contains("chai") || s.contains("chaa") ||
+            s.contains("चाय") || s.contains("టీ") || s.contains("tii"))
+            return Pair("tea", detectedQty)
+
+        if (s.contains("ghee") || s.contains("ghi") || s.contains("घी") ||
+            s.contains("నేయి") || s.contains("neyi"))
+            return Pair("ghee", detectedQty)
+
+        if (s.contains("bread") || s.contains("roti") || s.contains("pav") ||
+            s.contains("రొట్టె") || s.contains("rotte"))
+            return Pair("bread", detectedQty)
+
+        if (s.contains("egg") || s.contains("anda") || s.contains("अंडा") ||
+            s.contains("గుడ్లు") || s.contains("gudlu"))
+            return Pair("eggs", detectedQty)
+
+        if (s.contains("coffee") || s.contains("kaafi") || s.contains("కాఫీ"))
+            return Pair("coffee", detectedQty)
+
+        if (s.contains("soap") || s.contains("sabun") || s.contains("సబ్బు"))
+            return Pair("soap", detectedQty)
+
+        if (s.contains("biscuit") || s.contains("biscuits") || s.contains("బిస్కెట్"))
+            return Pair("biscuit", detectedQty)
+
+        if (s.contains("butter") || s.contains("makhan") || s.contains("मक्खन"))
+            return Pair("butter", detectedQty)
+
+        if (s.contains("curd") || s.contains("dahi") || s.contains("दही") ||
+            s.contains("పెరుగు") || s.contains("perugu"))
+            return Pair("curd", detectedQty)
+
+        // ── Common brand names (bypass GPT for these too) ─────────────────
+        if (s.contains("daawat") || s.contains("dawat"))  return Pair("daawat rice", detectedQty)
+        if (s.contains("fortune"))                         return Pair("fortune oil", detectedQty)
+        if (s.contains("aashirvaad") || s.contains("aashirvad")) return Pair("aashirvaad atta", detectedQty)
+        if (s.contains("amul"))                            return Pair("amul butter", detectedQty)
+        if (s.contains("tata salt") || s.contains("tata namak")) return Pair("tata salt", detectedQty)
+
+        return null  // not a simple grocery — let AIParser handle it
     }
 
     private suspend fun doLogin(email: String, password: String) {
