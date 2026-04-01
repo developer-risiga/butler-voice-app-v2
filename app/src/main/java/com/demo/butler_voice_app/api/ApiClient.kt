@@ -5,6 +5,7 @@ import kotlinx.coroutines.Dispatchers
 import android.util.Log
 import com.demo.butler_voice_app.CartItem
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -13,13 +14,31 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.util.concurrent.TimeUnit
 
 class ApiClient {
 
-    private val http = OkHttpClient()
+    // ── BUG 8 FIX ─────────────────────────────────────────────────────────
+    // Previously searchProduct() created a brand-new OkHttpClient.Builder()
+    // on every call that needed to fetch products. That means a new connection
+    // pool, new thread pool, and no connection reuse — all on a path that runs
+    // during startup while the UI is composing, causing the 76-frame jank.
+    //
+    // Fix: one shared OkHttpClient with proper timeouts used everywhere.
+    //      searchProduct() uses the same instance as createOrder().
+    //      prefetchProducts() warms the cache eagerly from a background
+    //      coroutine in MainActivity.onCreate(), so the first voice command
+    //      is instant.
+    // ─────────────────────────────────────────────────────────────────────
+    private val http = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(30,  TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .build()
+
     private val json = Json { ignoreUnknownKeys = true }
-    private val url get() = SupabaseClient.SUPABASE_URL
-    private val key get() = SupabaseClient.SUPABASE_KEY
+    private val url  get() = SupabaseClient.SUPABASE_URL
+    private val key  get() = SupabaseClient.SUPABASE_KEY
 
     @Serializable
     data class Product(
@@ -58,95 +77,141 @@ class ApiClient {
         val price: Double
     )
 
-    // ─── PRODUCT SEARCH ───────────────────────────────────────
+    // ── PRODUCT CACHE ─────────────────────────────────────────────────────
 
-    // Cache products in memory — fetch once per session
-private var cachedProducts: List<Product>? = null
+    @Volatile
+    private var cachedProducts: List<Product>? = null
+
+    // ── BUG 8 FIX: Pre-fetch helper ──────────────────────────────────────
+    //
+    // Call this from MainActivity.onCreate() inside a Dispatchers.IO coroutine.
+    // It loads all 3000 products into memory once so the first searchProduct()
+    // call is a pure in-memory scan instead of a 457KB network fetch that blocks
+    // the startup frame budget.
+    //
+    // Usage in MainActivity.onCreate():
+    //   lifecycleScope.launch(Dispatchers.IO) {
+    //       apiClient.prefetchProducts()
+    //       Log.d("Butler", "Cache warmed")
+    //   }
+    //
+    suspend fun prefetchProducts() = withContext(Dispatchers.IO) {
+        if (cachedProducts != null) return@withContext   // already warm
+
+        try {
+            val req = Request.Builder()
+                .url("$url/rest/v1/products?select=id,name,base_name,unit,price,keywords&limit=3000")
+                .addHeader("apikey",         key)
+                .addHeader("Authorization",  "Bearer $key")
+                .addHeader("Accept",         "application/json")
+                .get()
+                .build()
+
+            val res  = http.newCall(req).execute()
+            val body = res.body?.string() ?: "[]"
+            Log.d("ApiClient", "Products prefetch: ${res.code}, size: ${body.length}")
+
+            if (!res.isSuccessful) {
+                Log.e("ApiClient", "Prefetch failed: $body"); return@withContext
+            }
+
+            val list = try {
+                json.decodeFromString(ListSerializer(Product.serializer()), body)
+            } catch (e: Exception) {
+                Log.e("ApiClient", "Prefetch parse error: ${e.message}")
+                emptyList()
+            }
+            cachedProducts = list
+            Log.d("ApiClient", "Products cached: ${list.size}")
+
+        } catch (e: Exception) {
+            Log.e("ApiClient", "prefetchProducts ${e.javaClass.simpleName}: ${e.message}")
+        }
+    }
+
+    // ── PRODUCT SEARCH ────────────────────────────────────────────────────
 
     suspend fun searchProduct(query: String): Product? {
         return withContext(Dispatchers.IO) {
             try {
                 val lower = query.lowercase().trim()
-    
-                // Use cache if available
+
+                // ── BUG 8 FIX: use shared cache; if empty trigger load ────────
+                // Previously a new OkHttpClient() was constructed here every call.
+                // Now we reuse `http` and the shared cachedProducts list.
                 val products = cachedProducts ?: run {
-                    val client = OkHttpClient.Builder()
-                        .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
-                        .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
-                        .build()
-    
                     val req = Request.Builder()
                         .url("$url/rest/v1/products?select=id,name,base_name,unit,price,keywords&limit=3000")
-                        .addHeader("apikey", key)
+                        .addHeader("apikey",        key)
                         .addHeader("Authorization", "Bearer $key")
-                        .addHeader("Accept", "application/json")
+                        .addHeader("Accept",        "application/json")
                         .get()
                         .build()
-    
-                    val res  = client.newCall(req).execute()
+
+                    val res  = http.newCall(req).execute()   // uses shared client
                     val body = res.body?.string() ?: "[]"
-    
+
                     Log.d("ApiClient", "Products fetched: ${res.code}, size: ${body.length}")
-    
+
                     if (!res.isSuccessful) {
                         Log.e("ApiClient", "Products failed: $body")
                         return@withContext null
                     }
-    
-                    val arr = json.parseToJsonElement(body).jsonArray
-                    val list = arr.mapNotNull {
-                        try { json.decodeFromJsonElement(Product.serializer(), it) }
-                        catch (e: Exception) { null }
+
+                    val list = try {
+                        json.decodeFromString(ListSerializer(Product.serializer()), body)
+                    } catch (e: Exception) {
+                        Log.e("ApiClient", "Parse error: ${e.message}"); emptyList()
                     }
                     Log.d("ApiClient", "Products cached: ${list.size}")
                     cachedProducts = list
                     list
                 }
-    
+
                 val scored = products.mapNotNull { product ->
-                    var score = 0
+                    var score    = 0
                     val nameLower = product.name.lowercase()
                     val baseLower = product.base_name?.lowercase() ?: ""
-    
-                    if (nameLower == lower) score += 200
-                    if (nameLower.endsWith(lower)) score += 150
+
+                    if (nameLower == lower)                                   score += 200
+                    if (nameLower.endsWith(lower))                            score += 150
                     if (nameLower.contains(" $lower ") ||
-                        nameLower.contains(" $lower") ||
-                        nameLower.startsWith("$lower ")) score += 120
-                    if (nameLower.contains(lower)) score += 80
-                    if (baseLower.endsWith(lower)) score += 60
-                    if (baseLower.contains(lower)) score += 40
-    
+                        nameLower.contains(" $lower")  ||
+                        nameLower.startsWith("$lower "))                      score += 120
+                    if (nameLower.contains(lower))                            score += 80
+                    if (baseLower.endsWith(lower))                            score += 60
+                    if (baseLower.contains(lower))                            score += 40
+
                     product.keywords?.forEach { kw ->
                         val kwLower = kw.lowercase()
-                        if (kwLower == lower) score += 30
+                        if (kwLower == lower)                                 score += 30
                         else if (kwLower.contains(lower) || lower.contains(kwLower)) score += 10
                     }
-    
-                    // Penalties for wrong category matches
+
+                    // Penalties for wrong-category matches
                     if (lower == "rice" && (nameLower.contains("oil") || nameLower.contains("bran"))) score -= 100
-                    if (lower == "dal" && nameLower.contains("dalda")) score -= 50
-                    if (lower == "milk" && nameLower.contains("milkmaid")) score -= 50
-    
+                    if (lower == "dal"  &&  nameLower.contains("dalda"))  score -= 50
+                    if (lower == "milk" &&  nameLower.contains("milkmaid")) score -= 50
+
                     if (score > 0) Pair(product, score) else null
                 }
-    
+
                 val best = scored.maxByOrNull { it.second }?.first
                 Log.d("ApiClient", "searchProduct('$query') → ${best?.name}")
                 best
-    
+
             } catch (e: Exception) {
                 Log.e("ApiClient", "searchProduct ${e.javaClass.simpleName}: ${e.message}")
                 null
             }
         }
     }
-    
+
     fun clearProductCache() {
         cachedProducts = null
     }
 
-    // ─── CREATE ORDER ─────────────────────────────────────────
+    // ── CREATE ORDER ──────────────────────────────────────────────────────
 
     suspend fun createOrder(cartItems: List<CartItem>, userId: String): OrderResult {
         return withContext(Dispatchers.IO) {
@@ -164,10 +229,10 @@ private var cachedProducts: List<Product>? = null
 
             val orderReq = Request.Builder()
                 .url("$url/rest/v1/orders?select=*")
-                .addHeader("apikey", key)
-                .addHeader("Authorization", "Bearer $token")
-                .addHeader("Content-Type", "application/json")
-                .addHeader("Prefer", "return=representation")
+                .addHeader("apikey",         key)
+                .addHeader("Authorization",  "Bearer $token")
+                .addHeader("Content-Type",   "application/json")
+                .addHeader("Prefer",         "return=representation")
                 .post(orderJson.toRequestBody("application/json".toMediaType()))
                 .build()
 
@@ -194,10 +259,10 @@ private var cachedProducts: List<Product>? = null
 
             val itemsReq = Request.Builder()
                 .url("$url/rest/v1/order_items")
-                .addHeader("apikey", key)
+                .addHeader("apikey",        key)
                 .addHeader("Authorization", "Bearer $token")
-                .addHeader("Content-Type", "application/json")
-                .addHeader("Prefer", "return=minimal")
+                .addHeader("Content-Type",  "application/json")
+                .addHeader("Prefer",        "return=minimal")
                 .post(itemsJson.toRequestBody("application/json".toMediaType()))
                 .build()
 
@@ -209,12 +274,12 @@ private var cachedProducts: List<Product>? = null
                 id           = orderId,
                 total_amount = orderTotal,
                 order_status = orderStatus,
-                 public_id    = publicId
+                public_id    = publicId
             )
         }
     }
 
-    // ─── ORDER HISTORY ────────────────────────────────────────
+    // ── ORDER HISTORY ─────────────────────────────────────────────────────
 
     suspend fun getOrderHistory(userId: String): List<OrderHistory> {
         return try {
@@ -222,19 +287,19 @@ private var cachedProducts: List<Product>? = null
 
             val req = Request.Builder()
                 .url("$url/rest/v1/orders?user_id=eq.$userId&select=id,total_amount,order_status,payment_status,created_at&order=created_at.desc&limit=20")
-                .addHeader("apikey", key)
+                .addHeader("apikey",        key)
                 .addHeader("Authorization", "Bearer $token")
-                .addHeader("Accept", "application/json")
+                .addHeader("Accept",        "application/json")
                 .get()
                 .build()
 
             val res  = http.newCall(req).execute()
             val body = res.body?.string() ?: "[]"
-            val arr  = json.parseToJsonElement(body).jsonArray
 
-            arr.mapNotNull {
-                try { json.decodeFromJsonElement(OrderHistory.serializer(), it) }
-                catch (e: Exception) { null }
+            try {
+                json.decodeFromString(ListSerializer(OrderHistory.serializer()), body)
+            } catch (e: Exception) {
+                Log.e("ApiClient", "getOrderHistory parse error: ${e.message}"); emptyList()
             }
         } catch (e: Exception) {
             Log.e("ApiClient", "getOrderHistory failed: ${e.message}")
@@ -242,7 +307,7 @@ private var cachedProducts: List<Product>? = null
         }
     }
 
-    // ─── ORDER ITEMS ──────────────────────────────────────────
+    // ── ORDER ITEMS ───────────────────────────────────────────────────────
 
     suspend fun getOrderItems(orderId: String): List<OrderItemHistory> {
         return try {
@@ -250,19 +315,19 @@ private var cachedProducts: List<Product>? = null
 
             val req = Request.Builder()
                 .url("$url/rest/v1/order_items?order_id=eq.$orderId&select=id,product_name,quantity,price")
-                .addHeader("apikey", key)
+                .addHeader("apikey",        key)
                 .addHeader("Authorization", "Bearer $token")
-                .addHeader("Accept", "application/json")
+                .addHeader("Accept",        "application/json")
                 .get()
                 .build()
 
             val res  = http.newCall(req).execute()
             val body = res.body?.string() ?: "[]"
-            val arr  = json.parseToJsonElement(body).jsonArray
 
-            arr.mapNotNull {
-                try { json.decodeFromJsonElement(OrderItemHistory.serializer(), it) }
-                catch (e: Exception) { null }
+            try {
+                json.decodeFromString(ListSerializer(OrderItemHistory.serializer()), body)
+            } catch (e: Exception) {
+                Log.e("ApiClient", "getOrderItems parse error: ${e.message}"); emptyList()
             }
         } catch (e: Exception) {
             Log.e("ApiClient", "getOrderItems failed: ${e.message}")

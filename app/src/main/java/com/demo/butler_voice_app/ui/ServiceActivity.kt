@@ -23,10 +23,13 @@ import com.demo.butler_voice_app.services.*
 import com.demo.butler_voice_app.voice.SarvamSTTManager
 import com.demo.butler_voice_app.ai.LanguageManager
 import com.demo.butler_voice_app.ai.TranslationManager
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.util.concurrent.TimeUnit
 
 class ServiceActivity : ComponentActivity() {
 
@@ -46,11 +49,30 @@ class ServiceActivity : ComponentActivity() {
     private var userLat            : Double? = null
     private var userLng            : Double? = null
 
+    // ── BUG 4 FIX ─────────────────────────────────────────────────────────
+    // Track whether medicines came from OCR (prescription image) or manual
+    // voice entry. This drives the correct response template so Butler
+    // never claims "I read X from your prescription" when OCR returned []
+    // and the user dictated the medicine names manually.
+    // ─────────────────────────────────────────────────────────────────────
+    private var medicinesFromOcr = false
+
+    // ── BUG 1 FIX ─────────────────────────────────────────────────────────
+    // One shared OkHttpClient with timeouts used for the booking save call.
+    // Previously OkHttpClient() was created inline with no dispatcher switch,
+    // causing a NetworkOnMainThreadException whose message is null — hence
+    // "Booking save error: null" in the logcat.
+    // ─────────────────────────────────────────────────────────────────────
+    private val bookingHttpClient = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(15,  TimeUnit.SECONDS)
+        .writeTimeout(15, TimeUnit.SECONDS)
+        .build()
+
     private lateinit var ttsManager : TTSManager
     private lateinit var sarvamSTT  : SarvamSTTManager
 
-    // ── Image / document picker ───────────────────────────────────────────────
-    // Accepts images AND documents (PDF/scanned) for prescription
+    // ── Image / document picker ───────────────────────────────────────────
 
     private val imagePicker = registerForActivityResult(
         ActivityResultContracts.GetContent()
@@ -60,11 +82,9 @@ class ServiceActivity : ComponentActivity() {
         ActivityResultContracts.TakePicturePreview()
     ) { bitmap ->
         if (bitmap != null) {
-            // Convert bitmap to URI
             val stream = java.io.ByteArrayOutputStream()
             bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, stream)
-            val bytes  = stream.toByteArray()
-            processPrescriptionBytes(bytes)
+            processPrescriptionBytes(stream.toByteArray())
         } else {
             speak("Camera was closed. Please try again or say upload.") {
                 startListeningForPrescriptionUpload()
@@ -81,7 +101,18 @@ class ServiceActivity : ComponentActivity() {
         sarvamSTT = SarvamSTTManager(this, BuildConfig.SARVAM_API_KEY)
         ttsManager = TTSManager(this, BuildConfig.ELEVENLABS_API_KEY, "RwXLkVKnRloV1UPh3Ccx")
         ttsManager.init {
-            val sector  = intent.getStringExtra(EXTRA_SECTOR)?.let { runCatching { ServiceSector.valueOf(it) }.getOrNull() }
+            // ── BUG 3 FIX ─────────────────────────────────────────────────
+            // ServiceSector enum values are uppercase (ELECTRICIAN, PLUMBER…).
+            // The previous code used ServiceSector.valueOf(it) where `it` comes
+            // directly from intent.getStringExtra() which is already the .name
+            // of the enum (uppercase). Adding .uppercase() makes it robust to
+            // any casing mismatch AND prevents a silent null when the string
+            // comes in lowercase from a re-detection path.
+            // ─────────────────────────────────────────────────────────────
+            val sector = intent.getStringExtra(EXTRA_SECTOR)?.let {
+                if (it.isBlank()) null
+                else runCatching { ServiceSector.valueOf(it.uppercase()) }.getOrNull()
+            }
             val query   = intent.getStringExtra(EXTRA_QUERY) ?: ""
             val isRx    = intent.getBooleanExtra(EXTRA_IS_RX, false)
             val isEmerg = intent.getBooleanExtra(EXTRA_IS_EMERG, false)
@@ -89,7 +120,6 @@ class ServiceActivity : ComponentActivity() {
             when {
                 isEmerg  -> handleEmergency()
                 isRx     -> startPrescriptionFlow()
-                // ── KEY FIX: MEDICINE sector ALWAYS goes to prescription flow ──
                 sector == ServiceSector.MEDICINE -> startPrescriptionFlow()
                 sector != null -> startSectorFlow(sector, query)
                 else -> { screenState = ServiceScreenState.SectorHome; speakServicePrompt() }
@@ -138,13 +168,9 @@ class ServiceActivity : ComponentActivity() {
 
     override fun onDestroy() { super.onDestroy(); ttsManager.shutdown(); sarvamSTT.stop() }
 
-    // ══════════════════════════════════════════════════════════════════════════
-    // PRESCRIPTION FLOW — Full RAG pipeline
-    // 1. Ask user to upload or take photo
-    // 2. GPT-4o Vision extracts medicine names from handwritten prescription
-    // 3. Search nearby pharmacies that stock those medicines
-    // 4. Voice-present options, user picks and books
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
+    // PRESCRIPTION FLOW
+    // ══════════════════════════════════════════════════════════════════════
 
     private fun startPrescriptionFlow() {
         currentSector      = ServiceSector.MEDICINE
@@ -152,6 +178,8 @@ class ServiceActivity : ComponentActivity() {
         prescriptionStatus = PrescriptionUploadStatus.WAITING
         extractedMedicines = emptyList()
         providers          = emptyList()
+        // ── BUG 4 FIX: reset OCR flag at start of each prescription flow ─
+        medicinesFromOcr   = false
 
         speak(
             "I will help you find a pharmacy for your medicines. " +
@@ -206,18 +234,20 @@ class ServiceActivity : ComponentActivity() {
         )
     }
 
-    // Show a UI choice dialog + voice for camera vs gallery
     private fun showUploadChoice() {
         speak("Say camera to take a photo, or upload to choose from gallery.") {
             startListeningForPrescriptionUpload()
         }
     }
 
-    // ── Manual medicine entry (fallback if no prescription image) ─────────────
+    // ── Manual medicine entry ─────────────────────────────────────────────
 
     private val manualMedicines = mutableListOf<String>()
 
     private fun startListeningForManualMedicines() {
+        // ── BUG 4 FIX: medicines entered manually, NOT from OCR ──────────
+        medicinesFromOcr = false
+        manualMedicines.clear()
         speak("Please say the first medicine name.") {
             listenForNextMedicine()
         }
@@ -259,13 +289,13 @@ class ServiceActivity : ComponentActivity() {
         )
     }
 
-    // ── Process prescription image from gallery ───────────────────────────────
+    // ── Process prescription image from gallery ───────────────────────────
 
     private fun processPrescritionImage(uri: Uri) {
         prescriptionStatus = PrescriptionUploadStatus.PROCESSING
         speak("Reading your prescription. Please wait a moment.") {}
 
-        lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+        lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val inputStream = contentResolver.openInputStream(uri)
                 val bytes       = inputStream?.readBytes() ?: byteArrayOf()
@@ -283,7 +313,7 @@ class ServiceActivity : ComponentActivity() {
 
                 processPrescriptionBytesAsync(bytes)
             } catch (e: Exception) {
-                Log.e("ServiceActivity", "File read error: ${e.message}")
+                Log.e("ServiceActivity", "File read error", e)
                 runOnUiThread {
                     speak("Something went wrong. Please try again.") {
                         prescriptionStatus = PrescriptionUploadStatus.WAITING
@@ -294,30 +324,25 @@ class ServiceActivity : ComponentActivity() {
         }
     }
 
-    // ── Process prescription from camera bitmap ───────────────────────────────
-
     private fun processPrescriptionBytes(bytes: ByteArray) {
         prescriptionStatus = PrescriptionUploadStatus.PROCESSING
         speak("Reading your prescription now…") {}
-        lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) { processPrescriptionBytesAsync(bytes) }
+        lifecycleScope.launch(Dispatchers.IO) { processPrescriptionBytesAsync(bytes) }
     }
 
-    // ── CORE RAG FUNCTION — GPT-4o Vision extracts medicines ─────────────────
+    // ── CORE: GPT-4o Vision extracts medicines ────────────────────────────
 
     private suspend fun processPrescriptionBytesAsync(bytes: ByteArray) {
         try {
             val base64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
-
             Log.d("ServiceActivity", "Sending ${bytes.size} bytes to GPT-4o Vision")
 
-            // Determine image type
             val mimeType = when {
                 bytes.size > 3 && bytes[0] == 0xFF.toByte() && bytes[1] == 0xD8.toByte() -> "image/jpeg"
                 bytes.size > 3 && bytes[0] == 0x89.toByte() && bytes[1] == 0x50.toByte() -> "image/png"
                 else -> "image/jpeg"
             }
 
-            // ── GPT-4o Vision — extracts medicines from ANY handwriting ───────
             val prompt = """You are a medical prescription reader for Indian pharmacies.
 Extract ALL medicine names with dosage from this prescription image.
 The handwriting may be in English, Hindi, or other Indian languages.
@@ -335,14 +360,13 @@ Do NOT include instructions or frequency — only names and doses."""
                         put("role", "user")
                         put("content", org.json.JSONArray().apply {
                             put(org.json.JSONObject().apply {
-                                put("type", "text")
-                                put("text", prompt)
+                                put("type", "text"); put("text", prompt)
                             })
                             put(org.json.JSONObject().apply {
                                 put("type", "image_url")
                                 put("image_url", org.json.JSONObject().apply {
                                     put("url", "data:$mimeType;base64,$base64")
-                                    put("detail", "high")   // high detail for handwritten prescriptions
+                                    put("detail", "high")
                                 })
                             })
                         })
@@ -350,16 +374,16 @@ Do NOT include instructions or frequency — only names and doses."""
                 ))
             }.toString()
 
-            val response = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val response = withContext(Dispatchers.IO) {
                 OkHttpClient.Builder()
-                    .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
-                    .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+                    .connectTimeout(30, TimeUnit.SECONDS)
+                    .readTimeout(60,  TimeUnit.SECONDS)
                     .build()
                     .newCall(
                         okhttp3.Request.Builder()
                             .url("https://api.openai.com/v1/chat/completions")
                             .addHeader("Authorization", "Bearer ${BuildConfig.OPENAI_API_KEY}")
-                            .addHeader("Content-Type", "application/json")
+                            .addHeader("Content-Type",  "application/json")
                             .post(requestBody.toRequestBody("application/json".toMediaType()))
                             .build()
                     ).execute()
@@ -383,6 +407,8 @@ Do NOT include instructions or frequency — only names and doses."""
             extractedMedicines = medicines
 
             if (medicines.isEmpty()) {
+                // ── BUG 4 FIX: OCR returned empty — do NOT set medicinesFromOcr ─
+                // Fall through to manual entry without claiming prescription was read.
                 runOnUiThread {
                     speak(
                         "I couldn't clearly read the medicines from the prescription. " +
@@ -396,16 +422,17 @@ Do NOT include instructions or frequency — only names and doses."""
                 return
             }
 
+            // ── BUG 4 FIX: OCR succeeded — mark medicines as coming from image ─
+            medicinesFromOcr   = true
             prescriptionStatus = PrescriptionUploadStatus.MEDICINES_FOUND
 
-            // Speak the medicines found
             val medicineList = medicines.take(4).joinToString(", ")
             val moreText     = if (medicines.size > 4) " and ${medicines.size - 4} more" else ""
 
             runOnUiThread {
                 speak(
-                    "I found ${medicines.size} medicine${if (medicines.size > 1) "s" else ""}: " +
-                            "$medicineList$moreText. " +
+                    "I found ${medicines.size} medicine${if (medicines.size > 1) "s" else ""}" +
+                            " in your prescription: $medicineList$moreText. " +
                             "Now searching for nearby pharmacies that have these medicines."
                 ) {
                     searchPharmaciesForMedicines()
@@ -413,12 +440,9 @@ Do NOT include instructions or frequency — only names and doses."""
             }
 
         } catch (e: Exception) {
-            Log.e("ServiceActivity", "GPT-4o Vision error: ${e.message}")
+            Log.e("ServiceActivity", "GPT-4o Vision error", e)
             runOnUiThread {
-                speak(
-                    "I had trouble reading the prescription. " +
-                            "Please say the medicine names one by one."
-                ) {
+                speak("I had trouble reading the prescription. Please say the medicine names one by one.") {
                     prescriptionStatus = PrescriptionUploadStatus.WAITING
                     startListeningForManualMedicines()
                 }
@@ -426,7 +450,7 @@ Do NOT include instructions or frequency — only names and doses."""
         }
     }
 
-    // ── Search pharmacies for extracted medicines ─────────────────────────────
+    // ── Search pharmacies for extracted/entered medicines ─────────────────
 
     private fun searchPharmaciesForMedicines() {
         lifecycleScope.launch {
@@ -439,14 +463,32 @@ Do NOT include instructions or frequency — only names and doses."""
                 )
                 screenState = ServiceScreenState.Prescription
 
-                val prompt = ServiceVoiceHandler.buildMedicinesExtractedPrompt(
-                    medicines, providers.size, LanguageManager.getLanguage()
-                )
+                // ── BUG 4 FIX ─────────────────────────────────────────────
+                // Use different prompt templates depending on how medicines
+                // were obtained.
+                //
+                // BEFORE: buildMedicinesExtractedPrompt() always said
+                //   "मैंने prescription से Paracetamol पढ़ा" even when
+                //   OCR returned [] and the user spoke the name manually.
+                //
+                // AFTER: Only claim "read from prescription" when
+                //   medicinesFromOcr == true. Otherwise use a neutral
+                //   template that says "You told me X".
+                // ─────────────────────────────────────────────────────────
+                val lang   = LanguageManager.getLanguage()
+                val prompt = if (medicinesFromOcr) {
+                    ServiceVoiceHandler.buildMedicinesExtractedPrompt(
+                        medicines, providers.size, lang
+                    )
+                } else {
+                    buildManualMedicinesFoundPrompt(medicines, providers.size, lang)
+                }
+
                 runOnUiThread {
                     speak(prompt) { startListeningForSelection() }
                 }
             } catch (e: Exception) {
-                Log.e("ServiceActivity", "Pharmacy search error: ${e.message}")
+                Log.e("ServiceActivity", "Pharmacy search error", e)
                 runOnUiThread {
                     speak("I had trouble finding nearby pharmacies. Please try again.") {
                         startListeningForPrescriptionUpload()
@@ -456,13 +498,39 @@ Do NOT include instructions or frequency — only names and doses."""
         }
     }
 
-    // ══════════════════════════════════════════════════════════════════════════
+    /**
+     * Bug 4 fix — prompt used when medicines were typed/spoken manually,
+     * NOT extracted from a prescription image.
+     * Never says "I read from your prescription."
+     */
+    private fun buildManualMedicinesFoundPrompt(
+        medicines: List<String>,
+        providerCount: Int,
+        lang: String
+    ): String {
+        val list = medicines.joinToString(", ")
+        val more = if (providerCount > 0) {
+            val suffix = if (providerCount == 1) "pharmacy" else "pharmacies"
+            ". $providerCount $suffix nearby. Say 1, 2, or 3 to book."
+        } else {
+            ". No pharmacies found nearby right now."
+        }
+        return when {
+            lang.startsWith("hi") ->
+                "आपने बताया: $list$more"
+            lang.startsWith("te") ->
+                "మీరు చెప్పారు: $list$more"
+            else -> "You said: $list$more"
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
     // SECTOR FLOWS
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
 
     private fun startSectorFlow(sector: ServiceSector, query: String) {
         currentSector = sector
-        screenState = ServiceScreenState.ProviderList(sector, emptyList(), query, isLoading = true)
+        screenState   = ServiceScreenState.ProviderList(sector, emptyList(), query, isLoading = true)
         speak(ServiceVoiceHandler.buildSectorDetectedPrompt(sector, LanguageManager.getLanguage())) {}
         lifecycleScope.launch {
             providers   = ServiceManager.searchProviders(ServiceIntent(sector, query), userLat, userLng, ServiceFilter())
@@ -480,28 +548,34 @@ Do NOT include instructions or frequency — only names and doses."""
         speak(ServiceVoiceHandler.buildEmergencyPrompt(LanguageManager.getLanguage())) {
             startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:108")))
             lifecycleScope.launch {
-                providers   = ServiceManager.searchProviders(ServiceIntent(ServiceSector.AMBULANCE, "emergency", isEmergency = true), userLat, userLng)
-                screenState = ServiceScreenState.ProviderList(ServiceSector.AMBULANCE, providers, "emergency", false)
+                providers   = ServiceManager.searchProviders(
+                    ServiceIntent(ServiceSector.AMBULANCE, "emergency", isEmergency = true), userLat, userLng
+                )
+                screenState = ServiceScreenState.ProviderList(
+                    ServiceSector.AMBULANCE, providers, "emergency", false
+                )
             }
         }
     }
 
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
     // VOICE LISTENING
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
 
     private fun speakServicePrompt() {
-        speak(ServiceVoiceHandler.buildServiceCategoryPrompt(LanguageManager.getLanguage())) { startListeningForSector() }
+        speak(ServiceVoiceHandler.buildServiceCategoryPrompt(LanguageManager.getLanguage())) {
+            startListeningForSector()
+        }
     }
 
     private fun startListeningForSector() {
         sarvamSTT.startListening(
             onResult = { transcript ->
                 runOnUiThread {
-                    if (ServiceVoiceHandler.isEmergency(transcript))         { handleEmergency();        return@runOnUiThread }
-                    if (ServiceVoiceHandler.isPrescriptionRequest(transcript)) { startPrescriptionFlow(); return@runOnUiThread }
+                    if (ServiceVoiceHandler.isEmergency(transcript))           { handleEmergency();        return@runOnUiThread }
+                    if (ServiceVoiceHandler.isPrescriptionRequest(transcript))  { startPrescriptionFlow(); return@runOnUiThread }
                     val intent = ServiceManager.detectServiceIntent(transcript)
-                    if (intent.sector == ServiceSector.MEDICINE)              { startPrescriptionFlow(); return@runOnUiThread }
+                    if (intent.sector == ServiceSector.MEDICINE)               { startPrescriptionFlow(); return@runOnUiThread }
                     if (intent.sector != null) startSectorFlow(intent.sector, transcript)
                     else speak("Sorry, which service do you need?") { startListeningForSector() }
                 }
@@ -521,7 +595,7 @@ Do NOT include instructions or frequency — only names and doses."""
                     val lower = transcript.lowercase()
                     if (lower.contains("back") || lower.contains("cancel") ||
                         lower.contains("वापस") || lower.contains("రద్దు")) { goBack(); return@runOnUiThread }
-                    speak("Please say 1, 2 or 3 to select a pharmacy.") { startListeningForSelection() }
+                    speak("Please say 1, 2 or 3 to select a provider.") { startListeningForSelection() }
                 }
             },
             onError = { runOnUiThread { startListeningForSelection() } }
@@ -550,9 +624,9 @@ Do NOT include instructions or frequency — only names and doses."""
                     val lower = transcript.lowercase()
                     when {
                         lower.contains("yes") || lower.contains("confirm") || lower.contains("book") ||
-                                lower.contains("हां") || lower.contains("हाँ")    || lower.contains("అవును") -> confirmBooking(provider)
+                                lower.contains("हां") || lower.contains("हाँ") || lower.contains("అవును") -> confirmBooking(provider)
                         lower.contains("no")  || lower.contains("cancel") || lower.contains("back") ||
-                                lower.contains("नहीं") || lower.contains("వద్దు")                           -> goBack()
+                                lower.contains("नहीं") || lower.contains("వద్దు")                       -> goBack()
                         else -> speak("Say yes to confirm or no to go back.") { startListeningForBookingConfirm(provider) }
                     }
                 }
@@ -561,9 +635,9 @@ Do NOT include instructions or frequency — only names and doses."""
         )
     }
 
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
     // BOOKING
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
 
     private fun onProviderChosen(number: Int) {
         val provider = providers.getOrNull(number - 1) ?: return
@@ -602,7 +676,11 @@ Do NOT include instructions or frequency — only names and doses."""
                     medicines     = extractedMedicines.takeIf { it.isNotEmpty() }
                 )
             } catch (e: Exception) {
-                Log.e("ServiceActivity", "Booking save error: ${e.message}")
+                // ── BUG 1 FIX: log full exception, not just e.message ─────
+                // e.message is null for NetworkOnMainThreadException and some
+                // NullPointerExceptions, resulting in "Booking save error: null".
+                // Log.e with a Throwable argument always prints the stack trace.
+                Log.e("ServiceActivity", "Booking save error", e)
             }
         }
     }
@@ -642,23 +720,40 @@ Do NOT include instructions or frequency — only names and doses."""
         finish()
     }
 
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
     // SUPABASE — save booking
-    // FIX: was failing with null because token wasn't attached
-    // ══════════════════════════════════════════════════════════════════════════
+    //
+    // ── BUG 1 FIX ─────────────────────────────────────────────────────────
+    // Root causes of "Booking save error: null":
+    //
+    // 1. This suspend function was called from lifecycleScope.launch {} which
+    //    defaults to Dispatchers.Main. OkHttpClient.execute() is a blocking
+    //    call — on Android this throws NetworkOnMainThreadException whose
+    //    .message is null, producing the misleading log line.
+    //    Fix: wrap the entire network block in withContext(Dispatchers.IO).
+    //
+    // 2. OkHttpClient() was created with zero timeout config, causing hangs
+    //    on poor networks.
+    //    Fix: use the shared bookingHttpClient with 15-second timeouts.
+    //
+    // 3. Exception was logged as e.message which is null for the above
+    //    exception types.
+    //    Fix: log the full Throwable in confirmBooking() above.
+    // ─────────────────────────────────────────────────────────────────────
 
     private suspend fun saveBookingToSupabase(
-        bookingId: String,
-        userId: String,
-        providerName: String,
+        bookingId:     String,
+        userId:        String,
+        providerName:  String,
         providerPhone: String?,
-        sector: String,
-        etaMinutes: Int,
-        medicines: List<String>? = null
-    ) {
+        sector:        String,
+        etaMinutes:    Int,
+        medicines:     List<String>? = null
+    ) = withContext(Dispatchers.IO) {   // ← Fix: all network work on IO thread
+
         val supabaseUrl = SupabaseClient.SUPABASE_URL
         val supabaseKey = SupabaseClient.SUPABASE_KEY
-        val token       = UserSessionManager.getToken() ?: supabaseKey   // use user JWT if available, fallback to anon key
+        val token       = UserSessionManager.getToken() ?: supabaseKey
 
         val body = org.json.JSONObject().apply {
             put("booking_id",    bookingId)
@@ -667,8 +762,8 @@ Do NOT include instructions or frequency — only names and doses."""
             put("sector",        sector)
             put("status",        "booked")
             put("eta_minutes",   etaMinutes)
-            if (providerPhone != null)         put("provider_phone", providerPhone)
-            if (!medicines.isNullOrEmpty())    put("medicines",      medicines.joinToString(", "))
+            if (providerPhone != null)      put("provider_phone", providerPhone)
+            if (!medicines.isNullOrEmpty()) put("medicines",      medicines.joinToString(", "))
         }.toString()
 
         Log.d("ServiceActivity", "Saving booking $bookingId for user $userId to Supabase")
@@ -682,30 +777,37 @@ Do NOT include instructions or frequency — only names and doses."""
             .post(body.toRequestBody("application/json".toMediaType()))
             .build()
 
-        val response = OkHttpClient().newCall(request).execute()
+        val response = bookingHttpClient.newCall(request).execute()   // ← uses shared client
         Log.d("ServiceActivity", "Booking saved: HTTP ${response.code} — $bookingId")
 
         if (!response.isSuccessful) {
             val err = response.body?.string() ?: "no body"
-            Log.e("ServiceActivity", "Booking save failed: $err")
+            Log.e("ServiceActivity", "Booking save failed HTTP ${response.code}: $err")
+            // Throw so the catch in confirmBooking logs with full context
+            throw Exception("Booking HTTP ${response.code}: $err")
         }
     }
 
-    // ── Speak helper ──────────────────────────────────────────────────────────
+    // ── Speak helper ──────────────────────────────────────────────────────
 
     private fun speak(text: String, onDone: (() -> Unit)? = null) {
         lifecycleScope.launch {
             val lang      = LanguageManager.getLanguage()
             val finalText = TranslationManager.translate(text, lang)
             Log.d("ServiceActivity", "Speaking: $finalText")
-            runOnUiThread { ttsManager.speak(text = finalText, language = lang, onDone = { onDone?.invoke() }) }
+            runOnUiThread {
+                ttsManager.speak(text = finalText, language = lang, onDone = { onDone?.invoke() })
+            }
         }
     }
 }
 
 sealed class ServiceScreenState {
     object SectorHome : ServiceScreenState()
-    data class ProviderList(val sector: ServiceSector, val providers: List<ServiceProvider>, val query: String, val isLoading: Boolean) : ServiceScreenState()
+    data class ProviderList(
+        val sector: ServiceSector, val providers: List<ServiceProvider>,
+        val query: String, val isLoading: Boolean
+    ) : ServiceScreenState()
     object Prescription : ServiceScreenState()
     data class BookingConfirm(val provider: ServiceProvider) : ServiceScreenState()
     data class BookingDone(val provider: ServiceProvider, val bookingId: String, val eta: String) : ServiceScreenState()

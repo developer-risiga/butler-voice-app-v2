@@ -6,6 +6,8 @@ plugins {
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.kotlin.plugin.serialization")
+
+    id("com.google.gms.google-services")
 }
 
 kotlin {
@@ -28,14 +30,12 @@ fun getLocalProperty(key: String): String {
 fun getEnvOrLocal(key: String): String {
     val env = System.getenv(key)
     if (!env.isNullOrEmpty()) return env
-
     return getLocalProperty(key)
 }
 
 android {
     namespace = "com.demo.butler_voice_app"
     compileSdk = 34
-
     buildToolsVersion = "34.0.0"
 
     defaultConfig {
@@ -45,47 +45,20 @@ android {
         versionCode = 1
         versionName = "1.0"
 
-        // ✅ DEFINE EACH KEY ONLY ONCE
-        buildConfigField(
-            "String",
-            "OPENAI_API_KEY",
-            "\"${getEnvOrLocal("OPENAI_API_KEY").ifEmpty { "DUMMY_KEY" }}\""
-        )
-        buildConfigField(
-            "String",
-            "SARVAM_API_KEY",
-            "\"${getEnvOrLocal("SARVAM_API_KEY").ifEmpty { "DUMMY_KEY" }}\""
-        )
-
-        buildConfigField(
-            "String",
-            "PORCUPINE_ACCESS_KEY",
-            "\"${getEnvOrLocal("PORCUPINE_ACCESS_KEY").ifEmpty { "DUMMY_KEY" }}\""
-        )
-
-        buildConfigField(
-            "String",
-            "ELEVENLABS_API_KEY",
-            "\"${getEnvOrLocal("ELEVENLABS_API_KEY").ifEmpty { "DUMMY_KEY" }}\""
-        )
-
-        buildConfigField(
-            "String",
-            "ELEVENLABS_VOICE_ID",
-            "\"${getEnvOrLocal("ELEVENLABS_VOICE_ID").ifEmpty { "DUMMY_VOICE" }}\""
-        )
-
-        buildConfigField(
-            "String",
-            "SUPABASE_URL",
-            "\"${getEnvOrLocal("SUPABASE_URL").ifEmpty { "https://dummy.url" }}\""
-        )
-
-        buildConfigField(
-            "String",
-            "SUPABASE_KEY",
-            "\"${getEnvOrLocal("SUPABASE_KEY").ifEmpty { "DUMMY_KEY" }}\""
-        )
+        buildConfigField("String", "OPENAI_API_KEY",
+            "\"${getEnvOrLocal("OPENAI_API_KEY").ifEmpty { "DUMMY_KEY" }}\"")
+        buildConfigField("String", "SARVAM_API_KEY",
+            "\"${getEnvOrLocal("SARVAM_API_KEY").ifEmpty { "DUMMY_KEY" }}\"")
+        buildConfigField("String", "PORCUPINE_ACCESS_KEY",
+            "\"${getEnvOrLocal("PORCUPINE_ACCESS_KEY").ifEmpty { "DUMMY_KEY" }}\"")
+        buildConfigField("String", "ELEVENLABS_API_KEY",
+            "\"${getEnvOrLocal("ELEVENLABS_API_KEY").ifEmpty { "DUMMY_KEY" }}\"")
+        buildConfigField("String", "ELEVENLABS_VOICE_ID",
+            "\"${getEnvOrLocal("ELEVENLABS_VOICE_ID").ifEmpty { "DUMMY_VOICE" }}\"")
+        buildConfigField("String", "SUPABASE_URL",
+            "\"${getEnvOrLocal("SUPABASE_URL").ifEmpty { "https://dummy.url" }}\"")
+        buildConfigField("String", "SUPABASE_KEY",
+            "\"${getEnvOrLocal("SUPABASE_KEY").ifEmpty { "DUMMY_KEY" }}\"")
     }
 
     buildFeatures {
@@ -111,6 +84,10 @@ android {
     packaging {
         jniLibs {
             useLegacyPackaging = true
+        }
+
+        resources {
+            excludes += "/META-INF/*.kotlin_module"
         }
     }
 }
@@ -138,9 +115,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
-
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
-
     implementation("com.google.android.gms:play-services-auth:21.0.0")
 
     // KTOR
@@ -150,5 +125,10 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.0")
 
     implementation("androidx.work:work-runtime-ktx:2.9.0")
-    implementation("com.google.firebase:firebase-messaging:23.4.0")
+
+
+    implementation("com.google.firebase:firebase-messaging:23.4.0") {
+        exclude(group = "com.google.firebase", module = "firebase-analytics")
+        exclude(group = "com.google.firebase", module = "firebase-analytics-ktx")
+    }
 }

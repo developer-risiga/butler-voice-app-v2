@@ -65,12 +65,14 @@ import com.demo.butler_voice_app.utils.ButlerPhraseBank
 import com.demo.butler_voice_app.utils.HumanFillerManager
 import com.demo.butler_voice_app.voice.SarvamSTTManager
 import com.demo.butler_voice_app.workers.ProactiveButlerWorker
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.demo.butler_voice_app.api.PriceComparisonEngine
 import com.demo.butler_voice_app.api.StorePrice
 import com.demo.butler_voice_app.api.PriceComparison
+import java.util.concurrent.TimeUnit
 
-// ── AssistantState — adds IN_SERVICE_SUBTYPE_FLOW ────────────────────────────
 enum class AssistantState {
     IDLE, CHECKING_AUTH,
     ASKING_IS_NEW_USER, ASKING_NAME, ASKING_EMAIL, ASKING_PHONE, ASKING_PASSWORD,
@@ -79,7 +81,7 @@ enum class AssistantState {
     WAITING_CARD_PAYMENT, WAITING_UPI_PAYMENT, WAITING_QR_PAYMENT,
     CONFIRMING_CARD_PAID, CONFIRMING_UPI_PAID, CONFIRMING_QR_PAID,
     IN_SERVICE_FLOW,
-    IN_SERVICE_SUBTYPE_FLOW,   // NEW: waiting for user to say plumbing sub-type etc.
+    IN_SERVICE_SUBTYPE_FLOW,
     ASKING_WHO
 }
 
@@ -110,7 +112,7 @@ class MainActivity : ComponentActivity() {
     private var pendingProactiveData: ProactiveData? = null
     private var currentMood: UserMood = UserMood.CALM
 
-    // ── Service sub-type session ──────────────────────────────────────────────
+    // ── Service sub-type session ──────────────────────────────────────────
     private data class ServiceSubTypeSession(
         val sector: ServiceSector,
         val originalTranscript: String,
@@ -127,41 +129,45 @@ class MainActivity : ComponentActivity() {
     private var tempProduct : ApiClient.Product? = null
     private var currentState = AssistantState.IDLE
     private val recordRequestCode = 101
-    private var totalEmptyRetries = 0    // session-level hard cap for blank transcripts
+    private var totalEmptyRetries = 0
+
+    // ── BUG 2 FIX ─────────────────────────────────────────────────────────
+    // STT retry race condition: when a blank transcript fires, startListening()
+    // was called immediately without stopping the old STT session. The old
+    // session's next callback then fired ~54ms later as a SECOND blank
+    // transcript, immediately hitting retry count 2 and speaking "सुना नहीं"
+    // before the user had a chance to say anything.
+    //
+    // Fix: every call to startListening() increments sttListenId. Each
+    // SarvamSTT callback captures the id at the time it was created.
+    // Any callback whose id no longer matches the current id is stale and
+    // is silently discarded. sarvamSTT.stop() before the new session
+    // ensures only one recording is active at a time.
+    // ─────────────────────────────────────────────────────────────────────
+    @Volatile private var sttListenId = 0
 
     private fun toSpeakableAmount(amount: Double): String = "${amount.toInt()} rupees"
 
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
     // HUMAN HELPERS
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
 
-    /**
-     * Speak a short filler sound (haan..., ek second...) IMMEDIATELY,
-     * then run [action] — which typically starts an API call.
-     * This makes Butler feel instant even before the network response.
-     */
     private fun speakFillerThen(action: () -> Unit) {
         val lang   = LanguageManager.getLanguage()
         val filler = HumanFillerManager.getThinkingFiller(lang)
-        // Fire-and-forget — don't wait for onDone
         ttsManager.speak(text = filler, language = lang, onDone = null)
         action()
     }
 
     private fun speakWithTransition(text: String, onDone: (() -> Unit)? = null) {
-        val lang       = LanguageManager.getLanguage()
-        val transition = HumanFillerManager.getTransition(lang)
+        val transition = HumanFillerManager.getTransition(LanguageManager.getLanguage())
         speak("$transition $text", onDone)
     }
 
-    /**
-     * Prepend a mood acknowledgement if relevant, then speak the response.
-     */
     private fun speakWithMoodContext(text: String, onDone: (() -> Unit)? = null) {
         val lang    = LanguageManager.getLanguage()
         val moodAck = HumanFillerManager.getMoodAck(currentMood, lang)
-        val finalText = if (moodAck != null) "$moodAck $text" else text
-        speak(finalText, onDone)
+        speak(if (moodAck != null) "$moodAck $text" else text, onDone)
     }
 
     private fun buildShortConfirm(lang: String): String {
@@ -171,49 +177,58 @@ class MainActivity : ComponentActivity() {
         return "$items. $total. $phrase"
     }
 
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
     // CENTRAL ROUTER
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
 
     private fun routeTranscript(text: String, lower: String): Boolean {
         val lang = LanguageManager.getLanguage()
 
-        // ── Emergency ────────────────────────────────────────────────────────
         if (ServiceVoiceHandler.isEmergency(lower)) {
             speak(ServiceVoiceHandler.buildEmergencyPrompt(lang)) { launchServiceFlow(text) }
             return true
         }
 
-        // ── Prescription ─────────────────────────────────────────────────────
         if (ServiceVoiceHandler.isPrescriptionRequest(lower)) {
             speak("I will help you order from your prescription. Opening camera now.") { launchServiceFlow(text) }
             return true
         }
 
-        // ── Service request — with sub-type clarification ─────────────────────
         if (currentState == AssistantState.LISTENING || currentState == AssistantState.REORDER_CONFIRM) {
             if (ServiceVoiceHandler.isServiceRequest(lower)) {
-                val intent  = ServiceManager.detectServiceIntent(text)
-                val sector  = intent.sector
+                val intent = ServiceManager.detectServiceIntent(text)
+                val sector = intent.sector
 
                 if (sector != null && ServiceVoiceHandler.hasSectorSubTypes(sector)) {
-                    // Start sub-type flow before launching ServiceActivity
                     serviceSubTypeSession = ServiceSubTypeSession(sector, text)
                     currentState = AssistantState.IN_SERVICE_SUBTYPE_FLOW
                     val prompt = ServiceVoiceHandler.buildSubTypePrompt(sector, lang)
                     speak(prompt) { startListening() }
                 } else {
-                    // No sub-types for this sector — launch directly
                     val sectorName = sector?.let {
                         com.demo.butler_voice_app.ai.HindiSectorNames.get(it.name, lang)
                     } ?: "service"
-                    speak("Finding $sectorName providers near you.") { launchServiceFlow(text) }
+                    speak("Finding $sectorName providers near you.") {
+                        // ── BUG 3 FIX ──────────────────────────────────────────
+                        // Previously: launchServiceFlow(text) with no overrideSector.
+                        // Inside launchServiceFlow, ServiceManager.detectServiceIntent()
+                        // was called AGAIN on the same transcript. On that second
+                        // call it returned sector=null (e.g. for "मुझे इलेक्ट्रिशियन
+                        // चाहिए।"), causing EXTRA_SECTOR="" to be passed to
+                        // ServiceActivity. ServiceActivity then fell through to the
+                        // else branch and asked "which service do you need?" — even
+                        // though the user had already said "electrician".
+                        //
+                        // Fix: pass the already-detected sector as overrideSector so
+                        // the second detection is skipped entirely.
+                        // ─────────────────────────────────────────────────────
+                        launchServiceFlow(text, overrideSector = sector)
+                    }
                 }
                 return true
             }
         }
 
-        // ── Status query ─────────────────────────────────────────────────────
         if (StatusCheckHandler.isStatusQuery(lower) &&
             (currentState == AssistantState.LISTENING || currentState == AssistantState.REORDER_CONFIRM)) {
             handleStatusQuery(text)
@@ -222,9 +237,9 @@ class MainActivity : ComponentActivity() {
         return false
     }
 
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
     // LAUNCHERS
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
 
     private val authLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -306,15 +321,14 @@ class MainActivity : ComponentActivity() {
                 }
             } else {
                 currentState = AssistantState.LISTENING
-                val lang = LanguageManager.getLanguage()
-                speak(ButlerPhraseBank.get("ask_item", lang)) { startListening() }
+                speak(ButlerPhraseBank.get("ask_item", LanguageManager.getLanguage())) { startListening() }
             }
         }, 500)
     }
 
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
     // LIFECYCLE
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -322,12 +336,15 @@ class MainActivity : ComponentActivity() {
             override fun handleOnBackPressed() {}
         })
         setContent { val state by uiState; ButlerScreen(state = state) }
+
         val audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
         audioManager.mode             = AudioManager.MODE_NORMAL
         audioManager.isSpeakerphoneOn = true
+
         SessionStore.init(this)
         FamilyProfileManager.load(this)
         startLocationUpdates()
+
         sarvamSTT = SarvamSTTManager(this, BuildConfig.SARVAM_API_KEY)
         porcupine = WakeWordManager(this, BuildConfig.PORCUPINE_ACCESS_KEY) {
             runOnUiThread { onWakeWordDetected() }
@@ -338,10 +355,26 @@ class MainActivity : ComponentActivity() {
             voiceId          = "RwXLkVKnRloV1UPh3Ccx"
         )
         ttsManager.init { checkMicPermission() }
-        lifecycleScope.launch {
-            try { apiClient.searchProduct("rice"); Log.d("Butler", "Cache warmed") }
-            catch (_: Exception) {}
+
+        // ── BUG 8 FIX ─────────────────────────────────────────────────────
+        // Previously: apiClient.searchProduct("rice") was called to warm the
+        // cache. searchProduct() is a product-search function, not a pre-fetch
+        // function. Calling it at startup meant 457KB of JSON was fetched and
+        // 3000 items were deserialized DURING startup frame rendering, causing
+        // 76+ skipped frames / 2240ms Davey alerts.
+        //
+        // Fix: use the dedicated prefetchProducts() which runs entirely on
+        // Dispatchers.IO and populates the same shared cache without touching
+        // the main thread. The coroutine runs fire-and-forget so it doesn't
+        // delay ttsManager.init() or the wake word engine starting up.
+        // ─────────────────────────────────────────────────────────────────
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                apiClient.prefetchProducts()
+                Log.d("Butler", "Cache warmed")
+            } catch (_: Exception) {}
         }
+
         ProactiveButlerWorker.schedule(this)
         checkProactiveLaunch()
     }
@@ -353,9 +386,9 @@ class MainActivity : ComponentActivity() {
         if (currentState == AssistantState.IDLE) { try { startLockTask() } catch (_: Exception) {} }
     }
 
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
     // PROACTIVE BUTLER
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
 
     private fun checkProactiveLaunch() {
         val fromNotification = intent?.getBooleanExtra("proactive_launch", false) ?: false
@@ -377,9 +410,9 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
     // LOCATION
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
 
     private fun startLocationUpdates() {
         try {
@@ -392,9 +425,9 @@ class MainActivity : ComponentActivity() {
         } catch (e: Exception) { Log.e("Butler", "Location error: ${e.message}") }
     }
 
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
     // PERMISSIONS
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
 
     private fun checkMicPermission() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED)
@@ -409,9 +442,9 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
     // WAKE WORD
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
 
     private fun startWakeWordListening() {
         currentState    = AssistantState.IDLE
@@ -434,6 +467,10 @@ class MainActivity : ComponentActivity() {
         AIParser.resetDebounce()
         apiClient.clearProductCache()
         setUiState(ButlerUiState.Idle)
+
+        // ── BUG 2 FIX: invalidate any in-flight startListening callbacks ─
+        sttListenId++
+
         Log.d("Butler", "Waiting for wake word...")
         try { porcupine.stop() } catch (_: Exception) {}
         porcupine.start()
@@ -446,8 +483,33 @@ class MainActivity : ComponentActivity() {
         }
         currentState = AssistantState.CHECKING_AUTH
         setUiState(ButlerUiState.Thinking("Checking session…"))
+
         lifecycleScope.launch {
-            val restored = UserSessionManager.tryRestoreSession()
+            // ── BUG 7 FIX ─────────────────────────────────────────────────
+            // Previously: tryRestoreSession() → if 401, session cleared →
+            // user forced to log in on every cold start after token expiry.
+            //
+            // Fix: when tryRestoreSession() fails AND a refresh token exists
+            // in SessionStore, silently call the Supabase token refresh
+            // endpoint. On success, the new access token is written to
+            // SessionStore and tryRestoreSession() is retried. Only if the
+            // refresh also fails do we fall through to the AuthActivity.
+            //
+            // Note: UserSessionManager.tryRestoreSession() should save the
+            // refresh_token alongside the access_token when first logging in.
+            // SessionStore.saveSession(accessToken, uid, name, refreshToken)
+            // ─────────────────────────────────────────────────────────────
+            var restored = UserSessionManager.tryRestoreSession()
+
+            if (!restored && SessionStore.hasRefreshToken()) {
+                Log.d("Butler", "Access token expired — attempting silent refresh")
+                val refreshed = attemptTokenRefresh()
+                if (refreshed) {
+                    restored = UserSessionManager.tryRestoreSession()
+                    Log.d("Butler", "Post-refresh restore: $restored")
+                }
+            }
+
             runOnUiThread {
                 if (restored && UserSessionManager.currentProfile != null) {
                     val profile = UserSessionManager.currentProfile!!
@@ -471,6 +533,45 @@ class MainActivity : ComponentActivity() {
                     authLauncher.launch(Intent(this@MainActivity, AuthActivity::class.java))
                 }
             }
+        }
+    }
+
+    // ── BUG 7 FIX: silent token refresh via Supabase /auth/v1/token ──────
+
+    private suspend fun attemptTokenRefresh(): Boolean = withContext(Dispatchers.IO) {
+        val refreshToken = SessionStore.getRefreshToken() ?: return@withContext false
+        try {
+            val body = """{"refresh_token":"$refreshToken"}"""
+            val client = okhttp3.OkHttpClient.Builder()
+                .connectTimeout(10, TimeUnit.SECONDS)
+                .readTimeout(10,  TimeUnit.SECONDS)
+                .build()
+            val request = okhttp3.Request.Builder()
+                .url("${SupabaseClient.SUPABASE_URL}/auth/v1/token?grant_type=refresh_token")
+                .addHeader("apikey",       SupabaseClient.SUPABASE_KEY)
+                .addHeader("Content-Type", "application/json")
+                .post(body.toRequestBody("application/json".toMediaType()))
+                .build()
+
+            val response = client.newCall(request).execute()
+            if (!response.isSuccessful) {
+                Log.w("Butler", "Token refresh HTTP ${response.code}")
+                return@withContext false
+            }
+
+            val json        = org.json.JSONObject(response.body?.string() ?: return@withContext false)
+            val newAccess   = json.optString("access_token")
+            val newRefresh  = json.optString("refresh_token")
+
+            if (newAccess.isBlank()) return@withContext false
+
+            SessionStore.updateTokens(newAccess, newRefresh)
+            Log.d("Butler", "Token refreshed successfully")
+            true
+
+        } catch (e: Exception) {
+            Log.e("Butler", "Token refresh error: ${e.message}")
+            false
         }
     }
 
@@ -511,9 +612,9 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
     // VOICE SIGNUP
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
 
     private fun startVoiceSignupFlow() {
         currentState = AssistantState.ASKING_IS_NEW_USER
@@ -522,20 +623,38 @@ class MainActivity : ComponentActivity() {
         speak("Welcome to Butler! Are you a new customer, or have you ordered before?") { startListening() }
     }
 
-    // ══════════════════════════════════════════════════════════════════════════
-    // STT — with language switching wired in
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
+    // STT — main voice loop
+    // ══════════════════════════════════════════════════════════════════════
 
     private fun startListening() {
+        // ── BUG 2 FIX: stop any existing recording before starting a new one.
+        // sarvamSTT.stop() cancels the previous session's callback chain so
+        // its onResult can never fire after this point.
+        sarvamSTT.stop()
+
+        // ── BUG 2 FIX: capture a session id. The lambda below captures myId.
+        // If startListening() is called again before this callback fires,
+        // sttListenId will have been incremented and myId != sttListenId,
+        // so the stale callback returns immediately without any side effects.
+        val myId = ++sttListenId
+
         setUiState(ButlerUiState.Listening)
         Log.d("Butler", "Starting STT...")
+
         sarvamSTT.startListening(
             onResult = { text ->
                 runOnUiThread {
+                    // ── BUG 2 FIX: stale callback guard ──────────────────
+                    if (myId != sttListenId) {
+                        Log.d("Butler", "STT callback discarded (stale id $myId, current $sttListenId)")
+                        return@runOnUiThread
+                    }
+
                     val transcript = text.trim()
                     Log.d("Butler", "Transcript: $transcript")
 
-                    // ── MOOD DETECTION ────────────────────────────────────────
+                    // ── MOOD DETECTION ────────────────────────────────────
                     val pcm      = sarvamSTT.lastPcmBuffer
                     val duration = sarvamSTT.lastRecordingDurationMs
                     if (pcm.isNotEmpty()) {
@@ -544,58 +663,49 @@ class MainActivity : ComponentActivity() {
                     }
                     if (transcript.isBlank()) MoodDetector.recordRetry()
 
-                    // ── LANGUAGE DETECTION & SWITCHING ───────────────────────
+                    // ── LANGUAGE DETECTION & SWITCHING ───────────────────
                     if (transcript.isNotBlank() && transcript.length > 3) {
                         val scriptLang = MultilingualMatcher.detectScript(transcript)
                         val detected   = LanguageDetector.detect(transcript)
                         val rawLang    = if (scriptLang != "en") scriptLang else detected
                         LanguageManager.setLanguage(rawLang)
 
-                        // ── KEY FIX: re-evaluate language on every STT response ──
-                        // Use our own script detection as the language code source.
-                        // To use Sarvam's language_code directly, add to SarvamSTTManager:
-                        //   var lastLanguageCode: String? = null  (set it inside the onResult JSON parse)
                         val sarvamLangCode = "$rawLang-IN"
-                        val langSwitched = SessionLanguageManager.onDetection(sarvamLangCode)
-
+                        val langSwitched   = SessionLanguageManager.onDetection(sarvamLangCode)
                         if (langSwitched) {
                             Log.d("Butler", "🔄 Language switched to ${SessionLanguageManager.lockedLanguage}")
-                            // Bug 3 fix: sync LanguageManager so speak() / translate() use the new lang
-                            val newBase = SessionLanguageManager.ttsLanguage  // "hi", "te", "en" etc.
+                            val newBase = SessionLanguageManager.ttsLanguage
                             LanguageManager.setLanguage(newBase)
                             Log.d("Butler", "LanguageManager synced to $newBase")
                         }
                     }
 
-                    // ── EMPTY TRANSCRIPT ─────────────────────────────────────
+                    // ── EMPTY TRANSCRIPT ─────────────────────────────────
                     if (transcript.isBlank()) {
-                        // Cancel any language flip that SarvamSTTManager may have triggered
-                        // from the empty audio's language_code (e.g. en-IN on silence)
                         SessionLanguageManager.onBlankTranscript()
 
                         sttRetryCount++
                         totalEmptyRetries++
                         val lang = LanguageManager.getLanguage()
 
-                        // Hard cap — after 5 consecutive empty transcripts, give up gracefully
                         if (totalEmptyRetries >= 5) {
                             totalEmptyRetries = 0
                             sttRetryCount = 0
                             MoodDetector.reset()
                             val giveUpMsg = when {
-                                lang.startsWith("hi") ->
-                                    "ठीक है। जब बोलना हो तब hey butler बोलना।"
-                                lang.startsWith("te") ->
-                                    "సరే. మళ్ళీ అవసరమైతే hey butler చెప్పండి."
-                                else ->
-                                    "no problem. say hey butler when you're ready."
+                                lang.startsWith("hi") -> "ठीक है। जब बोलना हो तब hey butler बोलना।"
+                                lang.startsWith("te") -> "సరే. మళ్ళీ అవసరమైతే hey butler చెప్పండి."
+                                else                  -> "no problem. say hey butler when you're ready."
                             }
                             speak(giveUpMsg) { startWakeWordListening() }
                             return@runOnUiThread
                         }
 
+                        // ── BUG 2 FIX: sttRetryCount < 2 now safely retries
+                        // because sttListenId prevents the old callback from
+                        // triggering a phantom second retry.
                         if (sttRetryCount < 2) {
-                            startListening()
+                            startListening()   // safe — stale callbacks are guarded above
                         } else {
                             sttRetryCount = 0
                             val retryMsg = HumanFillerManager.getEmptyRetry(lang, totalEmptyRetries - 1)
@@ -603,7 +713,8 @@ class MainActivity : ComponentActivity() {
                         }
                         return@runOnUiThread
                     }
-                    totalEmptyRetries = 0  // reset on any successful transcript
+
+                    totalEmptyRetries = 0
                     sttRetryCount = 0
                     setUiState(ButlerUiState.Thinking(transcript))
                     handleCommand(transcript)
@@ -618,6 +729,12 @@ class MainActivity : ComponentActivity() {
         onOther: (String) -> Unit,
         retryPrompt: String = "Please say 1, 2, or 3."
     ) {
+        // ── BUG 2 FIX: invalidate any pending startListening() callback when
+        // switching to the selection sub-flow, so stale main-loop callbacks
+        // don't fire over the top of selection callbacks.
+        sarvamSTT.stop()
+        sttListenId++
+
         setUiState(ButlerUiState.Listening)
         sarvamSTT.startListening(
             onResult = { text ->
@@ -670,9 +787,9 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // ══════════════════════════════════════════════════════════════════════════
-    // SERVICE FLOW LAUNCHER — accepts optional sub-type for richer ServiceActivity context
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
+    // SERVICE FLOW LAUNCHER
+    // ══════════════════════════════════════════════════════════════════════
 
     private fun launchServiceFlow(
         transcript: String,
@@ -681,11 +798,16 @@ class MainActivity : ComponentActivity() {
     ) {
         currentState = AssistantState.IN_SERVICE_FLOW
         serviceSubTypeSession = null
+        // ── BUG 2 FIX: invalidate STT callbacks before handing control to
+        // ServiceActivity so no ghost callbacks fire when we return.
+        sttListenId++
         try { stopLockTask() } catch (_: Exception) {}
+
         val serviceIntent = if (overrideSector != null)
             com.demo.butler_voice_app.services.ServiceIntent(overrideSector, transcript)
         else
             ServiceManager.detectServiceIntent(transcript)
+
         val intent = Intent(this, ServiceActivity::class.java).apply {
             putExtra(ServiceActivity.EXTRA_SECTOR,   serviceIntent.sector?.name ?: "")
             putExtra(ServiceActivity.EXTRA_QUERY,    transcript)
@@ -698,9 +820,9 @@ class MainActivity : ComponentActivity() {
         serviceLauncher.launch(intent)
     }
 
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
     // MAIN COMMAND HANDLER
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
 
     private fun handleCommand(text: String) {
         val lower   = text.lowercase().trim()
@@ -710,31 +832,21 @@ class MainActivity : ComponentActivity() {
 
         when (currentState) {
 
-            // ── NEW: Service sub-type clarification ───────────────────────────
             AssistantState.IN_SERVICE_SUBTYPE_FLOW -> {
                 val session = serviceSubTypeSession
-                if (session == null) {
-                    currentState = AssistantState.LISTENING
-                    startListening()
-                    return
-                }
+                if (session == null) { currentState = AssistantState.LISTENING; startListening(); return }
 
                 val matched = ServiceVoiceHandler.matchSubType(text, session.sector)
 
                 if (matched != null) {
-                    // Sub-type confirmed — now ask when
-                    val whenPrompt = ButlerPhraseBank.get("service_when", lang)
-                    val sectorName = com.demo.butler_voice_app.ai.HindiSectorNames.get(session.sector.name, lang)
+                    val whenPrompt    = ButlerPhraseBank.get("service_when", lang)
                     val confirmPrompt = "${matched.getDisplay(lang)} — $whenPrompt"
                     speak(confirmPrompt) {
-                        // Listen for time preference then launch
                         sarvamSTT.startListening(
                             onResult = { timeText ->
                                 runOnUiThread {
-                                    val timeSlot = extractTimeSlotFromSpeech(timeText.trim())
-                                    val bookingPrompt = ServiceVoiceHandler.buildBookingConfirmPrompt(
-                                        session.sector, matched, timeSlot, lang
-                                    )
+                                    val timeSlot      = extractTimeSlotFromSpeech(timeText.trim())
+                                    val bookingPrompt = ServiceVoiceHandler.buildBookingConfirmPrompt(session.sector, matched, timeSlot, lang)
                                     speak(bookingPrompt) {
                                         sarvamSTT.startListening(
                                             onResult = { confirmText ->
@@ -743,62 +855,45 @@ class MainActivity : ComponentActivity() {
                                                     if (MultilingualMatcher.isYes(c) ||
                                                         c.contains("haan") || c.contains("ha") ||
                                                         c.contains("ok") || c.contains("pakka")) {
-                                                        val enhancedQuery = "${session.originalTranscript} ${matched.displayEn} $timeSlot"
-                                                        val sectorDisplay = com.demo.butler_voice_app.ai.HindiSectorNames.get(session.sector.name, lang)
+                                                        val enhancedQuery  = "${session.originalTranscript} ${matched.displayEn} $timeSlot"
+                                                        val sectorDisplay  = com.demo.butler_voice_app.ai.HindiSectorNames.get(session.sector.name, lang)
                                                         speak("Finding $sectorDisplay near you.") {
                                                             launchServiceFlow(enhancedQuery, session.sector, matched.id)
                                                         }
                                                     } else {
-                                                        // Bug 2 fix: user declined service booking
-                                                        // Do NOT fall into grocery cart logic
                                                         serviceSubTypeSession = null
                                                         currentState = AssistantState.LISTENING
                                                         val cancelMsg = when {
-                                                            lang.startsWith("hi") ->
-                                                                "theek hai. koi aur service chahiye, ya grocery order karein?"
-                                                            lang.startsWith("te") ->
-                                                                "సరే. వేరే సేవ కావాలా, లేదా గ్రోసరీ ఆర్డర్ చేయాలా?"
-                                                            else ->
-                                                                "no problem. want a different service, or can I help with something else?"
+                                                            lang.startsWith("hi") -> "theek hai. koi aur service chahiye, ya grocery order karein?"
+                                                            lang.startsWith("te") -> "సరే. వేరే సేవ కావాలా, లేదా గ్రోసరీ ఆర్డర్ చేయాలా?"
+                                                            else                  -> "no problem. want a different service, or can I help with something else?"
                                                         }
                                                         speak(cancelMsg) { startListening() }
                                                     }
                                                 }
                                             },
                                             onError = {
-                                                runOnUiThread {
-                                                    launchServiceFlow(session.originalTranscript, session.sector, matched.id)
-                                                }
+                                                runOnUiThread { launchServiceFlow(session.originalTranscript, session.sector, matched.id) }
                                             }
                                         )
                                     }
                                 }
                             },
-                            onError = {
-                                runOnUiThread {
-                                    launchServiceFlow(session.originalTranscript, session.sector, matched.id)
-                                }
-                            }
+                            onError = { runOnUiThread { launchServiceFlow(session.originalTranscript, session.sector, matched.id) } }
                         )
                     }
                 } else {
-                    // Didn't match — retry with shorter options
                     session.retryCount++
                     if (session.retryCount <= 2) {
-                        val retry = ServiceVoiceHandler.buildSubTypeRetryPrompt(session.sector, lang)
-                        speak(retry) { startListening() }
+                        speak(ServiceVoiceHandler.buildSubTypeRetryPrompt(session.sector, lang)) { startListening() }
                     } else {
-                        // Too many retries — launch without sub-type
                         serviceSubTypeSession = null
                         val sectorName = com.demo.butler_voice_app.ai.HindiSectorNames.get(session.sector.name, lang)
-                        speak("Finding $sectorName near you.") {
-                            launchServiceFlow(session.originalTranscript, session.sector, null)
-                        }
+                        speak("Finding $sectorName near you.") { launchServiceFlow(session.originalTranscript, session.sector, null) }
                     }
                 }
             }
 
-            // ── Family: who is speaking? ──────────────────────────────────────
             AssistantState.ASKING_WHO -> {
                 val detected = FamilyProfileManager.detectSpeaker(text)
                 if (detected != null) {
@@ -822,10 +917,8 @@ class MainActivity : ComponentActivity() {
                 } else {
                     val members = FamilyProfileManager.getMembers()
                     val names   = members.joinToString(", ") { it.displayName }
-                    val retry   = when {
-                        lang.startsWith("hi") -> "pehchan nahi hua. $names mein se kaun hain aap?"
-                        else                  -> "didn't catch that — are you $names?"
-                    }
+                    val retry   = if (lang.startsWith("hi")) "pehchan nahi hua. $names mein se kaun hain aap?"
+                    else "didn't catch that — are you $names?"
                     setUiState(ButlerUiState.FamilySelection(members, retry))
                     speak(retry) {
                         val profile = UserSessionManager.currentProfile!!
@@ -841,8 +934,7 @@ class MainActivity : ComponentActivity() {
                     cleaned.contains("new") || cleaned.contains("first") || cleaned.contains("register") ||
                             cleaned.contains("नया") || cleaned.contains("నొత్త") || cleaned.contains("புதிய") -> {
                         currentState = AssistantState.ASKING_NAME
-                        setUiState(ButlerUiState.VoiceSignupStep(ButlerUiState.SignupStep.ASK_NAME,
-                            prompt = "What is your full name?"))
+                        setUiState(ButlerUiState.VoiceSignupStep(ButlerUiState.SignupStep.ASK_NAME, prompt = "What is your full name?"))
                         speak("Great! What is your full name?") { startListening() }
                     }
                     cleaned.contains("returning") || cleaned.contains("before") || cleaned.contains("existing") ||
@@ -874,7 +966,7 @@ class MainActivity : ComponentActivity() {
                         setUiState(ButlerUiState.VoiceSignupStep(ButlerUiState.SignupStep.ASK_EMAIL,
                             collectedName = tempName,
                             prompt = "Nice to meet you $tempName! Please spell your email, letter by letter."))
-                        speak("Nice to meet you $tempName! Please spell your email address, letter by letter. For example: r-a-v-i at gmail dot com") { startListening() }
+                        speak("Nice to meet you $tempName! Please spell your email address, letter by letter.") { startListening() }
                     }
                 }
             }
@@ -922,8 +1014,7 @@ class MainActivity : ComponentActivity() {
                     tempPhone = phone; phoneRetryCount = 0
                     currentState = AssistantState.ASKING_PASSWORD
                     setUiState(ButlerUiState.VoiceSignupStep(ButlerUiState.SignupStep.ASK_PASSWORD,
-                        tempName, tempEmail, tempPhone,
-                        "Now choose a password. Spell each character clearly."))
+                        tempName, tempEmail, tempPhone, "Now choose a password."))
                     speak("Got it — $tempPhone. Now choose a password. Spell each character clearly.") { startListening() }
                 } else {
                     phoneRetryCount++
@@ -991,13 +1082,11 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                         MultilingualMatcher.isNo(cleaned) -> {
-                            pendingProactiveData = null
-                            currentState = AssistantState.LISTENING
+                            pendingProactiveData = null; currentState = AssistantState.LISTENING
                             speak("theek hai! ${ButlerPhraseBank.get("ask_item", LanguageManager.getLanguage())}") { startListening() }
                         }
                         else -> {
-                            pendingProactiveData = null
-                            currentState = AssistantState.LISTENING
+                            pendingProactiveData = null; currentState = AssistantState.LISTENING
                             handleOrderIntent(text, lower)
                         }
                     }
@@ -1039,7 +1128,6 @@ class MainActivity : ComponentActivity() {
                     cart.add(CartItem(product, qty))
                     sessionLastProduct = product.name; sessionLastQty = qty
                     currentState = AssistantState.ASKING_MORE
-                    // Use related item suggestion from HumanFillerManager
                     val suggestion = HumanFillerManager.getRelatedSuggestion(product.name, lang)
                     val addedMsg   = ButlerPhraseBank.get("added_item", lang)
                     val askMore    = ButlerPhraseBank.get("ask_more", lang)
@@ -1090,9 +1178,9 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
     // STATUS QUERY
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
 
     private fun handleStatusQuery(text: String) {
         val firstName = UserSessionManager.currentProfile?.full_name?.split(" ")?.first() ?: "there"
@@ -1108,9 +1196,9 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
     // PAYMENT
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
 
     private fun askPaymentMode() {
         pendingOrderTotal   = cart.sumOf { it.product.price * it.quantity }
@@ -1120,8 +1208,7 @@ class MainActivity : ComponentActivity() {
         val hasSaved = card != null
         val cardInfo = if (card != null) "${card.network} card ending ${card.last4}" else ""
         setUiState(ButlerUiState.PaymentChoice(pendingOrderTotal, pendingOrderSummary, hasSaved, cardInfo))
-        val lang = LanguageManager.getLanguage()
-        speak("total ${toSpeakableAmount(pendingOrderTotal)}. ${ButlerPhraseBank.get("ask_payment", lang)}") { startListening() }
+        speak("total ${toSpeakableAmount(pendingOrderTotal)}. ${ButlerPhraseBank.get("ask_payment", LanguageManager.getLanguage())}") { startListening() }
     }
 
     private fun handlePaymentModeChoice(cleaned: String) {
@@ -1164,8 +1251,7 @@ class MainActivity : ComponentActivity() {
             "upi"  -> AssistantState.CONFIRMING_UPI_PAID
             else   -> AssistantState.CONFIRMING_QR_PAID
         }
-        val lang = LanguageManager.getLanguage()
-        speak(ButlerPhraseBank.get("payment_confirm_ask", lang)) { startListening() }
+        speak(ButlerPhraseBank.get("payment_confirm_ask", LanguageManager.getLanguage())) { startListening() }
     }
 
     private fun handlePaidOrNotPaid(cleaned: String, mode: String) {
@@ -1173,10 +1259,10 @@ class MainActivity : ComponentActivity() {
             "हाँ","हां","हो गया","పేమెంట్ చేశాను","అవును","ஆம்","ha","kar diya","ho gaya")
         val notPaid = listOf("no","not yet","haven't","wait","not done","failed","नहीं","अभी नहीं","లేదు","ఇంకా","nahi","abhi nahi")
         val lang = LanguageManager.getLanguage()
+        val amount = toSpeakableAmount(pendingOrderTotal)
         when {
             paid.any    { cleaned.contains(it) } -> speak(ButlerPhraseBank.get("payment_done", lang)) { placeOrder() }
             notPaid.any { cleaned.contains(it) } -> {
-                val amount = toSpeakableAmount(pendingOrderTotal)
                 speak(when (mode) {
                     "card" -> "theek hai! card se $amount pay karein."
                     "upi"  -> "theek hai! UPI pe $amount bhejein."
@@ -1189,9 +1275,9 @@ class MainActivity : ComponentActivity() {
 
     private fun handlePaymentConfirmation(cleaned: String, mode: String) { askIfPaid(mode) }
 
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
     // CART EDITING
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
 
     private fun isCartEditIntent(s: String): Boolean =
         listOf("remove","delete","हटाओ","హటావో","change","update","బదలు","बदलो","మార్చు").any { s.contains(it) }
@@ -1228,9 +1314,9 @@ class MainActivity : ComponentActivity() {
         currentState = AssistantState.CONFIRMING; readCartAndConfirm()
     }
 
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
     // ORDER INTENT
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
 
     private fun handleOrderIntent(text: String, lower: String) {
         val cleaned = lower.replace(Regex("[,।.!?]"), "").trim()
@@ -1242,7 +1328,6 @@ class MainActivity : ComponentActivity() {
         val regional = IndianLanguageProcessor.normalizeProduct(cleaned)
         if (regional != cleaned && regional.isNotBlank()) { searchAndAskQuantity(regional); return }
 
-        // Speak filler BEFORE the AI call so response feels instant
         speakFillerThen {
             lifecycleScope.launch {
                 val fullParsed = AIParser.parse(text)
@@ -1282,9 +1367,9 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
     // ASKING MORE
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
 
     private fun handleAskingMore(cleaned: String, originalText: String) {
         val lang = LanguageManager.getLanguage()
@@ -1317,9 +1402,9 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // ══════════════════════════════════════════════════════════════════════════
-    // PRODUCT SEARCH — Mood + Price Intelligence
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
+    // PRODUCT SEARCH
+    // ══════════════════════════════════════════════════════════════════════
 
     private fun searchAndAskQuantity(itemName: String, qty: Int = 0, unit: String? = null) {
         val lang = LanguageManager.getLanguage()
@@ -1329,8 +1414,6 @@ class MainActivity : ComponentActivity() {
                 if (recs.isNotEmpty()) {
                     runOnUiThread { setUiState(ButlerUiState.ShowingRecommendations(itemName, recs)) }
 
-                    // Bug 1 fix: NEVER skip options when in service sub-type flow.
-                    // shouldSkipOptions() is only valid for grocery product selection.
                     if (MoodAdapter.shouldSkipOptions(currentMood) &&
                         currentState != AssistantState.IN_SERVICE_SUBTYPE_FLOW) {
                         val best = recs.minByOrNull { it.priceRs }!!
@@ -1402,8 +1485,7 @@ class MainActivity : ComponentActivity() {
                                 speak("${product.name}? ${ButlerPhraseBank.get("ask_quantity", lang)}") { startListening() }
                             }
                         } else {
-                            speak(ButlerPhraseBank.get("ask_item", lang)
-                                .let { "$itemName nahi mila. $it" }) { startListening() }
+                            speak(ButlerPhraseBank.get("ask_item", lang).let { "$itemName nahi mila. $it" }) { startListening() }
                         }
                     }
                 }
@@ -1446,9 +1528,9 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
     // PLACE ORDER
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
 
     private fun placeOrder() {
         lifecycleScope.launch {
@@ -1490,9 +1572,9 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
     // CART HELPERS
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
 
     private fun showCartAndSpeak(text: String, onDone: (() -> Unit)? = null) {
         sarvamSTT.stop()
@@ -1524,9 +1606,9 @@ class MainActivity : ComponentActivity() {
         speakWithTransition(buildShortConfirm(LanguageManager.getLanguage())) { startListening() }
     }
 
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
     // UTILITIES
-    // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
 
     private suspend fun addMultipleItemsToCart(items: List<com.demo.butler_voice_app.ai.ParsedItem>) {
         val found = mutableListOf<String>(); val notFound = mutableListOf<String>()
@@ -1556,11 +1638,11 @@ class MainActivity : ComponentActivity() {
     private fun extractTimeSlotFromSpeech(text: String): String? {
         val lower = text.lowercase()
         return when {
-            lower.contains("aaj")      || lower.contains("today")    || lower.contains("आज")  -> "today"
-            lower.contains("kal")      || lower.contains("tomorrow") || lower.contains("कल")  -> "tomorrow"
-            lower.contains("morning")  || lower.contains("subah")    || lower.contains("सुबह") -> "morning"
-            lower.contains("evening")  || lower.contains("shaam")    || lower.contains("शाम") -> "evening"
-            lower.contains("abhi")     || lower.contains("now")      || lower.contains("right now") -> "now"
+            lower.contains("aaj")     || lower.contains("today")    || lower.contains("आज")  -> "today"
+            lower.contains("kal")     || lower.contains("tomorrow") || lower.contains("कल")  -> "tomorrow"
+            lower.contains("morning") || lower.contains("subah")    || lower.contains("सुबह") -> "morning"
+            lower.contains("evening") || lower.contains("shaam")    || lower.contains("शाम") -> "evening"
+            lower.contains("abhi")    || lower.contains("now")      || lower.contains("right now") -> "now"
             else -> null
         }
     }
@@ -1676,7 +1758,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private suspend fun translateToEnglish(text: String): String {
-        return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        return withContext(Dispatchers.IO) {
             try {
                 val body = org.json.JSONObject().apply {
                     put("model", "gpt-4o-mini")
