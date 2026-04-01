@@ -631,26 +631,7 @@ class MainActivity : ComponentActivity() {
                         s.productName.lowercase().split(" ")
                             .take(2).joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
                     }
-                    when {
-                        lang.startsWith("hi") ->
-                            "$name, पिछली बार $items मंगाया था। फिर से चाहिए?"
-                        lang.startsWith("te") ->
-                            "$name, మీరు చివరిసారి $items తీసుకున్నారు. మళ్ళీ కావాలా?"
-                        lang.startsWith("ta") ->
-                            "$name, கடைசியாக $items வாங்கினீர்கள். மீண்டும் வேணுமா?"
-                        lang.startsWith("kn") ->
-                            "$name, ಕೊನೆಯ ಬಾರಿ $items ತರಿಸಿದ್ದೀರಿ. ಮತ್ತೆ ಬೇಕೇ?"
-                        lang.startsWith("ml") ->
-                            "$name, കഴിഞ്ഞ തവണ $items വാങ്ങി. വീണ്ടും വേണോ?"
-                        lang.startsWith("pa") ->
-                            "$name, ਪਿਛਲੀ ਵਾਰ $items ਮੰਗਵਾਏ ਸਨ। ਫਿਰ ਚਾਹੀਦਾ?"
-                        lang.startsWith("gu") ->
-                            "$name, છેલ્લી વાર $items મંગાવ્યા હતા। ફરી જોઈએ?"
-                        lang.startsWith("mr") ->
-                            "$name, मागच्या वेळी $items मागवलं होतं. पुन्हा हवं का?"
-                        else ->
-                            "$name, last time you ordered $items. Want to reorder?"
-                    }
+                    ButlerPersonalityEngine.reorderGreeting(name, items, lang)
                 } else null
                 runOnUiThread {
                     // Force-lock the language at greeting time. This means the user's
@@ -691,42 +672,15 @@ class MainActivity : ComponentActivity() {
                         val lastProduct = history.firstOrNull()?.product_name?.takeIf { it.isNotBlank() }
                         val shortLast = lastProduct?.lowercase()?.split(" ")?.take(2)
                             ?.joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
-                        val greeting = when {
-                            lang.startsWith("hi") && shortLast != null ->
-                                "हाँ $name! पिछली बार $shortLast था। क्या चाहिए आज?"
-                            lang.startsWith("hi") ->
-                                "हाँ $name! क्या चाहिए?"
-                            lang.startsWith("te") && shortLast != null ->
-                                "హాయ్ $name! చివరిసారి $shortLast. ఈరోజు ఏం కావాలి?"
-                            lang.startsWith("ta") && shortLast != null ->
-                                "$name! கடைசியா $shortLast வாங்கினீர். இன்னைக்கு என்ன வேணும்?"
-                            lang.startsWith("kn") && shortLast != null ->
-                                "$name! ಕೊನೆಯ ಬಾರಿ $shortLast. ಇಂದು ಏನು ಬೇಕು?"
-                            lang.startsWith("ml") && shortLast != null ->
-                                "$name! കഴിഞ്ഞ തവണ $shortLast. ഇന്ന് എന്ത് വേണം?"
-                            lang.startsWith("pa") && shortLast != null ->
-                                "$name! ਪਿਛਲੀ ਵਾਰ $shortLast ਸੀ। ਅੱਜ ਕੀ ਚਾਹੀਦਾ?"
-                            lang.startsWith("gu") && shortLast != null ->
-                                "$name! છેલ્લે $shortLast હતું. આજે શું જોઈએ?"
-                            lang.startsWith("mr") && shortLast != null ->
-                                "$name! मागच्यावेळी $shortLast होतं. आज काय पाहिजे?"
-                            shortLast != null ->
-                                "Hey $name! Last time you had $shortLast. What do you need today?"
-                            else ->
-                                IndianLanguageProcessor.getWelcomeGreeting(lang, name)
-                        }
+                        val greeting = ButlerPersonalityEngine.greeting(name, lang, shortLast, currentMood)
                         speak(greeting, EmotionTone.WARM) { startListening() }
                     }
                 }
             }
         } else {
             currentState = AssistantState.LISTENING
-            val greeting = when {
-                lang.startsWith("hi") -> "हाँ $name! क्या चाहिए?"
-                lang.startsWith("te") -> "హాయ్ $name! ఏం కావాలి?"
-                else -> IndianLanguageProcessor.getWelcomeGreeting(lang, name)
-            }
-            speak(greeting) { startListening() }
+            val greeting = ButlerPersonalityEngine.greeting(name, lang, null, currentMood)
+            speak(greeting, EmotionTone.WARM) { startListening() }
         }
     }
 
@@ -1368,15 +1322,11 @@ class MainActivity : ComponentActivity() {
                     cart.add(CartItem(product, qty))
                     sessionLastProduct = product.name; sessionLastQty = qty
                     currentState = AssistantState.ASKING_MORE
-                    val suggestion = HumanFillerManager.getRelatedSuggestion(product.name, lang)
-                    val addedMsg   = ButlerPhraseBank.get("added_item", lang)
-                    val askMore    = ButlerPhraseBank.get("ask_more", lang)
-                    showCartAndSpeak(
-                        if (suggestion != null && cart.size == 1) "$addedMsg $qty ${product.name}. $suggestion bhi chahiye? $askMore"
-                        else "$addedMsg $qty ${product.name}. $askMore"
-                    ) { startListening() }
+                    val addedMsg = ButlerPersonalityEngine.itemAdded(product.name, lang, currentMood, cart.size)
+                    val moreMsg  = ButlerPersonalityEngine.askMore(lang, currentMood, cart.size, product.name)
+                    showCartAndSpeak("$addedMsg $moreMsg") { startListening() }
                 } else {
-                    speak("Let us try again. ${ButlerPhraseBank.get("ask_item", LanguageManager.getLanguage())}") {
+                    speak(ButlerPersonalityEngine.productNotFound("", lang)) {
                         currentState = AssistantState.LISTENING; startListening()
                     }
                 }
@@ -1448,7 +1398,7 @@ class MainActivity : ComponentActivity() {
         val hasSaved = card != null
         val cardInfo = if (card != null) "${card.network} card ending ${card.last4}" else ""
         setUiState(ButlerUiState.PaymentChoice(pendingOrderTotal, pendingOrderSummary, hasSaved, cardInfo))
-        speak("total ${toSpeakableAmount(pendingOrderTotal)}. ${ButlerPhraseBank.get("ask_payment", LanguageManager.getLanguage())}") { startListening() }
+        speak(ButlerPersonalityEngine.askPaymentMode(toSpeakableAmount(pendingOrderTotal), LanguageManager.getLanguage())) { startListening() }
     }
 
     private fun handlePaymentModeChoice(cleaned: String) {
@@ -1557,8 +1507,8 @@ class MainActivity : ComponentActivity() {
             val item = cart.firstOrNull { it.product.name.lowercase().split(" ").any { w -> cleaned.contains(w) && w.length > 3 } }
             if (item != null) {
                 cart.remove(item)
-                if (cart.isEmpty()) speak("${item.product.name} hata diya. cart khaali. ${ButlerPhraseBank.get("ask_item", lang)}") { currentState = AssistantState.LISTENING; startListening() }
-                else { currentState = AssistantState.CONFIRMING; showCartAndSpeak("${item.product.name} hata diya. ${buildShortConfirm(lang)}") { startListening() } }
+                if (cart.isEmpty()) speak("${ButlerPersonalityEngine.itemRemoved(item.product.name, lang)} ${ButlerPersonalityEngine.cartEmpty(lang)}") { currentState = AssistantState.LISTENING; startListening() }
+                else { currentState = AssistantState.CONFIRMING; showCartAndSpeak("${ButlerPersonalityEngine.itemRemoved(item.product.name, lang)} ${buildShortConfirm(lang)}") { startListening() } }
             } else speak("kaunsa item hatana hai?") { startListening() }
             return
         }
@@ -2000,7 +1950,7 @@ class MainActivity : ComponentActivity() {
                                 showCartAndSpeak("$addedMsg $qty ${product.name}. $askMore") { startListening() }
                             } else {
                                 currentState = AssistantState.ASKING_QUANTITY
-                                speak("${product.name}? ${ButlerPhraseBank.get("ask_quantity", lang)}") { startListening() }
+                                speak(ButlerPersonalityEngine.askQuantity(product.name, lang)) { startListening() }
                             }
                         } else {
                             speak(ButlerPersonalityEngine.productNotFound(itemName, lang)) { startListening() }
@@ -2067,7 +2017,7 @@ class MainActivity : ComponentActivity() {
             try {
                 val userId = UserSessionManager.currentUserId()
                 if (userId == null) {
-                    speak("session expire ho gayi. hey butler bolein.") { startWakeWordListening() }; return@launch
+                    speak(ButlerPersonalityEngine.sessionExpired(LanguageManager.getLanguage())) { startWakeWordListening() }; return@launch
                 }
                 val orderResult = apiClient.createOrder(cart, userId)
                 val shortId     = if (orderResult.public_id.isNotBlank()) orderResult.public_id else orderResult.id.takeLast(6).uppercase()
@@ -2083,7 +2033,7 @@ class MainActivity : ComponentActivity() {
                 }
                 val cartItems = cart.map { CartDisplayItem(it.product.name, it.quantity, it.product.price) }
                 setUiState(ButlerUiState.OrderPlaced(shortId, orderResult.total_amount, cartItems, 30, firstName))
-                speak(IndianLanguageProcessor.getOrderConfirmation(lang, firstName, shortId), EmotionTone.WARM) {
+                speak(ButlerPersonalityEngine.orderPlaced(firstName, shortId, toSpeakableAmount(orderResult.total_amount), 30, lang), EmotionTone.WARM) {
                     try { stopLockTask() } catch (_: Exception) {}
                     startActivity(Intent(this@MainActivity, DeliveryTrackingActivity::class.java).apply {
                         putExtra("order_id", lastOrderId); putExtra("public_id", lastPublicId)
@@ -2096,7 +2046,7 @@ class MainActivity : ComponentActivity() {
                 Log.e("Butler", "Order failed: ${e.message}")
                 runOnUiThread {
                     currentState = AssistantState.CONFIRMING
-                    showCartAndSpeak(ButlerPhraseBank.get("error_retry", LanguageManager.getLanguage())) { startListening() }
+                    showCartAndSpeak(ButlerPersonalityEngine.orderError(LanguageManager.getLanguage())) { startListening() }
                 }
             }
         }
@@ -2313,15 +2263,7 @@ class MainActivity : ComponentActivity() {
                     // Short product name only
                     val shortLast = lastProduct?.lowercase()?.split(" ")
                         ?.take(2)?.joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
-                    val greeting = when {
-                        lang.startsWith("hi") && shortLast != null ->
-                            "हाँ $firstName! पिछली बार $shortLast था। क्या चाहिए?"
-                        lang.startsWith("hi") ->
-                            "हाँ $firstName! क्या चाहिए?"
-                        shortLast != null ->
-                            "Hey $firstName! Last time you had $shortLast. What do you need?"
-                        else -> IndianLanguageProcessor.getWelcomeGreeting(lang, firstName)
-                    }
+                    val greeting = ButlerPersonalityEngine.greeting(firstName, lang, shortLast, currentMood)
                     speak(greeting, EmotionTone.WARM) { startListening() }
                 }
             },
