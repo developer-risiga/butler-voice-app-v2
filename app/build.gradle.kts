@@ -7,8 +7,7 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.kotlin.plugin.serialization")
 
-    id("com.google.gms.google-services")
-}
+    }
 
 kotlin {
     compilerOptions {
@@ -127,8 +126,5 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.9.0")
 
 
-    implementation("com.google.firebase:firebase-messaging:23.4.0") {
-        exclude(group = "com.google.firebase", module = "firebase-analytics")
-        exclude(group = "com.google.firebase", module = "firebase-analytics-ktx")
-    }
+
 }
