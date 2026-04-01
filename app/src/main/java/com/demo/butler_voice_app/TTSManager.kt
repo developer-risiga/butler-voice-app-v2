@@ -34,21 +34,73 @@ class TTSManager(
     private val elevenLabsApiKey: String,
     private val voiceId: String = "RwXLkVKnRloV1UPh3Ccx"
 ) {
-    companion object {
-        private const val TAG = "TTS"
+    // ── TTS TEXT NORMALIZER ───────────────────────────────────────────────
+    // ElevenLabs mispronounces English loanwords written in Devanagari script.
+    // Example: "ऑर्डर" → sounds like "On Order" instead of "Order"
+    // Fix: replace Devanagari-script English words with Latin equivalents
+    // BEFORE sending to ElevenLabs. The model pronounces Latin correctly.
+    // Native Hindi words (हाँ, क्या, etc.) are left untouched.
+    private fun normalizeForTTS(text: String): String {
+        var result = text
+        TTS_WORD_MAP.forEach { (hindi, latin) ->
+            result = result.replace(hindi, latin, ignoreCase = false)
+        }
+        return result
+    }
 
-        // Shreya — female, multilingual. Same voice for all languages.
+    companion object {
+        // ── Devanagari loanword → Latin replacement map ───────────────────
+        // Add more entries as you discover mispronunciations in production.
+        private val TTS_WORD_MAP = linkedMapOf(
+            // Orders & Commerce
+            "ऑर्डर"     to "order",
+            "ऑर्डर्स"   to "orders",
+            "कार्ट"      to "cart",
+            "पेमेंट"     to "payment",
+            "कैंसिल"     to "cancel",
+            "कन्फर्म"    to "confirm",
+            "डिलीवरी"    to "delivery",
+            "बुकिंग"     to "booking",
+            "ऑप्शन"      to "option",
+            "ऑप्शन्स"    to "options",
+            // Payment
+            "यूपीआई"     to "UPI",
+            "क्यूआर"     to "QR",
+            "कार्ड"      to "card",
+            "डेबिट"      to "debit",
+            "क्रेडिट"    to "credit",
+            // App
+            "बटलर"       to "Butler",
+            "अकाउंट"     to "account",
+            "पासवर्ड"    to "password",
+            "ईमेल"       to "email",
+            "मोबाइल"     to "mobile",
+            "नंबर"       to "number",
+            "आईडी"       to "ID",
+            // Units & quantities
+            "किलो"       to "kilo",
+            "लीटर"       to "litre",
+            "पैकेट"      to "packet",
+            // Services
+            "अम्बुलेंस"  to "ambulance",
+            "डॉक्टर"     to "doctor",
+            "एमरजेंसी"   to "emergency",
+            "फार्मेसी"   to "pharmacy",
+            // Common Hinglish
+            "ओके"        to "okay",
+            "प्लीज़"      to "please",
+            "थैंक्यू"    to "thank you",
+            "सॉरी"       to "sorry",
+            "हेलो"       to "hello",
+            "बाय"        to "bye"
+        )
+
+        private const val TAG = "TTS"
         private const val VOICE_EN = "RwXLkVKnRloV1UPh3Ccx"
         private const val VOICE_HI = "RwXLkVKnRloV1UPh3Ccx"
-
         private const val ELEVEN_MODEL = "eleven_multilingual_v2"
         private val DEVANAGARI = Regex("[\\u0900-\\u097F]")
 
-        // ── Voice settings per emotion tone ──────────────────────────────────
-        // stability  : 0.0 (variable/expressive) → 1.0 (monotone/stable)
-        // style      : 0.0 (neutral) → 1.0 (exaggerated)
-        // Higher stability + lower style = serious, controlled voice
-        // Lower stability + higher style = expressive, warm voice
         private data class VoiceSettings(
             val stability: Double,
             val similarityBoost: Double,
@@ -57,10 +109,10 @@ class TTSManager(
         )
 
         private val TONE_SETTINGS = mapOf(
-            EmotionTone.EMERGENCY  to VoiceSettings(0.85, 0.90, 0.00), // serious, no emotion
-            EmotionTone.EMPATHETIC to VoiceSettings(0.70, 0.85, 0.05), // gentle, calm
-            EmotionTone.NORMAL     to VoiceSettings(0.50, 0.80, 0.15), // neutral
-            EmotionTone.WARM       to VoiceSettings(0.40, 0.80, 0.25)  // positive, warm
+            EmotionTone.EMERGENCY  to VoiceSettings(0.85, 0.90, 0.00),
+            EmotionTone.EMPATHETIC to VoiceSettings(0.70, 0.85, 0.05),
+            EmotionTone.NORMAL     to VoiceSettings(0.50, 0.80, 0.15),
+            EmotionTone.WARM       to VoiceSettings(0.40, 0.80, 0.25)
         )
     }
 
@@ -94,23 +146,28 @@ class TTSManager(
     ) {
         if (text.isBlank()) { Log.w(TAG, "speak() blank — skip"); onDone?.invoke(); return }
 
-        val resolvedVoice = resolveVoice(text, language)
+        // ── Normalize Devanagari loanwords before sending to ElevenLabs ──
+        // "ऑर्डर" → "order", "पेमेंट" → "payment", etc.
+        // Native Hindi words are untouched.
+        val normalizedText = normalizeForTTS(text)
+
+        val resolvedVoice = resolveVoice(normalizedText, language)
         val settings      = TONE_SETTINGS[tone] ?: TONE_SETTINGS[EmotionTone.NORMAL]!!
-        Log.d(TAG, "ElevenLabs [$language] tone=$tone voice=$resolvedVoice → \"${text.take(60)}\"")
+        Log.d(TAG, "ElevenLabs [$language] tone=$tone voice=$resolvedVoice → \"${normalizedText.take(60)}\"")
 
         val appContext = context.applicationContext
         Thread {
             try {
-                val audioBytes = fetchElevenLabsAudio(text, resolvedVoice, settings)
+                val audioBytes = fetchElevenLabsAudio(normalizedText, resolvedVoice, settings)
                 if (audioBytes != null && audioBytes.isNotEmpty()) {
                     playAudioBytes(appContext, audioBytes, onDone)
                 } else {
                     Log.w(TAG, "ElevenLabs empty — fallback to Android TTS")
-                    speakWithAndroidTts(text, language, onDone)
+                    speakWithAndroidTts(normalizedText, language, onDone)
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "ElevenLabs error: ${e.message} — fallback")
-                speakWithAndroidTts(text, language, onDone)
+                speakWithAndroidTts(normalizedText, language, onDone)
             }
         }.start()
     }
