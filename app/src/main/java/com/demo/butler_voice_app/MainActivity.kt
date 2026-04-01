@@ -730,16 +730,27 @@ class MainActivity : ComponentActivity() {
                         totalEmptyRetries++
                         val lang = LanguageManager.getLanguage()
 
+                        // ── Emotion-aware give-up ─────────────────────────
+                        // If user is FRUSTRATED (kept getting blanks), be warm
+                        // and understanding — not robotic.
                         if (totalEmptyRetries >= 5) {
                             totalEmptyRetries = 0
                             sttRetryCount = 0
                             MoodDetector.reset()
                             val giveUpMsg = when {
-                                lang.startsWith("hi") -> "ठीक है, बाद में बात करते हैं।"
-                                lang.startsWith("te") -> "సరే, తర్వాత మాట్లాడదాం."
-                                else                  -> "No problem, talk to you later."
+                                currentMood == UserMood.FRUSTRATED && lang.startsWith("hi") ->
+                                    "कोई बात नहीं, माइक की जाँच करें और जब तैयार हों तब hey butler बोलें।"
+                                currentMood == UserMood.FRUSTRATED ->
+                                    "No worries, check your mic and say hey butler when ready."
+                                lang.startsWith("hi") ->
+                                    "ठीक है, बाद में बात करते हैं।"
+                                lang.startsWith("te") ->
+                                    "సరే, తర్వాత మాట్లాడదాం."
+                                else -> "No problem, talk to you later."
                             }
-                            speak(giveUpMsg) { startWakeWordListening() }
+                            val giveUpTone = if (currentMood == UserMood.FRUSTRATED)
+                                EmotionTone.EMPATHETIC else EmotionTone.NORMAL
+                            speak(giveUpMsg, giveUpTone) { startWakeWordListening() }
                             return@runOnUiThread
                         }
 
@@ -747,12 +758,43 @@ class MainActivity : ComponentActivity() {
                             startListening()
                         } else {
                             sttRetryCount = 0
-                            val retryMsg = when {
-                                lang.startsWith("hi") -> "सुना नहीं, फिर बोलें।"
-                                lang.startsWith("te") -> "వినలేదు, మళ్ళీ చెప్పండి."
-                                else                  -> "Didn't catch that, please say again."
+                            // ── Emotion-aware retry message ───────────────
+                            // Escalate empathy with each retry:
+                            // retry 1-2 : neutral  "सुना नहीं, फिर बोलें।"
+                            // retry 3-4 : empathetic "माफ करना, थोड़ा जोर से बोलें।"
+                            // retry 5+  : very warm  "माइक के पास आकर बोलें।"
+                            val retryTone: EmotionTone
+                            val retryMsg: String
+                            when {
+                                currentMood == UserMood.FRUSTRATED && totalEmptyRetries >= 4 -> {
+                                    retryTone = EmotionTone.EMPATHETIC
+                                    retryMsg = when {
+                                        lang.startsWith("hi") ->
+                                            "माफ करना, माइक के पास आकर जोर से बोलें।"
+                                        lang.startsWith("te") ->
+                                            "క్షమించండి, దగ్గరగా వచ్చి స్పష్టంగా చెప్పండి."
+                                        else ->
+                                            "Sorry about that. Please speak closer to the mic."
+                                    }
+                                }
+                                currentMood == UserMood.FRUSTRATED -> {
+                                    retryTone = EmotionTone.EMPATHETIC
+                                    retryMsg = when {
+                                        lang.startsWith("hi") -> "माफ करना, फिर बोलें।"
+                                        lang.startsWith("te") -> "క్షమించండి, మళ్ళీ చెప్పండి."
+                                        else                  -> "Sorry, please say that again."
+                                    }
+                                }
+                                else -> {
+                                    retryTone = EmotionTone.NORMAL
+                                    retryMsg = when {
+                                        lang.startsWith("hi") -> "सुना नहीं, फिर बोलें।"
+                                        lang.startsWith("te") -> "వినలేదు, మళ్ళీ చెప్పండి."
+                                        else                  -> "Didn't catch that, please say again."
+                                    }
+                                }
                             }
-                            speak(retryMsg) { startListening() }
+                            speak(retryMsg, retryTone) { startListening() }
                         }
                         return@runOnUiThread
                     }
@@ -1454,23 +1496,42 @@ class MainActivity : ComponentActivity() {
                     cleaned.contains("और") || cleaned.contains("aur") -> {
                 currentState = AssistantState.LISTENING
                 val lastProd = sessionLastProduct
-                val prompt   = if (lastProd != null && cart.size == 1) "wahi waala ${lastProd} dobara? ya kuch aur?"
-                else ButlerPhraseBank.get("ask_item", lang)
+                // Short product name — "DAAWAT BROWN BASMATI RICE 1 KG JAR" → "Daawat Brown"
+                val shortLast = lastProd?.lowercase()?.split(" ")
+                    ?.take(2)?.joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
+                val prompt = when {
+                    shortLast != null && cart.size == 1 && lang.startsWith("hi") ->
+                        "और $shortLast लेना है, या कुछ और?"
+                    shortLast != null && cart.size == 1 ->
+                        "More $shortLast, or something else?"
+                    else -> ButlerPhraseBank.get("ask_item", lang)
+                }
                 showCartAndSpeak(prompt) { startListening() }
             }
             isNoMoreIntent(cleaned) -> readCartAndConfirm()
             isCartEditIntent(cleaned) -> { currentState = AssistantState.EDITING_CART; handleCartEdit(cleaned, originalText) }
             else -> {
+                // ── Use AIParser instead of AIOrderParser — single GPT call ──
                 lifecycleScope.launch {
-                    val parsed = AIOrderParser.parse(originalText); LanguageManager.setLanguage(parsed.detectedLanguage)
+                    val fullParsed = AIParser.parse(originalText)
+                    LanguageManager.setLanguage(fullParsed.language)
                     runOnUiThread {
-                        when (parsed.intent) {
-                            "finish_order", "cancel_order" -> readCartAndConfirm()
-                            "order", "add_more" -> {
-                                if (parsed.items.isNotEmpty()) { currentState = AssistantState.LISTENING; handleOrderIntent(originalText, originalText.lowercase()) }
-                                else showCartAndSpeak(ButlerPhraseBank.get("ask_more", lang)) { startListening() }
+                        when (fullParsed.routing) {
+                            is IntentRouting.FinishOrder,
+                            is IntentRouting.CancelOrder -> readCartAndConfirm()
+                            is IntentRouting.GoToGrocery -> {
+                                val items = (fullParsed.routing as IntentRouting.GoToGrocery).items
+                                if (items.isNotEmpty()) {
+                                    currentState = AssistantState.LISTENING
+                                    handleOrderIntent(originalText, originalText.lowercase())
+                                } else {
+                                    showCartAndSpeak(ButlerPhraseBank.get("ask_more", lang)) { startListening() }
+                                }
                             }
-                            else -> showCartAndSpeak(ButlerPhraseBank.get("ask_more", lang)) { startListening() }
+                            else -> showCartAndSpeak(
+                                if (lang.startsWith("hi")) "और क्या चाहिए?"
+                                else ButlerPhraseBank.get("ask_more", lang)
+                            ) { startListening() }
                         }
                     }
                 }
@@ -1519,21 +1580,27 @@ class MainActivity : ComponentActivity() {
                 if (recs.isNotEmpty()) {
                     runOnUiThread { setUiState(ButlerUiState.ShowingRecommendations(itemName, recs)) }
 
-                    // ── FIX: Only skip to single option when FRUSTRATED (angry user).
-                    // Previously TIRED mood (silence > 95%) also triggered the skip,
-                    // meaning top 3 were never spoken in normal quiet usage.
-                    // TIRED simply means the mic captured low-energy audio — not that
-                    // the user wants to skip the comparison. Only FRUSTRATED (retry
-                    // count >= 2 + high variance) should fast-path to the best option.
+                    // ── Only skip to single option when FRUSTRATED ────────
+                    // TIRED mood no longer triggers skip.
                     if (currentMood == UserMood.FRUSTRATED &&
                         currentState != AssistantState.IN_SERVICE_SUBTYPE_FLOW) {
-                        val best = recs.first()   // already ranked cheapest+nearest first
-                        val ack  = MoodAdapter.getFrustrationAck(lang)
-                        val msg  = MoodAdapter.buildRushedProductAnnouncement(
-                            best.productName, best.priceRs, best.storeName, lang
-                        )
+                        val best = recs.first()
+                        // Short name — "DAAWAT BROWN BASMATI RICE 1KG" → "Daawat Brown"
+                        val shortName = best.productName.lowercase().split(" ")
+                            .take(2).joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
+                        val price = "₹${best.priceRs.toInt()}"
+
+                        // Empathetic acknowledgment — not robotic, not cheerful
+                        val msg = when {
+                            lang.startsWith("hi") ->
+                                "माफ करना। सबसे अच्छा option: $shortName $price. लेना है?"
+                            lang.startsWith("te") ->
+                                "క్షమించండి. అత్యుత్తమ option: $shortName $price. తీసుకోనా?"
+                            else ->
+                                "Sorry for the trouble. Best option: $shortName $price. Want this?"
+                        }
                         runOnUiThread {
-                            speakKeepingRecsVisible("$ack $msg".trim()) {
+                            speakKeepingRecsVisible(msg, EmotionTone.EMPATHETIC) {
                                 startListeningForSelection(
                                     onNumber = { handleRecSelectionByIndex(0, recs, qty, itemName) },
                                     onOther  = { _ -> handleRecSelectionByIndex(0, recs, qty, itemName) }
@@ -1810,10 +1877,19 @@ class MainActivity : ComponentActivity() {
                     AnalyticsManager.logUserAuth("login", LanguageManager.getLanguage())
                     val lastProduct = history.firstOrNull()?.product_name?.takeIf { it.isNotBlank() && it != "null" }
                     val lang        = LanguageManager.getLanguage()
-                    val greeting    = if (lastProduct != null)
-                        "welcome back $firstName! last time $lastProduct tha. ${ButlerPhraseBank.get("ask_item", lang)}"
-                    else IndianLanguageProcessor.getWelcomeGreeting(lang, firstName)
-                    speak(greeting) { startListening() }
+                    // Short product name only
+                    val shortLast = lastProduct?.lowercase()?.split(" ")
+                        ?.take(2)?.joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
+                    val greeting = when {
+                        lang.startsWith("hi") && shortLast != null ->
+                            "हाँ $firstName! पिछली बार $shortLast था। क्या चाहिए?"
+                        lang.startsWith("hi") ->
+                            "हाँ $firstName! क्या चाहिए?"
+                        shortLast != null ->
+                            "Hey $firstName! Last time you had $shortLast. What do you need?"
+                        else -> IndianLanguageProcessor.getWelcomeGreeting(lang, firstName)
+                    }
+                    speak(greeting, EmotionTone.WARM) { startListening() }
                 }
             },
             onFailure = {
@@ -1911,14 +1987,23 @@ class MainActivity : ComponentActivity() {
     // Backward-compat overload — keeps all existing speak("text") { } calls working
     private fun speak(text: String, onDone: (() -> Unit)?) = speak(text, EmotionTone.NORMAL, onDone)
 
-    private fun speakKeepingRecsVisible(text: String, onDone: (() -> Unit)? = null) {
+    private fun speakKeepingRecsVisible(
+        text: String,
+        tone: EmotionTone = EmotionTone.NORMAL,
+        onDone: (() -> Unit)? = null
+    ) {
         sarvamSTT.stop()
         lifecycleScope.launch {
             val lang      = LanguageManager.getLanguage()
             val finalText = TranslationManager.translate(text, lang)
-            runOnUiThread { ttsManager.speak(text = finalText, language = lang, onDone = { onDone?.invoke() }) }
+            runOnUiThread {
+                ttsManager.speak(text = finalText, language = lang, tone = tone, onDone = { onDone?.invoke() })
+            }
         }
     }
+    // Backward-compat overload
+    private fun speakKeepingRecsVisible(text: String, onDone: (() -> Unit)?) =
+        speakKeepingRecsVisible(text, EmotionTone.NORMAL, onDone)
 
     private fun speakKeepingQRVisible(text: String, onDone: (() -> Unit)? = null) {
         sarvamSTT.stop()
