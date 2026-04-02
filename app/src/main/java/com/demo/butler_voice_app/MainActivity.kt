@@ -1695,16 +1695,21 @@ class MainActivity : ComponentActivity() {
                     if (currentMood == UserMood.FRUSTRATED &&
                         currentState != AssistantState.IN_SERVICE_SUBTYPE_FLOW) {
                         val best = recs.first()
-                        val shortName = best.productName.lowercase().split(" ")
+
+                        // FIX: include category so user knows what product, not just brand
+                        val brandDisplay = best.productName.lowercase().split(" ")
                             .take(2).joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
+                        val categoryWord = extractCategoryWord(itemName)
+                        val productAlreadyHasCategory = categoryWord.isNotBlank() &&
+                                best.productName.lowercase().contains(categoryWord.lowercase())
+                        val shortDisplay = if (categoryWord.isNotBlank() && !productAlreadyHasCategory)
+                            "$brandDisplay $categoryWord" else brandDisplay
+
                         val price = "₹${best.priceRs.toInt()}"
                         val msg = when {
-                            lang.startsWith("hi") ->
-                                "$shortName $price — सबसे अच्छा है। लेना है?"
-                            lang.startsWith("te") ->
-                                "$shortName $price — అత్యుత్తమం. తీసుకోనా?"
-                            else ->
-                                "$shortName $price — best option. Want it?"
+                            lang.startsWith("hi") -> "$shortDisplay $price — sabse accha option hai. Chahiye?"
+                            lang.startsWith("te") -> "$shortDisplay $price — best option. Kavala?"
+                            else                  -> "$shortDisplay $price — best option. Want it?"
                         }
                         runOnUiThread {
                             speakKeepingRecsVisible(msg, EmotionTone.EMPATHETIC) {
@@ -1854,20 +1859,49 @@ class MainActivity : ComponentActivity() {
         index: Int,
         recs: List<com.demo.butler_voice_app.api.ProductRecommendation>,
         qty: Int,
-        itemName: String
+        itemName: String   // category word: "rice", "dal", "oil" etc.
     ) {
         val pick = recs.getOrNull(index)
         val lang = LanguageManager.getLanguage()
+
         if (pick != null) {
             val finalQty = if (qty > 0) qty else 1
-            cart.add(CartItem(ApiClient.Product(id = pick.productId, name = pick.productName, price = pick.priceRs, unit = pick.unit), finalQty))
-            sessionLastProduct = pick.productName; sessionLastQty = finalQty
-            currentState = AssistantState.ASKING_MORE
+            cart.add(CartItem(
+                ApiClient.Product(
+                    id    = pick.productId,
+                    name  = pick.productName,
+                    price = pick.priceRs,
+                    unit  = pick.unit
+                ), finalQty
+            ))
+            sessionLastProduct = pick.productName
+            sessionLastQty     = finalQty
+            currentState       = AssistantState.ASKING_MORE
 
-            val addedMsg  = ButlerPersonalityEngine.itemAdded(pick.productName, lang, currentMood, cart.size)
-            val moreMsg   = ButlerPersonalityEngine.askMore(lang, currentMood, cart.size, pick.productName)
-            val msg = "$addedMsg $moreMsg"
-            showCartAndSpeak(msg) { startListening() }
+            // ── BUILD DISPLAY NAME: Brand + Category ─────────────────────────
+            // Without this fix: "Daawat Brown" (just brand+variant — no product noun)
+            // With this fix:    "Daawat Brown rice" (brand+variant+category)
+            //
+            // Only append category if it's not already in the product name
+            // e.g. "DAAWAT BROWN RICE" already contains "rice" → don't add again
+            // but "24 MANTRA" contains no category → add "dal"
+            val brandDisplay = pick.productName.lowercase().split(" ")
+                .take(2).joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
+
+            val categoryWord = extractCategoryWord(itemName)
+            val productAlreadyHasCategory = categoryWord.isNotBlank() &&
+                    pick.productName.lowercase().contains(categoryWord.lowercase())
+
+            val displayForTTS = if (categoryWord.isNotBlank() && !productAlreadyHasCategory) {
+                "$brandDisplay $categoryWord"
+            } else {
+                brandDisplay
+            }
+
+            val addedMsg = ButlerPersonalityEngine.itemAdded(displayForTTS, lang, currentMood, cart.size)
+            val moreMsg  = ButlerPersonalityEngine.askMore(lang, currentMood, cart.size, pick.productName)
+            showCartAndSpeak("$addedMsg $moreMsg") { startListening() }
+
         } else {
             speakKeepingRecsVisible(
                 when {
@@ -2281,6 +2315,35 @@ class MainActivity : ComponentActivity() {
             } catch (e: Exception) {
                 Log.e("Butler", "translateToEnglish failed: ${e.message}"); text
             }
+        }
+    }
+
+    // ── Maps user's spoken itemName → clean spoken category word ─────────
+    // Used to append the product noun to the brand name in TTS output.
+    // "Daawat Brown" alone sounds like just a brand.
+    // "Daawat Brown rice" tells the user what they actually ordered.
+    private fun extractCategoryWord(itemName: String): String {
+        val s = itemName.lowercase()
+        return when {
+            s.contains("rice")  || s.contains("chawal") || s.contains("basmati")
+                    || s.contains("అన్నం")                              -> "rice"
+            s.contains("dal")   || s.contains("daal")   || s.contains("పప్పు")
+                    || s.contains("lentil")                             -> "dal"
+            s.contains("oil")   || s.contains("tel")    || s.contains("నూనె")      -> "oil"
+            s.contains("milk")  || s.contains("doodh")  || s.contains("పాలు")      -> "milk"
+            s.contains("atta")  || s.contains("flour")  || s.contains("aata")      -> "atta"
+            s.contains("sugar") || s.contains("cheeni") || s.contains("చక్కెర")    -> "sugar"
+            s.contains("salt")  || s.contains("namak")  || s.contains("ఉప్పు")     -> "salt"
+            s.contains("tea")   || s.contains("chai")   || s.contains("టీ")        -> "tea"
+            s.contains("ghee")                                                      -> "ghee"
+            s.contains("bread") || s.contains("pav")                                -> "bread"
+            s.contains("egg")                                                        -> "eggs"
+            s.contains("coffee")                                                     -> "coffee"
+            s.contains("butter")|| s.contains("makhan")                             -> "butter"
+            s.contains("curd")  || s.contains("dahi")   || s.contains("పెరుగు")    -> "curd"
+            s.contains("soap")  || s.contains("sabun")                              -> "soap"
+            s.contains("biscuit")                                                    -> "biscuit"
+            else -> ""
         }
     }
 
