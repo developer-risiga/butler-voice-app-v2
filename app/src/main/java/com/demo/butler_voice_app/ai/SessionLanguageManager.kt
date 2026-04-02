@@ -15,27 +15,35 @@ import android.util.Log
  * ─────────────────────────────────────────────────────────────────
  *  Switch direction          │ Transcript │ Hits needed
  * ─────────────────────────────────────────────────────────────────
- *  Any → English             │ any        │ 1  (very reliable detection)
+ *  Any → English             │ 3+ words   │ 2  (raised — protects Hindi sessions)
+ *  Any → English             │ 1-2 words  │ blocked if no-switch word
  *  English → Indic           │ 3+ words   │ 1  (genuine speaker)
  *  English → Indic           │ 1-2 words  │ 2  (moderate protection)
  *  Indic → Different Indic   │ 3+ words   │ 1  (e.g. investor speaks Telugu)
  *  Indic → Different Indic   │ 1-2 words  │ 3  (likely false detection)
  *  Odia / Bengali            │ any        │ ∞  (blocked entirely)
+ *  No-switch words (UPI/QR)  │ any        │ ∞  (blocked — universal terms)
  * ─────────────────────────────────────────────────────────────────
  *
- * DEMO SCENARIOS (all correct):
- *  Roy says "मुझे rice चाहिए"        → hi-IN in 1 utterance    ✅
- *  Team member says "I want rice"    → en-IN in 1 utterance    ✅
- *  COO says "हाँ दाल भी चाहिए"       → hi-IN in 1 utterance    ✅
- *  Investor says "నాకు rice కావాలి"  → te-IN in 1 utterance    ✅
- *  "हाँ" mis-detected as od-IN       → BLOCKED entirely        ✅
- *  "ಅಂತ" (1 word) during Hindi       → needs 3 hits → ignored  ✅
+ * FIX: "UPI" was causing hi-IN → en-IN flip mid-session.
+ * "UPI", "QR", "OK" are universal terms used across all Indian languages.
+ * Sarvam tags them as en-IN but they should never trigger a language switch.
  */
 object SessionLanguageManager {
 
     private val BLOCKED = setOf("od", "bn")
     private val ALLOWED = setOf("hi", "en", "te", "ta", "kn", "ml", "pa", "gu", "mr")
     private val INDIC   = setOf("hi", "te", "ta", "kn", "ml", "pa", "gu", "mr")
+
+    // ── Universal terms that must never trigger a language switch ─────────
+    // These appear in every Indian language context. Sarvam may tag them as
+    // en-IN, but switching language for a single "UPI" or "QR" destroys the
+    // session — user has to re-establish their language with 3+ utterances.
+    private val NO_SWITCH_WORDS = setOf(
+        "upi", "qr", "ok", "okay", "yes", "no", "ha", "id",
+        "otp", "atm", "ac", "tv", "pc", "app", "pin", "sms",
+        "gpay", "bhim", "paytm", "phonepe", "neft", "imps"
+    )
 
     var lockedLanguage: String = "en-IN"
         private set
@@ -55,7 +63,7 @@ object SessionLanguageManager {
     private var pendingLanguage: String  = ""
     private var consecutiveCount: Int    = 0
     private var pendingThreshold: Int    = 3
-    private var languageExplicitlySet: Boolean = false  // true after forceSet or confirmed switch
+    private var languageExplicitlySet: Boolean = false
 
     /**
      * Call on every non-blank STT result.
@@ -68,6 +76,7 @@ object SessionLanguageManager {
         val base       = sarvamLangCode.substringBefore("-").lowercase()
         val lockedBase = lockedLanguage.substringBefore("-").lowercase()
 
+        // ── Script blocked entirely ────────────────────────────────────────
         if (base in BLOCKED) {
             Log.d("SessionLang", "Blocked: $sarvamLangCode")
             return false
@@ -76,6 +85,8 @@ object SessionLanguageManager {
             Log.d("SessionLang", "Unsupported: $sarvamLangCode — ignored")
             return false
         }
+
+        // ── Already locked to this language — confirm and clear pending ────
         if (base == lockedBase) {
             if (pendingLanguage.isNotBlank())
                 Log.d("SessionLang", "Confirmed $lockedLanguage — dropping candidate $pendingLanguage")
@@ -84,11 +95,30 @@ object SessionLanguageManager {
             return false
         }
 
-        val wordCount = transcript.trim().split(Regex("\\s+")).filter { it.isNotBlank() }.size
-        val isLong    = wordCount >= 3
+        val wordCount       = transcript.trim().split(Regex("\\s+")).filter { it.isNotBlank() }.size
+        val transcriptLower = transcript.trim().lowercase().replace(Regex("[।,!?.॥]"), "")
+        val isLong          = wordCount >= 3
+
+        // ── Guard 1: universal no-switch words ────────────────────────────
+        // Single words like "UPI", "QR", "OK" used in all Indian languages.
+        // Never trigger a language switch regardless of what Sarvam detected.
+        if (wordCount == 1 && transcriptLower in NO_SWITCH_WORDS) {
+            Log.d("SessionLang", "No-switch word '$transcriptLower' — keeping $lockedLanguage")
+            return false
+        }
+
+        // ── Guard 2: switching back to English from Indic session ─────────
+        // A single English word mid-Hindi session (like "done", "okay") is
+        // almost always code-switching, not a real language change.
+        // Require 3 words minimum before considering English switch.
+        if (base == "en" && lockedBase in INDIC && !isLong) {
+            Log.d("SessionLang", "Short en utterance during $lockedBase session — ignored")
+            return false
+        }
 
         val threshold = when {
-            base == "en"                                   -> 1
+            // Switching to English now requires 2 consecutive detections minimum
+            base == "en"                                   -> 2
             lockedBase == "en" && isLong                   -> 1
             lockedBase == "en"                             -> 2
             lockedBase in INDIC && base in INDIC && isLong -> 1
@@ -106,9 +136,6 @@ object SessionLanguageManager {
             Log.d("SessionLang", "[$base ${wordCount}w] New candidate: 1/$threshold")
         }
 
-        // Use the lower of the initial threshold and the current one.
-        // If user starts with a long sentence, don't make them wait for the
-        // original short-word threshold.
         val effectiveThreshold = minOf(pendingThreshold, threshold)
 
         if (consecutiveCount >= effectiveThreshold) {

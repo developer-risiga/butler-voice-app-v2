@@ -34,90 +34,109 @@ class TTSManager(
     private val elevenLabsApiKey: String,
     private val voiceId: String = "RwXLkVKnRloV1UPh3Ccx"
 ) {
-    // ── TTS TEXT NORMALIZER ───────────────────────────────────────────────
-    // ElevenLabs mispronounces English loanwords written in Devanagari script.
-    // Example: "ऑर्डर" → sounds like "On Order" instead of "Order"
-    // Fix: replace Devanagari-script English words with Latin equivalents
-    // BEFORE sending to ElevenLabs. The model pronounces Latin correctly.
-    // Native Hindi words (हाँ, क्या, etc.) are left untouched.
-    private fun normalizeForTTS(text: String): String {
-        var result = text
-        TTS_WORD_MAP.forEach { (hindi, latin) ->
-            result = result.replace(hindi, latin, ignoreCase = false)
-        }
-        return result
-    }
 
     companion object {
-        // ── Devanagari loanword → Latin replacement map ───────────────────
-        // Add more entries as you discover mispronunciations in production.
-        private val TTS_WORD_MAP = linkedMapOf(
-            // Orders & Commerce
-            "ऑर्डर"     to "order",
-            "ऑर्डर्स"   to "orders",
-            "कार्ट"      to "cart",
-            "पेमेंट"     to "payment",
-            "कैंसिल"     to "cancel",
-            "कन्फर्म"    to "confirm",
-            "डिलीवरी"    to "delivery",
-            "बुकिंग"     to "booking",
-            "ऑप्शन"      to "option",
-            "ऑप्शन्स"    to "options",
-            // Payment
-            "यूपीआई"     to "UPI",
-            "क्यूआर"     to "QR",
-            "कार्ड"      to "card",
-            "डेबिट"      to "debit",
-            "क्रेडिट"    to "credit",
-            // App
-            "बटलर"       to "Butler",
-            "अकाउंट"     to "account",
-            "पासवर्ड"    to "password",
-            "ईमेल"       to "email",
-            "मोबाइल"     to "mobile",
-            "नंबर"       to "number",
-            "आईडी"       to "ID",
-            // Units & quantities
-            "किलो"       to "kilo",
-            "लीटर"       to "litre",
-            "पैकेट"      to "packet",
-            // Services
-            "अम्बुलेंस"  to "ambulance",
-            "डॉक्टर"     to "doctor",
-            "एमरजेंसी"   to "emergency",
-            "फार्मेसी"   to "pharmacy",
-            // Common Hinglish
-            "परफेक्ट"    to "perfect",
-            "ओके"        to "okay",
-            "प्लीज़"      to "please",
-            "थैंक्यू"    to "thank you",
-            "सॉरी"       to "sorry",
-            "हेलो"       to "hello",
-            "बाय"        to "bye"
-        )
-
-        private const val TAG = "TTS"
-        private const val VOICE_EN = "RwXLkVKnRloV1UPh3Ccx"
-        private const val VOICE_HI = "RwXLkVKnRloV1UPh3Ccx"
+        private const val TAG          = "TTS"
+        private const val VOICE_EN     = "RwXLkVKnRloV1UPh3Ccx"
+        private const val VOICE_HI     = "RwXLkVKnRloV1UPh3Ccx"
         private const val ELEVEN_MODEL = "eleven_multilingual_v2"
-        private val DEVANAGARI = Regex("[\\u0900-\\u097F]")
+        private val DEVANAGARI         = Regex("[\\u0900-\\u097F]")
+
+        // ── TTS TEXT NORMALIZER ───────────────────────────────────────────
+        // ElevenLabs mispronounces:
+        //   1. English loanwords written in Devanagari ("ऑर्डर" → "On Order")
+        //   2. Mixed-script sentences ("Ho गया" → broken pronunciation)
+        //   3. Partially translated strings ("दाल chahiye saath mein")
+        //
+        // Strategy: normalise to the dominant script BEFORE sending to TTS.
+        // Devanagari loanwords → Latin. Mixed Hindi-English → clean Hinglish.
+        // Native Hindi words (हाँ, क्या, etc.) are left untouched.
+        //
+        // ORDER MATTERS: longer/more specific phrases must come before shorter
+        // ones to prevent partial replacements (e.g. "ho gaya" before "gaya").
+        // ─────────────────────────────────────────────────────────────────
+        private val TTS_WORD_MAP = linkedMapOf(
+            // ── Mixed-script phrase fixes (must be first) ─────────────────
+            // These appear when TranslationManager partially translates a string.
+            // "Ho गया" is the #1 offender from the logcat.
+            "Ho गया"           to "Ho gaya",
+            "ho गया"           to "ho gaya",
+            "Ho Gaya"          to "ho gaya",
+            "Haan! "           to "haan! ",
+            "Aur "             to "aur ",
+
+            // ── Orders & Commerce ─────────────────────────────────────────
+            "ऑर्डर"           to "order",
+            "ऑर्डर्स"         to "orders",
+            "कार्ट"            to "cart",
+            "पेमेंट"           to "payment",
+            "कैंसिल"           to "cancel",
+            "कन्फर्म"          to "confirm",
+            "डिलीवरी"          to "delivery",
+            "बुकिंग"           to "booking",
+            "ऑप्शन"            to "option",
+            "ऑप्शन्स"          to "options",
+            "चेकआउट"          to "checkout",
+            "लोड"              to "load",
+
+            // ── Payment ───────────────────────────────────────────────────
+            "यूपीआई"           to "UPI",
+            "क्यूआर"           to "QR",
+            "कार्ड"            to "card",
+            "डेबिट"            to "debit",
+            "क्रेडिट"          to "credit",
+
+            // ── App & Account ─────────────────────────────────────────────
+            "बटलर"             to "Butler",
+            "अकाउंट"           to "account",
+            "पासवर्ड"          to "password",
+            "ईमेल"             to "email",
+            "मोबाइल"           to "mobile",
+            "नंबर"             to "number",
+            "आईडी"             to "ID",
+
+            // ── Units ─────────────────────────────────────────────────────
+            "किलो"             to "kilo",
+            "लीटर"             to "litre",
+            "पैकेट"            to "packet",
+
+            // ── Services ──────────────────────────────────────────────────
+            "अम्बुलेंस"        to "ambulance",
+            "एम्बुलेंस"        to "ambulance",
+            "डॉक्टर"           to "doctor",
+            "एमरजेंसी"         to "emergency",
+            "फार्मेसी"         to "pharmacy",
+
+            // ── UI terms ──────────────────────────────────────────────────
+            "स्क्रीन"          to "screen",
+            "ब्रांड"            to "brand",
+
+            // ── Common Hinglish ───────────────────────────────────────────
+            "परफेक्ट"          to "perfect",
+            "ओके"              to "okay",
+            "प्लीज़"            to "please",
+            "थैंक्यू"          to "thank you",
+            "सॉरी"             to "sorry",
+            "हेलो"             to "hello",
+            "बाय"              to "bye"
+        )
 
         private data class VoiceSettings(
             val stability: Double,
             val similarityBoost: Double,
             val style: Double,
             val useSpeakerBoost: Boolean = true,
-            val speed: Double = 0.85   // <1.0 = slower speech — housewife/elderly default
+            val speed: Double = 0.85
         )
 
         private val TONE_SETTINGS = mapOf(
-            // stability: higher = more consistent pacing, less "running away"
-            // style: lower = cleaner pronunciation, easier to understand
-            // speed: <1.0 = slower — critical for housewife/elderly users
-            EmotionTone.EMERGENCY  to VoiceSettings(0.90, 0.90, 0.00, speed = 1.00), // urgent stays normal speed
-            EmotionTone.EMPATHETIC to VoiceSettings(0.75, 0.85, 0.03, speed = 0.82), // gentle and slow
-            EmotionTone.NORMAL     to VoiceSettings(0.72, 0.82, 0.08, speed = 0.85), // clear, measured
-            EmotionTone.WARM       to VoiceSettings(0.68, 0.82, 0.12, speed = 0.83)  // warm but not rushed
+            // stability: higher = more consistent, less "running away"
+            // style:     lower  = cleaner pronunciation, easier to understand
+            // speed:     <1.0   = slower — critical for housewife/elderly users
+            EmotionTone.EMERGENCY  to VoiceSettings(0.90, 0.90, 0.00, speed = 1.00),
+            EmotionTone.EMPATHETIC to VoiceSettings(0.75, 0.85, 0.03, speed = 0.82),
+            EmotionTone.NORMAL     to VoiceSettings(0.72, 0.82, 0.08, speed = 0.85),
+            EmotionTone.WARM       to VoiceSettings(0.68, 0.82, 0.12, speed = 0.83)
         )
     }
 
@@ -130,7 +149,7 @@ class TTSManager(
     private var androidTts: TextToSpeech? = null
     private var androidTtsReady = false
 
-    // ── INIT ──────────────────────────────────────────────────────────────────
+    // ── INIT ──────────────────────────────────────────────────────────────
 
     fun init(onReady: () -> Unit) {
         androidTts = TextToSpeech(context) { status ->
@@ -140,7 +159,7 @@ class TTSManager(
         }
     }
 
-    // ── PUBLIC speak() ────────────────────────────────────────────────────────
+    // ── PUBLIC speak() ────────────────────────────────────────────────────
     // tone defaults to NORMAL so all existing call sites compile unchanged.
 
     fun speak(
@@ -151,13 +170,9 @@ class TTSManager(
     ) {
         if (text.isBlank()) { Log.w(TAG, "speak() blank — skip"); onDone?.invoke(); return }
 
-        // ── Normalize Devanagari loanwords before sending to ElevenLabs ──
-        // "ऑर्डर" → "order", "पेमेंट" → "payment", etc.
-        // Native Hindi words are untouched.
         val normalizedText = normalizeForTTS(text)
-
-        val resolvedVoice = resolveVoice(normalizedText, language)
-        val settings      = TONE_SETTINGS[tone] ?: TONE_SETTINGS[EmotionTone.NORMAL]!!
+        val resolvedVoice  = resolveVoice(normalizedText, language)
+        val settings       = TONE_SETTINGS[tone] ?: TONE_SETTINGS[EmotionTone.NORMAL]!!
         Log.d(TAG, "ElevenLabs [$language] tone=$tone voice=$resolvedVoice → \"${normalizedText.take(60)}\"")
 
         val appContext = context.applicationContext
@@ -177,7 +192,23 @@ class TTSManager(
         }.start()
     }
 
-    // ── VOICE RESOLUTION ──────────────────────────────────────────────────────
+    // ── TTS NORMALIZER ────────────────────────────────────────────────────
+    //
+    // Applied before every ElevenLabs call.
+    // Fixes:
+    //   1. Devanagari loanwords → Latin  ("ऑर्डर" → "order")
+    //   2. Mixed-script phrases → clean  ("Ho गया" → "ho gaya")
+    //   3. Partial translations → uniform ("दाल chahiye" stays as-is — correct)
+    //
+    private fun normalizeForTTS(text: String): String {
+        var result = text
+        TTS_WORD_MAP.forEach { (source, target) ->
+            result = result.replace(source, target, ignoreCase = false)
+        }
+        return result
+    }
+
+    // ── VOICE RESOLUTION ──────────────────────────────────────────────────
 
     private fun resolveVoice(text: String, language: String): String {
         if (DEVANAGARI.containsMatchIn(text)) return VOICE_HI
@@ -187,7 +218,7 @@ class TTSManager(
         }
     }
 
-    // ── ELEVENLABS HTTP ───────────────────────────────────────────────────────
+    // ── ELEVENLABS HTTP ───────────────────────────────────────────────────
 
     private fun fetchElevenLabsAudio(
         text: String,
@@ -198,11 +229,11 @@ class TTSManager(
             put("text", text)
             put("model_id", ELEVEN_MODEL)
             put("voice_settings", JSONObject().apply {
-                put("stability",        settings.stability)
-                put("similarity_boost", settings.similarityBoost)
-                put("style",            settings.style)
+                put("stability",         settings.stability)
+                put("similarity_boost",  settings.similarityBoost)
+                put("style",             settings.style)
                 put("use_speaker_boost", settings.useSpeakerBoost)
-                put("speed",            settings.speed) // 0.85 = ~15% slower, still natural
+                put("speed",             settings.speed)
             })
         }.toString().toRequestBody("application/json".toMediaType())
 
@@ -222,12 +253,17 @@ class TTSManager(
         return response.body?.bytes()
     }
 
-    // ── MEDIAPLAYER ───────────────────────────────────────────────────────────
+    // ── MEDIAPLAYER ───────────────────────────────────────────────────────
 
     private fun playAudioBytes(context: Context, audioBytes: ByteArray, onDone: (() -> Unit)?) {
         val tmp = File(context.cacheDir, "butler_tts_${System.currentTimeMillis()}.mp3")
-        try { tmp.writeBytes(audioBytes) }
-        catch (e: Exception) { Log.e(TAG, "Temp file write failed: ${e.message}"); onDone?.invoke(); return }
+        try {
+            tmp.writeBytes(audioBytes)
+        } catch (e: Exception) {
+            Log.e(TAG, "Temp file write failed: ${e.message}")
+            onDone?.invoke()
+            return
+        }
 
         releasePlayer()
         player = MediaPlayer().apply {
@@ -260,7 +296,7 @@ class TTSManager(
         finally { player = null }
     }
 
-    // ── ANDROID TTS FALLBACK ──────────────────────────────────────────────────
+    // ── ANDROID TTS FALLBACK ──────────────────────────────────────────────
 
     private fun speakWithAndroidTts(text: String, language: String, onDone: (() -> Unit)?) {
         val tts = androidTts
@@ -279,10 +315,13 @@ class TTSManager(
                 override fun onError(id: String?) { onDone?.invoke() }
             })
             tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, id)
-        } catch (e: Exception) { Log.e(TAG, "Android TTS: ${e.message}"); onDone?.invoke() }
+        } catch (e: Exception) {
+            Log.e(TAG, "Android TTS: ${e.message}")
+            onDone?.invoke()
+        }
     }
 
-    // ── STOP / SHUTDOWN ───────────────────────────────────────────────────────
+    // ── STOP / SHUTDOWN ───────────────────────────────────────────────────
 
     fun stop()     { releasePlayer(); androidTts?.stop() }
     fun shutdown() { releasePlayer(); androidTts?.stop(); androidTts?.shutdown(); androidTts = null }
