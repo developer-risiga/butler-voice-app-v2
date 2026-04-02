@@ -1575,9 +1575,17 @@ class MainActivity : ComponentActivity() {
 
             MultilingualMatcher.isYes(cleaned) || cleaned.contains("add") || cleaned.contains("more") ||
                     cleaned.contains("और") || cleaned.contains("aur") -> {
-                currentState = AssistantState.LISTENING
-                val prompt = ButlerPersonalityEngine.askMore(lang, currentMood, cart.size, sessionLastProduct)
-                showCartAndSpeak(prompt) { startListening() }
+
+
+                val instant = instantGroceryDetect(cleaned, lang)
+                if (instant != null) {
+                    currentState = AssistantState.LISTENING
+                    searchAndAskQuantity(instant.first, instant.second)
+                } else {
+                    currentState = AssistantState.LISTENING
+                    val prompt = ButlerPersonalityEngine.askMore(lang, currentMood, cart.size, sessionLastProduct)
+                    showCartAndSpeak(prompt) { startListening() }
+                }
             }
 
             isCartEditIntent(cleaned) -> { currentState = AssistantState.EDITING_CART; handleCartEdit(cleaned, originalText) }

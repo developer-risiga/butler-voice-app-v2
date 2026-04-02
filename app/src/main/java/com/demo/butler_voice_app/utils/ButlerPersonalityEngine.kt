@@ -410,12 +410,12 @@ object ButlerPersonalityEngine {
     fun confirmOrder(items: String, total: String, lang: String): String {
         return when {
             lang.startsWith("hi") -> pick("hi_confirm", listOf(
-                "$items — $total. Lagaoon?",
-                "Total $total — $items. Order karoon?",
-                "Theek hai — $items, $total. Pakka?",
-                "$items, $total banta hai. Lagaoon?",
-                "Bas — $items. $total. Order?",
-                "$items. Jod ke $total. Lagaon?"
+                "$items — $total. Order karein?",
+                "Total $total — $items. Place karoon?",
+                "Theek hai — $items, $total. Confirm karein?",
+                "$items, $total banta hai. Order de doon?",
+                "$items — jod ke $total. Order ho jaaye?",
+                "$items. $total. Pakka karein?"
             ))
             lang.startsWith("te") -> pick("te_confirm", listOf(
                 "$items — $total. Order pettana?",
