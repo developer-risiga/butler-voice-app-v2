@@ -2452,4 +2452,46 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // SERVICE ROUTING HELPER
+    // ══════════════════════════════════════════════════════════════════════
+
+    private fun mapCategoryToSector(category: String?): ServiceSector? {
+        if (category.isNullOrBlank()) return null
+        val cat = category.lowercase().trim()
+        return when {
+            cat.contains("electric")                             -> ServiceSector.ELECTRICIAN
+            cat.contains("plumb")                                -> ServiceSector.PLUMBER
+            cat.contains("clean") || cat.contains("maid")
+                    || cat.contains("cook")                      -> ServiceSector.CLEANING
+            cat.contains("carpenter") || cat.contains("carpent") -> ServiceSector.CARPENTER
+            cat.contains("paint")                                -> ServiceSector.PAINTER
+            cat.contains("doctor") || cat.contains("physician")
+                    || cat.contains("specialist")                -> ServiceSector.DOCTOR
+            cat.contains("medicine") || cat.contains("pharmacy")
+                    || cat.contains("chemist")                   -> ServiceSector.MEDICINE
+            cat.contains("mechanic") || cat.contains("vehicle")
+                    || cat.contains("car service")
+                    || cat.contains("car wash")                  -> ServiceSector.CAR_SERVICE
+            cat.contains("pest")                                 -> ServiceSector.PEST_CONTROL
+            cat.contains("ac") || cat.contains("air condition")
+                    || cat.contains("appliance")                 -> ServiceSector.AC_REPAIR
+            cat.contains("laundry") || cat.contains("wash")      -> ServiceSector.CLEANING
+            cat.contains("beauty") || cat.contains("salon")
+                    || cat.contains("parlour")
+                    || cat.contains("haircut")                   -> ServiceSector.SALON
+            cat.contains("spa") || cat.contains("massage")       -> ServiceSector.SPA
+            cat.contains("security") || cat.contains("guard")    -> ServiceSector.SECURITY
+            cat.contains("nurse") || cat.contains("nursing")
+                    || cat.contains("home care")                 -> ServiceSector.HOME_NURSING
+            cat.contains("ambulance") || cat.contains("emergency") -> ServiceSector.AMBULANCE
+            cat.contains("food") || cat.contains("delivery")     -> ServiceSector.FOOD
+            cat.contains("taxi") || cat.contains("cab")
+                    || cat.contains("auto")                      -> ServiceSector.TAXI
+            cat.contains("tutor") || cat.contains("teacher")
+                    || cat.contains("coaching")                  -> ServiceSector.TUTOR
+            else                                                 -> null
+        }
+    }
 }
