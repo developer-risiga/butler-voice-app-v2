@@ -103,7 +103,7 @@ class MainActivity : ComponentActivity() {
     private var tempPhone   = ""
     private var sttRetryCount    = 0
     private var totalEmptyRetries = 0
-    private var sttErrorCount    = 0   // tracks consecutive STT errors for rate limit detection
+    private var sttErrorCount    = 0
 
     private var pendingReorderSuggestions: List<ReorderSuggestion> = emptyList()
     private var lastOrderId    = ""
@@ -117,7 +117,6 @@ class MainActivity : ComponentActivity() {
     private var pendingProactiveData: ProactiveData? = null
     private var currentMood: UserMood = UserMood.CALM
 
-    // ── Service sub-type session ──────────────────────────────────────────
     private data class ServiceSubTypeSession(
         val sector: ServiceSector,
         val originalTranscript: String,
@@ -135,19 +134,6 @@ class MainActivity : ComponentActivity() {
     private var currentState = AssistantState.IDLE
     private val recordRequestCode = 101
 
-    // ── BUG 2 FIX ─────────────────────────────────────────────────────────
-    // STT retry race condition: when a blank transcript fires, startListening()
-    // was called immediately without stopping the old STT session. The old
-    // session's next callback then fired ~54ms later as a SECOND blank
-    // transcript, immediately hitting retry count 2 and speaking "सुना नहीं"
-    // before the user had a chance to say anything.
-    //
-    // Fix: every call to startListening() increments sttListenId. Each
-    // SarvamSTT callback captures the id at the time it was created.
-    // Any callback whose id no longer matches the current id is stale and
-    // is silently discarded. sarvamSTT.stop() before the new session
-    // ensures only one recording is active at a time.
-    // ─────────────────────────────────────────────────────────────────────
     @Volatile private var sttListenId = 0
 
     private fun toSpeakableAmount(amount: Double): String {
@@ -163,17 +149,7 @@ class MainActivity : ComponentActivity() {
     // HUMAN HELPERS
     // ══════════════════════════════════════════════════════════════════════
 
-    // ── FIX: Gap between filler and response ─────────────────────────────
-    // Previously: speak("हम्म...") [1s] → [silence 1.5s] → speak(response)
-    // The filler and API call ran in parallel but filler finished first,
-    // leaving an awkward silence while waiting for OpenAI.
-    //
-    // Fix: Remove separate filler entirely. The acknowledgment is now
-    // prefixed directly into the response as one single TTS call.
-    // No gap is possible when it's one sentence.
-    // e.g. "हाँ! rice के 3 options — 1: Daawat Brown, ₹45, 10 min..."
     private fun speakFillerThen(action: () -> Unit) {
-        // Just run the action directly — acknowledgment is now part of response
         action()
     }
 
@@ -205,15 +181,8 @@ class MainActivity : ComponentActivity() {
     private fun routeTranscript(text: String, lower: String): Boolean {
         val lang = LanguageManager.getLanguage()
 
-        // ── Detect emotion FIRST before any routing ───────────────────────
-        // This ensures Butler never responds with a cheerful voice to someone
-        // who is in pain, scared, or facing an emergency.
         val emotionTone = detectEmotionTone(lower)
 
-        // ── Emergency ─────────────────────────────────────────────────────
-        // ── EMERGENCY DETECTION — checks before any other routing ──────────
-        // Also checks detectEmotionTone for words like "dard" that might
-        // not be in ServiceVoiceHandler but are clearly medical emergencies.
         val isEmergency = ServiceVoiceHandler.isEmergency(lower) ||
                 detectEmotionTone(lower) == EmotionTone.EMERGENCY
         if (isEmergency) {
@@ -235,7 +204,6 @@ class MainActivity : ComponentActivity() {
             return true
         }
 
-        // ── Prescription ──────────────────────────────────────────────────
         if (ServiceVoiceHandler.isPrescriptionRequest(lower)) {
             val rxText = when {
                 lang.startsWith("hi") -> "ठीक है, prescription के लिए camera खोल रहा हूँ।"
@@ -245,7 +213,6 @@ class MainActivity : ComponentActivity() {
             return true
         }
 
-        // ── Service request ───────────────────────────────────────────────
         if (currentState == AssistantState.LISTENING || currentState == AssistantState.REORDER_CONFIRM) {
             if (ServiceVoiceHandler.isServiceRequest(lower)) {
                 val intent = ServiceManager.detectServiceIntent(text)
@@ -255,7 +222,6 @@ class MainActivity : ComponentActivity() {
                     serviceSubTypeSession = ServiceSubTypeSession(sector, text)
                     currentState = AssistantState.IN_SERVICE_SUBTYPE_FLOW
                     val prompt = com.demo.butler_voice_app.services.ServiceVoiceEngine.subTypePrompt(sector, lang)
-                    // Use empathetic tone if distress was detected in the request
                     speak(prompt, emotionTone) { startListening() }
                 } else {
                     val sectorName = sector?.let {
@@ -273,7 +239,6 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // ── Status query ──────────────────────────────────────────────────
         if (StatusCheckHandler.isStatusQuery(lower) &&
             (currentState == AssistantState.LISTENING || currentState == AssistantState.REORDER_CONFIRM)) {
             handleStatusQuery(text)
@@ -399,18 +364,6 @@ class MainActivity : ComponentActivity() {
         )
         ttsManager.init { checkMicPermission() }
 
-        // ── BUG 8 FIX ─────────────────────────────────────────────────────
-        // Previously: apiClient.searchProduct("rice") was called to warm the
-        // cache. searchProduct() is a product-search function, not a pre-fetch
-        // function. Calling it at startup meant 457KB of JSON was fetched and
-        // 3000 items were deserialized DURING startup frame rendering, causing
-        // 76+ skipped frames / 2240ms Davey alerts.
-        //
-        // Fix: use the dedicated prefetchProducts() which runs entirely on
-        // Dispatchers.IO and populates the same shared cache without touching
-        // the main thread. The coroutine runs fire-and-forget so it doesn't
-        // delay ttsManager.init() or the wake word engine starting up.
-        // ─────────────────────────────────────────────────────────────────
         lifecycleScope.launch(Dispatchers.IO) {
             try {
                 apiClient.prefetchProducts()
@@ -512,7 +465,6 @@ class MainActivity : ComponentActivity() {
         apiClient.clearProductCache()
         setUiState(ButlerUiState.Idle)
 
-        // ── BUG 2 FIX: invalidate any in-flight startListening callbacks ─
         sttListenId++
 
         Log.d("Butler", "Waiting for wake word...")
@@ -529,20 +481,6 @@ class MainActivity : ComponentActivity() {
         setUiState(ButlerUiState.Thinking("Checking session…"))
 
         lifecycleScope.launch {
-            // ── BUG 7 FIX ─────────────────────────────────────────────────
-            // Previously: tryRestoreSession() → if 401, session cleared →
-            // user forced to log in on every cold start after token expiry.
-            //
-            // Fix: when tryRestoreSession() fails AND a refresh token exists
-            // in SessionStore, silently call the Supabase token refresh
-            // endpoint. On success, the new access token is written to
-            // SessionStore and tryRestoreSession() is retried. Only if the
-            // refresh also fails do we fall through to the AuthActivity.
-            //
-            // Note: UserSessionManager.tryRestoreSession() should save the
-            // refresh_token alongside the access_token when first logging in.
-            // SessionStore.saveSession(accessToken, uid, name, refreshToken)
-            // ─────────────────────────────────────────────────────────────
             var restored = UserSessionManager.tryRestoreSession()
 
             if (!restored && SessionStore.hasRefreshToken()) {
@@ -579,8 +517,6 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-
-    // ── BUG 7 FIX: silent token refresh via Supabase /auth/v1/token ──────
 
     private suspend fun attemptTokenRefresh(): Boolean = withContext(Dispatchers.IO) {
         val refreshToken = SessionStore.getRefreshToken() ?: return@withContext false
@@ -629,8 +565,6 @@ class MainActivity : ComponentActivity() {
                 val userId = FamilyProfileManager.activeProfile?.userId
                     ?: UserSessionManager.currentUserId() ?: ""
                 val suggestions = SmartReorderManager.getSuggestions(userId)
-                // Build language-aware reorder greeting instead of using the
-                // English-only SmartReorderManager.buildReorderGreeting()
                 val smartMsg = if (suggestions.isNotEmpty()) {
                     val items = suggestions.take(3).joinToString(", ") { s ->
                         s.productName.lowercase().split(" ")
@@ -639,9 +573,6 @@ class MainActivity : ComponentActivity() {
                     ButlerPersonalityEngine.reorderGreeting(name, items, lang)
                 } else null
                 runOnUiThread {
-                    // Force-lock the language at greeting time. This means the user's
-                    // FIRST response is already in the right language context without
-                    // needing 3 consecutive hits to confirm. Critical for demo flow.
                     val lockedCode = when {
                         lang.startsWith("hi") -> "hi-IN"
                         lang.startsWith("te") -> "te-IN"
@@ -655,10 +586,6 @@ class MainActivity : ComponentActivity() {
                     }
                     SessionLanguageManager.forceSet(lockedCode)
 
-                    // ── DEMO WARMUP: pre-fetch top grocery results silently ───────
-                    // While Butler speaks the greeting (~3 seconds), warm the
-                    // Supabase cache for the most common demo products so the
-                    // first user command is served from cache — truly instant.
                     lifecycleScope.launch(Dispatchers.IO) {
                         try {
                             productRepo.getTopRecommendations("rice", userLocation)
@@ -701,19 +628,11 @@ class MainActivity : ComponentActivity() {
     }
 
     // ══════════════════════════════════════════════════════════════════════
-    // STT — main voice loop
+    // STT
     // ══════════════════════════════════════════════════════════════════════
 
     private fun startListening() {
-        // ── BUG 2 FIX: stop any existing recording before starting a new one.
-        // sarvamSTT.stop() cancels the previous session's callback chain so
-        // its onResult can never fire after this point.
         sarvamSTT.stop()
-
-        // ── BUG 2 FIX: capture a session id. The lambda below captures myId.
-        // If startListening() is called again before this callback fires,
-        // sttListenId will have been incremented and myId != sttListenId,
-        // so the stale callback returns immediately without any side effects.
         val myId = ++sttListenId
 
         setUiState(ButlerUiState.Listening)
@@ -722,7 +641,6 @@ class MainActivity : ComponentActivity() {
         sarvamSTT.startListening(
             onResult = { text ->
                 runOnUiThread {
-                    // ── BUG 2 FIX: stale callback guard ──────────────────
                     if (myId != sttListenId) {
                         Log.d("Butler", "STT callback discarded (stale id $myId, current $sttListenId)")
                         return@runOnUiThread
@@ -731,7 +649,6 @@ class MainActivity : ComponentActivity() {
                     val transcript = text.trim()
                     Log.d("Butler", "Transcript: $transcript")
 
-                    // ── MOOD DETECTION ────────────────────────────────────
                     val pcm      = sarvamSTT.lastPcmBuffer
                     val duration = sarvamSTT.lastRecordingDurationMs
                     if (pcm.isNotEmpty()) {
@@ -740,25 +657,18 @@ class MainActivity : ComponentActivity() {
                     }
                     if (transcript.isBlank()) MoodDetector.recordRetry()
 
-                    // ── LANGUAGE DETECTION & SWITCHING ───────────────────
-                    // SessionLanguageManager uses transcript word count to decide
-                    // the switching threshold. Long utterances (3+ words) switch
-                    // in 1 hit — genuine speaker. Short utterances (1-2 words)
-                    // need 2-3 hits — protection against false detections.
                     if (transcript.isNotBlank() && transcript.length > 2) {
                         val scriptLang     = MultilingualMatcher.detectScript(transcript)
                         val detected       = LanguageDetector.detect(transcript)
                         val rawLang        = if (scriptLang != "en") scriptLang else detected
 
                         val sarvamLangCode = "$rawLang-IN"
-                        // Pass the transcript so the manager can count words
                         val langSwitched   = SessionLanguageManager.onDetection(sarvamLangCode, transcript)
                         if (langSwitched) {
                             val newBase = SessionLanguageManager.ttsLanguage
                             LanguageManager.setLanguage(newBase)
                             Log.d("Butler", "🔄 Language switched to ${SessionLanguageManager.lockedLanguage}")
                         } else {
-                            // Keep LanguageManager in sync with locked language
                             val locked = SessionLanguageManager.ttsLanguage
                             if (LanguageManager.getLanguage() != locked) {
                                 LanguageManager.setLanguage(locked)
@@ -766,7 +676,6 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
-                    // ── EMPTY TRANSCRIPT ─────────────────────────────────
                     if (transcript.isBlank()) {
                         SessionLanguageManager.onBlankTranscript()
 
@@ -774,9 +683,6 @@ class MainActivity : ComponentActivity() {
                         totalEmptyRetries++
                         val lang = LanguageManager.getLanguage()
 
-                        // ── Emotion-aware give-up ─────────────────────────
-                        // If user is FRUSTRATED (kept getting blanks), be warm
-                        // and understanding — not robotic.
                         if (totalEmptyRetries >= 5) {
                             totalEmptyRetries = 0
                             sttRetryCount = 0
@@ -792,11 +698,6 @@ class MainActivity : ComponentActivity() {
                             startListening()
                         } else {
                             sttRetryCount = 0
-                            // ── Emotion-aware retry message ───────────────
-                            // Escalate empathy with each retry:
-                            // retry 1-2 : neutral  "सुना नहीं, फिर बोलें।"
-                            // retry 3-4 : empathetic "माफ करना, थोड़ा जोर से बोलें।"
-                            // retry 5+  : very warm  "माइक के पास आकर बोलें।"
                             val retryTone: EmotionTone
                             val retryMsg = ButlerPersonalityEngine.didntHear(lang, currentMood, totalEmptyRetries)
                             retryTone = if (currentMood == UserMood.FRUSTRATED) EmotionTone.EMPATHETIC else EmotionTone.NORMAL
@@ -807,9 +708,7 @@ class MainActivity : ComponentActivity() {
 
                     totalEmptyRetries = 0
                     sttRetryCount = 0
-                    sttErrorCount = 0  // reset error counter on successful transcript
-                    // Reset mood retry counter so FRUSTRATED from blank
-                    // transcripts doesn't carry over to successful commands
+                    sttErrorCount = 0
                     MoodDetector.reset()
                     setUiState(ButlerUiState.Thinking(transcript))
                     handleCommand(transcript)
@@ -818,10 +717,6 @@ class MainActivity : ComponentActivity() {
             onError = {
                 runOnUiThread {
                     val lang = LanguageManager.getLanguage()
-                    // ── Use consecutive error counter to detect rate limiting ──
-                    // SarvamSTT doesn't pass error message to callback (it's () -> Unit).
-                    // If errors happen back-to-back rapidly, it's likely rate limiting.
-                    // Single error = network blip → just retry.
                     sttErrorCount++
                     val isLikelyRateLimit = sttErrorCount >= 2
 
@@ -866,9 +761,6 @@ class MainActivity : ComponentActivity() {
         onOther: (String) -> Unit,
         retryPrompt: String = "Please say 1, 2, or 3."
     ) {
-        // ── BUG 2 FIX: invalidate any pending startListening() callback when
-        // switching to the selection sub-flow, so stale main-loop callbacks
-        // don't fire over the top of selection callbacks.
         sarvamSTT.stop()
         sttListenId++
 
@@ -940,12 +832,10 @@ class MainActivity : ComponentActivity() {
     private fun detectNumberFromSpeech(spoken: String): Int {
         val s = spoken.lowercase().trim().replace(Regex("[,।.!?॥]"), "").trim()
 
-        // Direct digit match first
         val digit = Regex("\\b([123])\\b").find(s)?.groupValues?.get(1)?.toIntOrNull()
         if (digit != null) return digit
 
         return when {
-            // ── 1 — Hindi + Hinglish + Telugu + Tamil + Kannada + Malayalam + Punjabi + Gujarati + Odia
             s.contains("one")    || s.contains("wan")    || s.contains("won")     ||
                     s.contains("first")  || s.contains("pehla")  || s.contains("pehli")   ||
                     s.contains("ek")     || s.contains("एक")     || s.contains("पहला")    ||
@@ -956,7 +846,6 @@ class MainActivity : ComponentActivity() {
                     s.contains("ਪਹਿਲਾ") || s.contains("એક")     || s.contains(" prva")    ||
                     s.contains("ek no")  || s.contains("option 1") || s.contains("number 1") -> 1
 
-            // ── 2 — all languages
             s.contains("two")    || s.contains("too")    || s.contains("to")      ||
                     s.contains("second") || s.contains("doosra") || s.contains("doosri")  ||
                     s.contains("do")     || s.contains("दो")     || s.contains("दूसरा")   ||
@@ -966,7 +855,6 @@ class MainActivity : ComponentActivity() {
                     s.contains("બે")     || s.contains("ਦੋਵੇਂ")  ||
                     s.contains("option 2") || s.contains("number 2") -> 2
 
-            // ── 3 — all languages
             s.contains("three")  || s.contains("tree")   || s.contains("third")   ||
                     s.contains("teesra") || s.contains("teesri") || s.contains("teen")    ||
                     s.contains("तीन")    || s.contains("तीसरा")  || s.contains("మూడు")   ||
@@ -990,8 +878,6 @@ class MainActivity : ComponentActivity() {
     ) {
         currentState = AssistantState.IN_SERVICE_FLOW
         serviceSubTypeSession = null
-        // ── BUG 2 FIX: invalidate STT callbacks before handing control to
-        // ServiceActivity so no ghost callbacks fire when we return.
         sttListenId++
         try { stopLockTask() } catch (_: Exception) {}
 
@@ -1049,7 +935,6 @@ class MainActivity : ComponentActivity() {
                                                         c.contains("haan") || c.contains("ha") ||
                                                         c.contains("ok") || c.contains("pakka")) {
                                                         val enhancedQuery  = "${session.originalTranscript} ${matched.displayEn} $timeSlot"
-                                                        val sectorDisplay  = com.demo.butler_voice_app.ai.HindiSectorNames.get(session.sector.name, lang)
                                                         speak(com.demo.butler_voice_app.services.ServiceVoiceEngine.sectorDetected(session.sector, lang)) {
                                                             launchServiceFlow(enhancedQuery, session.sector, matched.id)
                                                         }
@@ -1081,7 +966,6 @@ class MainActivity : ComponentActivity() {
                         speak(com.demo.butler_voice_app.services.ServiceVoiceEngine.subTypeRetry(session.sector, lang)) { startListening() }
                     } else {
                         serviceSubTypeSession = null
-                        val sectorName = com.demo.butler_voice_app.ai.HindiSectorNames.get(session.sector.name, lang)
                         speak(com.demo.butler_voice_app.services.ServiceVoiceEngine.sectorDetected(session.sector, lang)) { launchServiceFlow(session.originalTranscript, session.sector, null) }
                     }
                 }
@@ -1285,8 +1169,12 @@ class MainActivity : ComponentActivity() {
                     }
                     return
                 }
+
+                // ── REORDER_CONFIRM branch ────────────────────────────────────────
                 when {
-                    MultilingualMatcher.isYes(cleaned) || IndianLanguageProcessor.detectIntent(cleaned) == "confirm" -> {
+                    MultilingualMatcher.isYes(cleaned) && !isNoMoreIntent(cleaned) &&
+                            IndianLanguageProcessor.detectIntent(cleaned) != "order_new" -> {
+                        // Pure yes with no product name → accept the reorder suggestion
                         lifecycleScope.launch {
                             for (s in pendingReorderSuggestions)
                                 apiClient.searchProduct(s.productName)?.let { cart.add(CartItem(it, s.avgQty)) }
@@ -1301,18 +1189,63 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     }
+
+                    // ── FIX Bug 1: "नहीं, मुझे राइस चाहिए।" in ONE turn ─────────
+                    // Previously: isNo() fired → asked "क्या चाहिए?" → user had to
+                    // repeat the product on the next turn.
+                    //
+                    // Fix: strip the leading negation, check if a product remains
+                    // in the same sentence, and route directly to searchAndAskQuantity.
+                    // No extra STT round-trip needed.
+                    //
+                    // Negation prefixes covered (Hindi, English, Telugu, Tamil,
+                    // Kannada, Malayalam, Punjabi, Gujarati):
+                    //   nahi, nahin, nope, no, नहीं, नही, ना, నో, வேண்டாம், ಬೇಡ,
+                    //   വേണ്ട, ਨਹੀਂ, ના
+                    // ─────────────────────────────────────────────────────────────
                     MultilingualMatcher.isNo(cleaned) -> {
-                        pendingReorderSuggestions = emptyList(); currentState = AssistantState.LISTENING
-                        val noLang = LanguageManager.getLanguage()
-                        val noMsg = when {
-                            noLang.startsWith("hi") -> "ठीक है! क्या चाहिए?"
-                            noLang.startsWith("te") -> "సరే! ఏం కావాలి?"
-                            noLang.startsWith("ta") -> "சரி! என்ன வேணும்?"
-                            else -> "No problem! What would you like?"
+                        pendingReorderSuggestions = emptyList()
+                        currentState = AssistantState.LISTENING
+
+                        val strippedText = text
+                            .replace(
+                                Regex(
+                                    "^(nahi|nahin|nope|no|नहीं|नही|ना|వద్దు|வேண்டாம்|ಬೇಡ|വേണ്ട|ਨਹੀਂ|ના)[,।\\.\\s]+",
+                                    RegexOption.IGNORE_CASE
+                                ), ""
+                            )
+                            .trim()
+
+                        val instant = instantGroceryDetect(strippedText.lowercase(), LanguageManager.getLanguage())
+                        when {
+                            instant != null -> {
+                                // "नहीं, मुझे राइस चाहिए" → instant match → straight to product
+                                searchAndAskQuantity(instant.first, instant.second)
+                            }
+                            strippedText.isNotBlank() && strippedText.length < text.length -> {
+                                // Something after the negation but not a simple keyword → AIParser
+                                handleOrderIntent(strippedText, strippedText.lowercase())
+                            }
+                            else -> {
+                                // Pure "नहीं" with no product → ask what they want
+                                val noLang = LanguageManager.getLanguage()
+                                val noMsg = when {
+                                    noLang.startsWith("hi") -> "ठीक है! क्या चाहिए?"
+                                    noLang.startsWith("te") -> "సరే! ఏం కావాలి?"
+                                    noLang.startsWith("ta") -> "சரி! என்ன வேணும்?"
+                                    noLang.startsWith("kn") -> "ಸರಿ! ಏನು ಬೇಕು?"
+                                    noLang.startsWith("ml") -> "ശരി! എന്ത് വേണം?"
+                                    noLang.startsWith("pa") -> "ਠੀਕ ਹੈ! ਕੀ ਚਾਹੀਦਾ?"
+                                    noLang.startsWith("gu") -> "ઠીક છે! શું જોઈએ?"
+                                    else -> "No problem! What would you like?"
+                                }
+                                speak(noMsg) { startListening() }
+                            }
                         }
-                        speak(noMsg) { startListening() }
                     }
+
                     else -> {
+                        // Not yes, not no → treat as a new order intent directly
                         pendingReorderSuggestions = emptyList()
                         currentState = AssistantState.LISTENING
                         handleOrderIntent(text, lower)
@@ -1457,23 +1390,19 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handlePaidOrNotPaid(cleaned: String, mode: String) {
-        // Sarvam STT sometimes detects Hindi "हाँ" as Punjabi (ਹਾਂ) or
-        // Gujarati (હા) — all mean yes. Include all scripts.
-        // Also added "हो गई" (feminine) — "हो गया" (masculine) was present
-        // but "payment हो गई?" gets "हो गई।" as response which wasn't matched.
         val paid    = listOf(
             "yes","paid","done","payment done","i paid","completed","transferred","confirm",
             "हाँ","हां","हो गया","हो गई","ho gaya","ho gayi","kar diya","ha","kar di",
             "పేమెంట్ చేశాను","అవును","ஆம்",
-            "ਹਾਂ","ਹੋ ਗਈ","ਪੇਮੈਂਟ ਹੋ ਗਈ",   // Punjabi
-            "હા","કન્ફર્મ","ચૂકવ્યું","થઈ ગઈ"    // Gujarati
+            "ਹਾਂ","ਹੋ ਗਈ","ਪੇਮੈਂਟ ਹੋ ਗਈ",
+            "હા","કન્ફર્મ","ચૂકવ્યું","થઈ ગઈ"
         )
         val notPaid = listOf(
             "no","not yet","haven't","wait","not done","failed",
             "नहीं","अभी नहीं","nahi","abhi nahi",
             "లేదు","ఇంకా",
-            "ਨਹੀਂ","ਨਹੀ",   // Punjabi
-            "ના","નહીં"        // Gujarati
+            "ਨਹੀਂ","ਨਹੀ",
+            "ના","નહીં"
         )
         val lang   = LanguageManager.getLanguage()
         val amount = toSpeakableAmount(pendingOrderTotal)
@@ -1545,44 +1474,20 @@ class MainActivity : ComponentActivity() {
         val regional = IndianLanguageProcessor.normalizeProduct(cleaned)
         if (regional != cleaned && regional.isNotBlank()) { searchAndAskQuantity(regional); return }
 
-        // ── INSTANT KEYWORD BYPASS ─────────────────────────────────────────
-        // Skip OpenAI entirely for known grocery keywords.
-        // This cuts response time from 3-5 seconds → under 1 second for the
-        // most common demo commands like "rice chahiye", "मुझे दाल चाहिए".
-        // Covers Hindi, Telugu, Hinglish + quantity extraction in the same pass.
-        // If keyword is found → go straight to product search.
-        // If not found → fall through to AIParser (handles complex/multi-item).
         val instant = instantGroceryDetect(cleaned, lang)
         if (instant != null) {
             searchAndAskQuantity(instant.first, instant.second)
             return
         }
-        // ──────────────────────────────────────────────────────────────────
 
         speakFillerThen {
             lifecycleScope.launch {
-                // ── RESPONSE TIME FIX ─────────────────────────────────────
-                // Previously: AIParser.parse() + AIOrderParser.parse() = 2 sequential
-                // GPT calls = 5+ seconds per voice command.
-                //
-                // Fix: use ONLY AIParser.parse() result. It already returns items
-                // for grocery orders (GoToGrocery routing). AIOrderParser is removed
-                // from this path entirely, saving ~3 seconds per interaction.
-                // ─────────────────────────────────────────────────────────
                 val fullParsed = AIParser.parse(text)
                 LanguageManager.setLanguage(fullParsed.language)
 
                 runOnUiThread {
                     when (val routing = fullParsed.routing) {
                         is IntentRouting.GoToService -> {
-                            // ── SERVICE ROUTING FIX ─────────────────────────────────────
-                            // BEFORE: spoke categoryPrompt + launchServiceFlow(text) with NO
-                            // overrideSector. ServiceActivity got sector=null → asked
-                            // categoryPrompt AGAIN. User had to say "electrician" 3 times.
-                            //
-                            // AFTER: map routing.category → ServiceSector, speak
-                            // sectorDetected (not categoryPrompt), pass overrideSector.
-                            // ────────────────────────────────────────────────────────────
                             val cat    = routing.category
                             val sector = mapCategoryToSector(cat)
                             val prompt = if (sector != null)
@@ -1592,7 +1497,6 @@ class MainActivity : ComponentActivity() {
                             speak(prompt) { launchServiceFlow(text, overrideSector = sector) }
                         }
                         is IntentRouting.GoToGrocery -> {
-                            // Items come from AIParser directly — no second GPT call
                             val items = routing.items
                             when {
                                 items.isEmpty() -> {
@@ -1619,10 +1523,6 @@ class MainActivity : ComponentActivity() {
                             speak("theek hai, cancel.") { startWakeWordListening() }
                         }
                         else -> {
-                            // Unknown / AskClarify — try keyword fallback first,
-                            // then ask clearly in the user's language.
-                            // Never say "कुछ और?" here — this is the LISTENING state,
-                            // user hasn't ordered anything yet.
                             val fb = keywordFallback(cleaned)
                             if (fb != null) {
                                 searchAndAskQuantity(fb)
@@ -1663,23 +1563,25 @@ class MainActivity : ComponentActivity() {
     private fun handleAskingMore(cleaned: String, originalText: String) {
         val lang = LanguageManager.getLanguage()
         when {
+            // ── FIX Bug 2: isNoMoreIntent checked FIRST ───────────────────────
+            // "हाँ बस ऑर्डर कर दे" was matching isYes() before isNoMoreIntent()
+            // could catch "बस" + "ऑर्डर". Result: Butler looped asking "aur kya
+            // chahiye?" instead of going to checkout.
+            //
+            // Rule: "affirmation + done-signal" = user is done, not asking for more.
+            // isNoMoreIntent is more specific than isYes, so check it FIRST.
+            // ─────────────────────────────────────────────────────────────────
+            isNoMoreIntent(cleaned) -> readCartAndConfirm()
+
             MultilingualMatcher.isYes(cleaned) || cleaned.contains("add") || cleaned.contains("more") ||
                     cleaned.contains("और") || cleaned.contains("aur") -> {
                 currentState = AssistantState.LISTENING
-                val lastProd = sessionLastProduct
-                val shortLast = lastProd?.lowercase()?.split(" ")
-                    ?.take(2)?.joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
-
-                // ── "More?" prompt is context-aware ───────────────────────
-                // FRUSTRATED     → shortest possible, no filler
-                // First item     → suggest a related category ("दाल, तेल, आटा?")
-                // Already 2+     → just ask what else, no suggestions
-                // No filler here — user just confirmed an item, keep momentum
                 val prompt = ButlerPersonalityEngine.askMore(lang, currentMood, cart.size, sessionLastProduct)
                 showCartAndSpeak(prompt) { startListening() }
             }
-            isNoMoreIntent(cleaned) -> readCartAndConfirm()
+
             isCartEditIntent(cleaned) -> { currentState = AssistantState.EDITING_CART; handleCartEdit(cleaned, originalText) }
+
             else -> {
                 lifecycleScope.launch {
                     val fullParsed = AIParser.parse(originalText)
@@ -1712,18 +1614,6 @@ class MainActivity : ComponentActivity() {
     // PRODUCT SEARCH
     // ══════════════════════════════════════════════════════════════════════
 
-    // ── Products exploring phase — voice readout ─────────────────────────
-    //
-    // FILLER RULES:
-    //   • "देखो," — only when presenting options for the FIRST time (cart empty)
-    //   • "और देखो," — when user already has items and is adding more
-    //   • NO filler for frustrated user — they get direct answer, no preamble
-    //   • Filler is always PART of the sentence, never a separate TTS call
-    //
-    // FUMBLE RULES:
-    //   • Never fake fumbles — sounds patronizing
-    //   • Natural variation in phrasing across calls is enough
-    //
     private fun buildProductVoiceReadout(
         recs: List<ProductRecommendation>,
         itemName: String,
@@ -1734,12 +1624,10 @@ class MainActivity : ComponentActivity() {
 
         return when {
             lang.startsWith("hi") -> {
-                // Show brand name + price — user says the brand name to select
                 val optionText = recs.joinToString(", ") { r ->
                     "${shortName(r)} ₹${r.priceRs.toInt()}"
                 }
                 val intro = if (cart.isEmpty()) "देखो," else "और देखो,"
-                // Prompt: say the NAME, not a number
                 "$intro $itemName — $optionText। ${ButlerPersonalityEngine.askSelection("hi", currentMood)}"
             }
             lang.startsWith("te") -> {
@@ -1796,18 +1684,12 @@ class MainActivity : ComponentActivity() {
                 if (recs.isNotEmpty()) {
                     runOnUiThread { setUiState(ButlerUiState.ShowingRecommendations(itemName, recs)) }
 
-                    // ── Only skip to single option when FRUSTRATED ────────
                     if (currentMood == UserMood.FRUSTRATED &&
                         currentState != AssistantState.IN_SERVICE_SUBTYPE_FLOW) {
                         val best = recs.first()
                         val shortName = best.productName.lowercase().split(" ")
                             .take(2).joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
                         val price = "₹${best.priceRs.toInt()}"
-
-                        // ── FRUSTRATED: direct and helpful — NO filler, NO "माफ करना"
-                        // A frustrated user wants the answer immediately.
-                        // "माफ करना" sounds apologetic and wastes their time.
-                        // Just give the best option directly.
                         val msg = when {
                             lang.startsWith("hi") ->
                                 "$shortName $price — सबसे अच्छा है। लेना है?"
@@ -1821,7 +1703,6 @@ class MainActivity : ComponentActivity() {
                                 startListeningForSelection(
                                     onNumber = { handleRecSelectionByIndex(0, recs, qty, itemName) },
                                     onOther  = { spoken ->
-                                        // Even in FRUSTRATED path, try name match first
                                         val spokenWords = spoken.lowercase().split(" ").filter { it.length >= 3 }
                                         val pick = recs.maxByOrNull { rec ->
                                             val recWords = rec.productName.lowercase().split(" ")
@@ -1841,10 +1722,8 @@ class MainActivity : ComponentActivity() {
                         return@launch
                     }
 
-                    // ── Build voice readout with price (no numbers) ──────────
                     val readout = buildProductVoiceReadout(recs, itemName, lang)
 
-                    // ── Name retry prompts — language-aware ───────────────────
                     val nameRetryPrompt = when {
                         lang.startsWith("hi") -> "screen पर दिखा नाम बोलें।"
                         lang.startsWith("te") -> "screen మీద పేరు చెప్పండి."
@@ -1859,26 +1738,22 @@ class MainActivity : ComponentActivity() {
                     speakKeepingRecsVisible(readout) {
                         startListeningForSelection(
                             onNumber = { num ->
-                                // Numbers still work silently as fallback
                                 handleRecSelectionByIndex(num - 1, recs, qty, itemName)
                             },
                             onOther = { spoken ->
                                 val sLow = spoken.lowercase().trim()
                                     .replace(Regex("[।,.!?]"), "")
 
-                                // ── Priority 1: "cheapest/sasta/best" → first result ──
                                 val wantsCheapest = sLow.contains("sasta") ||
                                         sLow.contains("cheap") || sLow.contains("best") ||
                                         sLow.contains("sabse") || sLow.contains("सबसे") ||
                                         sLow.contains("first") || sLow.contains("pehla") ||
                                         sLow.contains("పర్వాలేదు") || sLow.contains("చెప్పింది")
 
-                                // ── Priority 2: "last one/teesra wala" → third result ──
                                 val wantsLast = sLow.contains("last") || sLow.contains("teesra") ||
                                         sLow.contains("third") || sLow.contains("teen") ||
                                         sLow.contains("तीसरा") || sLow.contains("అది చివరిది")
 
-                                // ── Priority 3: "yes/haan/ok/theek" → first result ──
                                 val wantsFirst = sLow.contains("haan") || sLow.contains("yes") ||
                                         sLow.contains("theek") || sLow.contains("ok") ||
                                         sLow.contains("wahi") || sLow.contains("yahi") ||
@@ -1890,27 +1765,17 @@ class MainActivity : ComponentActivity() {
                                     wantsLast     -> handleRecSelectionByIndex(2, recs, qty, itemName)
                                     wantsFirst    -> handleRecSelectionByIndex(0, recs, qty, itemName)
                                     else -> {
-                                        // ── Priority 4: name matching ────────────────────
-                                        // Try to match what user said against product names.
-                                        // Split user's speech into words, match against
-                                        // any word in product name. Works for:
-                                        //   "Daawat wala"  → matches "DAAWAT BROWN BASMATI"
-                                        //   "India Gate"   → matches "INDIA GATE SUPER RICE"
-                                        //   "Fortune"      → matches "FORTUNE BASMATI"
-                                        //   "वाला सस्ता"   → falls through to cheapest
                                         val spokenWords = sLow.split(" ")
-                                            .filter { it.length >= 3 }  // ignore short words
+                                            .filter { it.length >= 3 }
 
                                         val pick = recs.maxByOrNull { rec ->
                                             val recWords = rec.productName.lowercase().split(" ")
-                                            // Score = how many spoken words match product words
                                             spokenWords.count { sw ->
                                                 recWords.any { rw ->
                                                     rw.startsWith(sw) || sw.startsWith(rw)
                                                 }
                                             }
                                         }?.takeIf { rec ->
-                                            // Only accept if at least 1 word matched
                                             val recWords = rec.productName.lowercase().split(" ")
                                             spokenWords.any { sw ->
                                                 recWords.any { rw ->
@@ -1922,7 +1787,6 @@ class MainActivity : ComponentActivity() {
                                         if (pick != null) {
                                             handleRecSelectionByIndex(recs.indexOf(pick), recs, qty, itemName)
                                         } else {
-                                            // No match — show names again and ask
                                             val recapNames = recs.joinToString(", ") { r ->
                                                 r.productName.lowercase().split(" ")
                                                     .take(2).joinToString(" ") {
@@ -1940,8 +1804,7 @@ class MainActivity : ComponentActivity() {
                                             speakKeepingRecsVisible(recapMsg) {
                                                 startListeningForSelection(
                                                     onNumber = { n -> handleRecSelectionByIndex(n - 1, recs, qty, itemName) },
-                                                    onOther  = { n ->
-                                                        // Second failed attempt — just pick best
+                                                    onOther  = { _ ->
                                                         handleRecSelectionByIndex(0, recs, qty, itemName)
                                                     },
                                                     retryPrompt = nameRetryPrompt
@@ -1993,14 +1856,11 @@ class MainActivity : ComponentActivity() {
             sessionLastProduct = pick.productName; sessionLastQty = finalQty
             currentState = AssistantState.ASKING_MORE
 
-            // ── Use ButlerPersonalityEngine for natural, varied responses ──
             val addedMsg  = ButlerPersonalityEngine.itemAdded(pick.productName, lang, currentMood, cart.size)
             val moreMsg   = ButlerPersonalityEngine.askMore(lang, currentMood, cart.size, pick.productName)
-            // Combine: "हाँ! Daawat ले लिया। दाल भी चाहिए?"
             val msg = "$addedMsg $moreMsg"
             showCartAndSpeak(msg) { startListening() }
         } else {
-            val lang = LanguageManager.getLanguage()
             speakKeepingRecsVisible(
                 when {
                     lang.startsWith("hi") -> "screen पर दिखा नाम बोलें।"
@@ -2016,7 +1876,6 @@ class MainActivity : ComponentActivity() {
                 startListeningForSelection(
                     onNumber = { n -> handleRecSelectionByIndex(n - 1, recs, qty, itemName) },
                     onOther  = { _ ->
-                        // Second failed attempt — just go back to main listening
                         speak(ButlerPhraseBank.get("ask_item", LanguageManager.getLanguage())) {
                             currentState = AssistantState.LISTENING; startListening()
                         }
@@ -2130,9 +1989,6 @@ class MainActivity : ComponentActivity() {
     private fun isNoMoreIntent(s: String): Boolean {
         if (MultilingualMatcher.isDone(s)) return true
         if (IndianLanguageProcessor.DONE_PHRASES.any { s.contains(it, ignoreCase = true) }) return true
-        // ── Added: "ऑर्डर करो" / "order karo" — user explicitly asking to place order
-        // Previously AIParser returned intent=unknown for these, causing Butler
-        // to ask "कुछ और?" in a loop instead of going to checkout.
         return listOf(
             "no","nope","done","nothing","finish","stop","checkout","place order",
             "बस","हो गया","bas","nahi","kar do",
@@ -2172,31 +2028,15 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /**
-     * Instant grocery detection — bypasses OpenAI entirely for common items.
-     * Returns Pair(productName, quantity) or null if not a simple grocery request.
-     *
-     * Covers Hindi, Telugu, Hinglish, English and common brand names.
-     * Quantity is extracted from the same transcript (e.g. "2 kilo rice" → qty=2).
-     *
-     * This saves 3-5 seconds on every common demo command:
-     *   "rice chahiye"         → ("rice", 0) in ~50ms instead of 4000ms
-     *   "मुझे दाल चाहिए"       → ("dal", 0)
-     *   "2 kilo chawal de do" → ("rice", 2)
-     *   "నాకు పాలు కావాలి"      → ("milk", 0)
-     */
     private fun instantGroceryDetect(s: String, lang: String): Pair<String, Int>? {
-        // ── Quantity extraction ────────────────────────────────────────────
-        val qty = extractQuantity(s)   // returns 1 as default, not 0
+        val qty = extractQuantity(s)
         val detectedQty = when {
             Regex("\\d+").containsMatchIn(s) -> qty
             listOf("do","दो","రెండు","two","2 kilo","2 kg").any { s.contains(it) } -> 2
             listOf("teen","तीन","మూడు","three").any { s.contains(it) } -> 3
-            else -> 0   // 0 = "ask quantity" mode
+            else -> 0
         }
 
-        // ── Product matching — ordered by demo priority ────────────────────
-        // Rice first — it's the #1 demo product
         if (s.contains("rice") || s.contains("chawal") || s.contains("चावल") ||
             s.contains("అన్నం") || s.contains("basmati") || s.contains("baasmati"))
             return Pair("rice", detectedQty)
@@ -2258,14 +2098,13 @@ class MainActivity : ComponentActivity() {
             s.contains("పెరుగు") || s.contains("perugu"))
             return Pair("curd", detectedQty)
 
-        // ── Common brand names (bypass GPT for these too) ─────────────────
         if (s.contains("daawat") || s.contains("dawat"))  return Pair("daawat rice", detectedQty)
         if (s.contains("fortune"))                         return Pair("fortune oil", detectedQty)
         if (s.contains("aashirvaad") || s.contains("aashirvad")) return Pair("aashirvaad atta", detectedQty)
         if (s.contains("amul"))                            return Pair("amul butter", detectedQty)
         if (s.contains("tata salt") || s.contains("tata namak")) return Pair("tata salt", detectedQty)
 
-        return null  // not a simple grocery — let AIParser handle it
+        return null
     }
 
     private suspend fun doLogin(email: String, password: String) {
@@ -2279,7 +2118,6 @@ class MainActivity : ComponentActivity() {
                     AnalyticsManager.logUserAuth("login", LanguageManager.getLanguage())
                     val lastProduct = history.firstOrNull()?.product_name?.takeIf { it.isNotBlank() && it != "null" }
                     val lang        = LanguageManager.getLanguage()
-                    // Short product name only
                     val shortLast = lastProduct?.lowercase()?.split(" ")
                         ?.take(2)?.joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
                     val greeting = ButlerPersonalityEngine.greeting(firstName, lang, shortLast, currentMood)
@@ -2328,39 +2166,28 @@ class MainActivity : ComponentActivity() {
 
     private fun setUiState(s: ButlerUiState) = runOnUiThread { uiState.value = s }
 
-    // ── Emotion detection from transcript ─────────────────────────────────
-    // Checks for distress/emergency signals BEFORE routing the transcript.
-    // Used to set the correct TTS tone so Butler never sounds cheerful when
-    // someone is in pain or in an emergency.
     private fun detectEmotionTone(text: String): EmotionTone {
         val lower = text.lowercase()
 
-        // Emergency / life-threatening
         val emergencyWords = listOf(
-            // English
             "emergency", "ambulance", "heart", "chest", "breathe", "breathing",
             "unconscious", "accident", "bleeding", "faint", "stroke", "attack",
             "pain", "paining", "hurting", "dying", "help me", "urgent",
             "please help", "not breathing", "collapsed", "seizure",
-            // Hindi — covers the exact demo phrase "mere dil mein dard hai"
             "दर्द", "दिल", "सांस", "बेहोश", "खून", "हादसा", "एम्बुलेंस",
             "दर्द है", "दर्द हो", "दर्द हो रहा", "दिल में दर्द",
             "मेरे दिल", "सीने में", "सांस नहीं", "गिर गया", "बचाओ",
             "madad", "bachao", "जल्दी", "मदद करो",
-            // Hinglish — exactly what a Guntur user would say
             "dard hai", "dard ho raha", "dil mein dard", "mere dil mein",
             "seene mein", "sans nahi", "ambulance bulao", "doctor bulao",
             "help karo", "bachao mujhe", "gir gaya", "behosh",
-            // Telugu
             "నొప్పి", "గుండె", "శ్వాస", "అపస్మారం", "రక్తం",
             "నొప్పిగా", "గుండె నొప్పి", "శ్వాస రావడం లేదు",
             "అంబులెన్స్", "సహాయం", "పడిపోయాను",
-            // Tamil, Kannada, Malayalam basics
             "வலி", "இதயம்", "ನೋವು", "ഹൃദയം", "വേദന"
         )
         if (emergencyWords.any { lower.contains(it) }) return EmotionTone.EMERGENCY
 
-        // Distress / worry but not life-threatening
         val distressWords = listOf(
             "worried", "scared", "tension", "anxious", "upset", "crying",
             "lost", "stolen", "problem", "trouble", "issue", "pareshan",
@@ -2372,8 +2199,6 @@ class MainActivity : ComponentActivity() {
         return EmotionTone.NORMAL
     }
 
-    // ── speak() with optional tone override ───────────────────────────────
-    // tone defaults to NORMAL so all existing call sites compile unchanged.
     private fun speak(
         text: String,
         tone: EmotionTone = EmotionTone.NORMAL,
@@ -2393,7 +2218,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // Backward-compat overload — keeps all existing speak("text") { } calls working
     private fun speak(text: String, onDone: (() -> Unit)?) = speak(text, EmotionTone.NORMAL, onDone)
 
     private fun speakKeepingRecsVisible(
@@ -2410,7 +2234,6 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-    // Backward-compat overload
     private fun speakKeepingRecsVisible(text: String, onDone: (() -> Unit)?) =
         speakKeepingRecsVisible(text, EmotionTone.NORMAL, onDone)
 
