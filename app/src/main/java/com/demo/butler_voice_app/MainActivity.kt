@@ -150,7 +150,14 @@ class MainActivity : ComponentActivity() {
     // ─────────────────────────────────────────────────────────────────────
     @Volatile private var sttListenId = 0
 
-    private fun toSpeakableAmount(amount: Double): String = "${amount.toInt()} rupees"
+    private fun toSpeakableAmount(amount: Double): String {
+        val n    = amount.toInt()
+        val lang = LanguageManager.getLanguage()
+        return if (lang.startsWith("hi") || lang.startsWith("te") || lang.startsWith("mr"))
+            "${com.demo.butler_voice_app.utils.ButlerSpeechFormatter.numberToHindi(n)} rupaye"
+        else
+            "$n rupees"
+    }
 
     // ══════════════════════════════════════════════════════════════════════
     // HUMAN HELPERS
@@ -1568,9 +1575,21 @@ class MainActivity : ComponentActivity() {
                 runOnUiThread {
                     when (val routing = fullParsed.routing) {
                         is IntentRouting.GoToService -> {
-                            speak(com.demo.butler_voice_app.services.ServiceVoiceEngine.categoryPrompt(LanguageManager.getLanguage())) {
-                                launchServiceFlow(text)
-                            }
+                            // ── SERVICE ROUTING FIX ─────────────────────────────────────
+                            // BEFORE: spoke categoryPrompt + launchServiceFlow(text) with NO
+                            // overrideSector. ServiceActivity got sector=null → asked
+                            // categoryPrompt AGAIN. User had to say "electrician" 3 times.
+                            //
+                            // AFTER: map routing.category → ServiceSector, speak
+                            // sectorDetected (not categoryPrompt), pass overrideSector.
+                            // ────────────────────────────────────────────────────────────
+                            val cat    = routing.category
+                            val sector = mapCategoryToSector(cat)
+                            val prompt = if (sector != null)
+                                com.demo.butler_voice_app.services.ServiceVoiceEngine.sectorDetected(sector, lang)
+                            else
+                                com.demo.butler_voice_app.services.ServiceVoiceEngine.categoryPrompt(lang)
+                            speak(prompt) { launchServiceFlow(text, overrideSector = sector) }
                         }
                         is IntentRouting.GoToGrocery -> {
                             // Items come from AIParser directly — no second GPT call
@@ -2060,16 +2079,17 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             val lang      = LanguageManager.getLanguage()
             val finalText = TranslationManager.translate(text, lang)
+            val ttsText   = com.demo.butler_voice_app.utils.ButlerSpeechFormatter.format(finalText, lang)
             Log.d("Butler", "Original: $text")
-            Log.d("Butler", "Translated ($lang): $finalText")
+            Log.d("Butler", "TTS ($lang): $ttsText")
             val cartItems = cart.map { CartDisplayItem(it.product.name, it.quantity, it.product.price) }
             val total     = cart.sumOf { it.product.price * it.quantity }
             runOnUiThread {
                 if (currentState == AssistantState.CONFIRMING || currentState == AssistantState.ASKING_MORE)
                     setUiState(ButlerUiState.CartReview(cartItems, total, text))
                 else
-                    setUiState(ButlerUiState.Speaking(finalText, cart = cartItems))
-                ttsManager.speak(text = finalText, language = lang, onDone = { onDone?.invoke() })
+                    setUiState(ButlerUiState.Speaking(ttsText, cart = cartItems))
+                ttsManager.speak(text = ttsText, language = lang, onDone = { onDone?.invoke() })
             }
         }
     }
@@ -2363,11 +2383,12 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             val lang      = LanguageManager.getLanguage()
             val finalText = TranslationManager.translate(text, lang)
+            val ttsText   = com.demo.butler_voice_app.utils.ButlerSpeechFormatter.format(finalText, lang)
             Log.d("Butler", "Original: $text")
-            Log.d("Butler", "Translated ($lang): $finalText")
+            Log.d("Butler", "TTS ($lang): $ttsText")
             runOnUiThread {
-                setUiState(ButlerUiState.Speaking(finalText))
-                ttsManager.speak(text = finalText, language = lang, tone = tone, onDone = { onDone?.invoke() })
+                setUiState(ButlerUiState.Speaking(ttsText))
+                ttsManager.speak(text = ttsText, language = lang, tone = tone, onDone = { onDone?.invoke() })
             }
         }
     }

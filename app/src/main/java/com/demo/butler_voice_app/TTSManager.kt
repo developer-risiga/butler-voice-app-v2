@@ -106,14 +106,18 @@ class TTSManager(
             val stability: Double,
             val similarityBoost: Double,
             val style: Double,
-            val useSpeakerBoost: Boolean = true
+            val useSpeakerBoost: Boolean = true,
+            val speed: Double = 0.85   // <1.0 = slower speech — housewife/elderly default
         )
 
         private val TONE_SETTINGS = mapOf(
-            EmotionTone.EMERGENCY  to VoiceSettings(0.85, 0.90, 0.00),
-            EmotionTone.EMPATHETIC to VoiceSettings(0.70, 0.85, 0.05),
-            EmotionTone.NORMAL     to VoiceSettings(0.50, 0.80, 0.15),
-            EmotionTone.WARM       to VoiceSettings(0.40, 0.80, 0.25)
+            // stability: higher = more consistent pacing, less "running away"
+            // style: lower = cleaner pronunciation, easier to understand
+            // speed: <1.0 = slower — critical for housewife/elderly users
+            EmotionTone.EMERGENCY  to VoiceSettings(0.90, 0.90, 0.00, speed = 1.00), // urgent stays normal speed
+            EmotionTone.EMPATHETIC to VoiceSettings(0.75, 0.85, 0.03, speed = 0.82), // gentle and slow
+            EmotionTone.NORMAL     to VoiceSettings(0.72, 0.82, 0.08, speed = 0.85), // clear, measured
+            EmotionTone.WARM       to VoiceSettings(0.68, 0.82, 0.12, speed = 0.83)  // warm but not rushed
         )
     }
 
@@ -198,6 +202,7 @@ class TTSManager(
                 put("similarity_boost", settings.similarityBoost)
                 put("style",            settings.style)
                 put("use_speaker_boost", settings.useSpeakerBoost)
+                put("speed",            settings.speed) // 0.85 = ~15% slower, still natural
             })
         }.toString().toRequestBody("application/json".toMediaType())
 

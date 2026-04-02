@@ -161,13 +161,15 @@ class ServiceActivity : ComponentActivity() {
         providers          = emptyList()
         medicinesFromOcr   = false
 
-        speak(
-            "I will help you find a pharmacy for your medicines. " +
-                    "Please say camera to take a photo of your prescription, " +
-                    "or say upload to choose an image from your gallery."
-        ) {
-            startListeningForPrescriptionUpload()
+        // Short, direct Hindi — don't rely on TranslationManager for this
+        // Logcat showed TranslationManager turned this into 13 seconds of formal speech
+        val lang = LanguageManager.getLanguage()
+        val rxPrompt = when {
+            lang.startsWith("hi") -> "Prescription hai? Camera se photo lo ya gallery se upload karo."
+            lang.startsWith("te") -> "Prescription undi? Camera tho photo teeyandi leda gallery nunchi upload cheyandi."
+            else -> "Have your prescription? Say camera to take a photo, or upload to choose from gallery."
         }
+        speakRaw(rxPrompt) { startListeningForPrescriptionUpload() }
     }
 
     private fun startListeningForPrescriptionUpload() {
@@ -393,7 +395,8 @@ class ServiceActivity : ComponentActivity() {
                 }
 
                 runOnUiThread {
-                    speak(prompt) { startListeningForSelection() }
+                    // speakRaw: prescription prompts are pre-written Hindi — skip TranslationManager
+                    speakRaw(prompt) { startListeningForSelection() }
                 }
             } catch (e: Exception) {
                 Log.e("ServiceActivity", "Pharmacy search error", e)
@@ -415,7 +418,7 @@ class ServiceActivity : ComponentActivity() {
         screenState   = ServiceScreenState.ProviderList(sector, emptyList(), query, isLoading = true)
 
         // ── HUMANISED: "Theek hai, electrician dhundh raha hoon aapke paas."
-        speak(ServiceVoiceEngine.sectorDetected(sector, LanguageManager.getLanguage())) {}
+        speakRaw(ServiceVoiceEngine.sectorDetected(sector, LanguageManager.getLanguage()))
 
         lifecycleScope.launch {
             providers   = ServiceManager.searchProviders(ServiceIntent(sector, query), userLat, userLng, ServiceFilter())
@@ -423,7 +426,7 @@ class ServiceActivity : ComponentActivity() {
 
             // ── HUMANISED: "3 electrician mile hain. 1: ABC — 15 min mein. Kaun sa?"
             val response = ServiceVoiceEngine.providerList(sector, providers, LanguageManager.getLanguage())
-            runOnUiThread { speak(response) { startListeningForSelection() } }
+            runOnUiThread { speakRaw(response) { startListeningForSelection() } }
         }
     }
 
@@ -458,7 +461,7 @@ class ServiceActivity : ComponentActivity() {
 
     private fun speakServicePrompt() {
         // ── HUMANISED: "Batao, kya chahiye? Electrician, plumber, doctor, taxi?"
-        speak(ServiceVoiceEngine.categoryPrompt(LanguageManager.getLanguage())) {
+        speakRaw(ServiceVoiceEngine.categoryPrompt(LanguageManager.getLanguage())) {
             startListeningForSector()
         }
     }
@@ -514,7 +517,7 @@ class ServiceActivity : ComponentActivity() {
                     if (num != null) { onProviderChosen(num); return@runOnUiThread }
 
                     // 5. No match — ask again with name prompt
-                    speak(ServiceVoiceEngine.selectionRetry(LanguageManager.getLanguage())) {
+                    speakRaw(ServiceVoiceEngine.selectionRetry(LanguageManager.getLanguage())) {
                         startListeningForSelection()
                     }
                 }
@@ -549,7 +552,7 @@ class ServiceActivity : ComponentActivity() {
                         lower.contains("no")  || lower.contains("cancel") || lower.contains("back") ||
                                 lower.contains("नहीं") || lower.contains("వద్దు")                       -> goBack()
                         // ── HUMANISED: "Haan bolein toh book, nahi bolein toh wapas."
-                        else -> speak(ServiceVoiceEngine.confirmYesNoPrompt(LanguageManager.getLanguage())) { startListeningForBookingConfirm(provider) }
+                        else -> speakRaw(ServiceVoiceEngine.confirmYesNoPrompt(LanguageManager.getLanguage())) { startListeningForBookingConfirm(provider) }
                     }
                 }
             },
@@ -565,7 +568,7 @@ class ServiceActivity : ComponentActivity() {
         val provider = providers.getOrNull(number - 1) ?: return
         selectedProvider = provider
         // ── HUMANISED: "ABC — book karoon? 15 min mein aa jayenge."
-        speak(ServiceVoiceEngine.providerSelected(provider, LanguageManager.getLanguage())) {
+        speakRaw(ServiceVoiceEngine.providerSelected(provider, LanguageManager.getLanguage())) {
             screenState = ServiceScreenState.BookingConfirm(provider)
             startListeningForBookingConfirm(provider)
         }
@@ -581,7 +584,7 @@ class ServiceActivity : ComponentActivity() {
         screenState = ServiceScreenState.BookingDone(provider, bookingId, provider.eta)
 
         // ── HUMANISED: "Ho gaya! ABC aa rahe hain. Booking ID: BUT-XYZ. 15 min mein."
-        speak(ServiceVoiceEngine.bookingConfirmed(provider, bookingId, lang)) {
+        speakRaw(ServiceVoiceEngine.bookingConfirmed(provider, bookingId, lang)) {
             Handler(Looper.getMainLooper()).postDelayed({ finishWithResult(bookingId) }, 8000)
         }
 
@@ -619,7 +622,7 @@ class ServiceActivity : ComponentActivity() {
                 else -> "best"
             }
             // ── HUMANISED: "Top rated wale 3 option hain. Kaun sa?"
-            speak(ServiceVoiceEngine.filterResult(sortName, providers.size, LanguageManager.getLanguage())) { startListeningForSelection() }
+            speakRaw(ServiceVoiceEngine.filterResult(sortName, providers.size, LanguageManager.getLanguage())) { startListeningForSelection() }
         }
     }
 
@@ -628,7 +631,7 @@ class ServiceActivity : ComponentActivity() {
             is ServiceScreenState.BookingConfirm -> {
                 screenState = ServiceScreenState.ProviderList(currentSector!!, providers, "", false)
                 // ── HUMANISED: "Theek hai, pehle wali list pe wapas."
-                speak(ServiceVoiceEngine.goBack(LanguageManager.getLanguage())) { startListeningForSelection() }
+                speakRaw(ServiceVoiceEngine.goBack(LanguageManager.getLanguage())) { startListeningForSelection() }
             }
             is ServiceScreenState.ProviderList, is ServiceScreenState.Prescription -> {
                 screenState = ServiceScreenState.SectorHome
@@ -695,6 +698,8 @@ class ServiceActivity : ComponentActivity() {
 
     // ── Speak helper ──────────────────────────────────────────────────────
 
+    // speak() — translates English → user language, then cleans via formatter
+    // Use this for prompts that are written in English and need translation.
     private fun speak(
         text: String,
         tone: EmotionTone = EmotionTone.NORMAL,
@@ -703,10 +708,28 @@ class ServiceActivity : ComponentActivity() {
         lifecycleScope.launch {
             val lang      = LanguageManager.getLanguage()
             val finalText = TranslationManager.translate(text, lang)
-            Log.d("ServiceActivity", "Speaking [$tone]: $finalText")
+            val ttsText   = com.demo.butler_voice_app.utils.ButlerSpeechFormatter.format(finalText, lang)
+            Log.d("ServiceActivity", "Speaking [$tone]: $ttsText")
             runOnUiThread {
-                ttsManager.speak(text = finalText, language = lang, tone = tone, onDone = { onDone?.invoke() })
+                ttsManager.speak(text = ttsText, language = lang, tone = tone, onDone = { onDone?.invoke() })
             }
+        }
+    }
+
+    // speakRaw() — skips TranslationManager entirely.
+    // Use for ServiceVoiceEngine strings (already written in Hindi/Telugu/etc).
+    // TranslationManager was corrupting pre-written Hindi when user spoke Gujarati/Punjabi
+    // mid-session (it tried to "translate" Hindi → Gujarati, producing mixed script).
+    private fun speakRaw(
+        text: String,
+        tone: EmotionTone = EmotionTone.NORMAL,
+        onDone: (() -> Unit)? = null
+    ) {
+        val lang    = LanguageManager.getLanguage()
+        val ttsText = com.demo.butler_voice_app.utils.ButlerSpeechFormatter.format(text, lang)
+        Log.d("ServiceActivity", "Speaking raw [$tone]: $ttsText")
+        runOnUiThread {
+            ttsManager.speak(text = ttsText, language = lang, tone = tone, onDone = { onDone?.invoke() })
         }
     }
 
