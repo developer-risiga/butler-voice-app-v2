@@ -191,21 +191,36 @@ object ServiceVoiceEngine {
         val base  = lang.substringBefore("-").take(2)
 
         // Build name-only list — NO numbers, user selects by saying the name
-        val items = providers.take(count).joinToString(", ") { p ->
-            val name = p.name.split(" ").take(3).joinToString(" ")
-            val eta  = p.eta.ifBlank { "" }
-            val dist = try { if (p.distanceKm > 0) "${p.distanceKm}km" else "" } catch (_: Exception) { "" }
+        // Uses real ServiceProvider fields: name, rating, priceMin, priceUnit, eta
+        val items = providers.take(count).joinToString(". ") { p ->
+            val name    = p.name.split(" ").take(3).joinToString(" ")
+            val stars   = if (p.rating >= 1.0) "${p.rating} stars" else ""
+            val price   = if (p.priceMin > 0) "₹${p.priceMin} ${p.priceUnit}" else ""
+            val eta     = p.eta.ifBlank { "" }
+
             val extra = when (base) {
-                "hi" -> listOfNotNull(dist.ifBlank { null }, if (eta.isNotBlank()) "$eta mein" else null)
-                "te" -> listOfNotNull(dist.ifBlank { null }, if (eta.isNotBlank()) "$eta lo" else null)
-                else -> listOfNotNull(dist.ifBlank { null }, if (eta.isNotBlank()) "$eta away" else null)
+                "hi" -> listOfNotNull(
+                    stars.ifBlank { null },
+                    price.ifBlank { null },
+                    if (eta.isNotBlank()) "$eta mein" else null
+                )
+                "te" -> listOfNotNull(
+                    stars.ifBlank { null },
+                    price.ifBlank { null },
+                    if (eta.isNotBlank()) "$eta lo" else null
+                )
+                else -> listOfNotNull(
+                    stars.ifBlank { null },
+                    price.ifBlank { null },
+                    if (eta.isNotBlank()) "$eta away" else null
+                )
             }
             "$name${if (extra.isNotEmpty()) " — ${extra.joinToString(", ")}" else ""}"
         }
 
         return when {
             lang.startsWith("hi") -> pick("hi_prov_list", listOf(
-                "$count $sName mile hain paas mein — $items. Kaun sa chahiye? Naam bolein.",
+                "$count $sName mile hain — $items. Kaun sa chahiye? Naam bolein.",
                 "$count options hain — $items. Kaunsa $sName chahiye?",
                 "Mil gaye — $items. Naam bolein.",
                 "Paas mein hain — $items. Kaunsa bhejoon?"

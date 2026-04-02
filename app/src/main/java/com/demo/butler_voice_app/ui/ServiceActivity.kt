@@ -309,81 +309,15 @@ class ServiceActivity : ComponentActivity() {
         lifecycleScope.launch(Dispatchers.IO) { processPrescriptionBytesAsync(bytes) }
     }
 
-    // ── CORE: GPT-4o Vision extracts medicines ────────────────────────────
+    // ── CORE: PrescriptionEngine extracts + verifies medicines ──────────────
 
     private suspend fun processPrescriptionBytesAsync(bytes: ByteArray) {
         try {
-            val base64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
-            Log.d("ServiceActivity", "Sending ${bytes.size} bytes to GPT-4o Vision")
+            Log.d("ServiceActivity", "Processing prescription: ${bytes.size} bytes")
 
-            val mimeType = when {
-                bytes.size > 3 && bytes[0] == 0xFF.toByte() && bytes[1] == 0xD8.toByte() -> "image/jpeg"
-                bytes.size > 3 && bytes[0] == 0x89.toByte() && bytes[1] == 0x50.toByte() -> "image/png"
-                else -> "image/jpeg"
-            }
-
-            val prompt = """You are a medical prescription reader for Indian pharmacies.
-Extract ALL medicine names with dosage from this prescription image.
-The handwriting may be in English, Hindi, or other Indian languages.
-Include brand names, generic names, and dosages if visible.
-Return ONLY a JSON array of strings, nothing else.
-Example: ["Paracetamol 500mg", "Azithromycin 250mg", "Pantoprazole 40mg"]
-If the image is unclear or not a prescription, return: []
-Do NOT include instructions or frequency — only names and doses."""
-
-            val requestBody = org.json.JSONObject().apply {
-                put("model", "gpt-4o")
-                put("max_tokens", 800)
-                put("messages", org.json.JSONArray().put(
-                    org.json.JSONObject().apply {
-                        put("role", "user")
-                        put("content", org.json.JSONArray().apply {
-                            put(org.json.JSONObject().apply {
-                                put("type", "text"); put("text", prompt)
-                            })
-                            put(org.json.JSONObject().apply {
-                                put("type", "image_url")
-                                put("image_url", org.json.JSONObject().apply {
-                                    put("url", "data:$mimeType;base64,$base64")
-                                    put("detail", "high")
-                                })
-                            })
-                        })
-                    }
-                ))
-            }.toString()
-
-            val response = withContext(Dispatchers.IO) {
-                OkHttpClient.Builder()
-                    .connectTimeout(30, TimeUnit.SECONDS)
-                    .readTimeout(60,  TimeUnit.SECONDS)
-                    .build()
-                    .newCall(
-                        okhttp3.Request.Builder()
-                            .url("https://api.openai.com/v1/chat/completions")
-                            .addHeader("Authorization", "Bearer ${BuildConfig.OPENAI_API_KEY}")
-                            .addHeader("Content-Type",  "application/json")
-                            .post(requestBody.toRequestBody("application/json".toMediaType()))
-                            .build()
-                    ).execute()
-            }
-
-            val responseBody = response.body?.string() ?: ""
-            Log.d("ServiceActivity", "GPT-4o response: ${responseBody.take(500)}")
-
-            val content = org.json.JSONObject(responseBody)
-                .getJSONArray("choices").getJSONObject(0)
-                .getJSONObject("message").getString("content").trim()
-                .replace("```json", "").replace("```", "").trim()
-
-            Log.d("ServiceActivity", "Extracted medicines content: $content")
-
-            val arr       = org.json.JSONArray(content)
-            val medicines = (0 until arr.length()).map { arr.getString(it) }.filter { it.isNotBlank() }
-
-            Log.d("ServiceActivity", "Extracted ${medicines.size} medicines: $medicines")
-
-            extractedMedicines = medicines
+            // Step 1: GPT-4o Vision reads the prescription image
+            // Uses Indian-specific prompt: knows Tab./Cap./BD/TDS/Crocin/Dolo etc.
+            val medicines = PrescriptionEngine.extractMedicines(bytes)
 
             if (medicines.isEmpty()) {
                 runOnUiThread {
@@ -399,24 +333,33 @@ Do NOT include instructions or frequency — only names and doses."""
                 return
             }
 
+            // Step 2: Verify against Supabase medicines catalogue
+            // Maps brand names → generic names, confirms availability
+            // Gracefully falls back if catalogue table doesn't exist yet
+            val verified = PrescriptionEngine.verifyAndEnrichMedicines(medicines)
+
+            // Store for pharmacy search (rawMedicines for ServiceManager)
+            extractedMedicines = medicines
             medicinesFromOcr   = true
             prescriptionStatus = PrescriptionUploadStatus.MEDICINES_FOUND
 
             val medicineList = medicines.take(4).joinToString(", ")
             val moreText     = if (medicines.size > 4) " and ${medicines.size - 4} more" else ""
 
+            Log.d("ServiceActivity", "Verified ${verified.size} medicines: ${verified.map { it.name }}")
+
             runOnUiThread {
                 speak(
                     "I found ${medicines.size} medicine${if (medicines.size > 1) "s" else ""}" +
                             " in your prescription: $medicineList$moreText. " +
-                            "Now searching for nearby pharmacies that have these medicines."
+                            "Now searching for nearby pharmacies."
                 ) {
                     searchPharmaciesForMedicines()
                 }
             }
 
         } catch (e: Exception) {
-            Log.e("ServiceActivity", "GPT-4o Vision error", e)
+            Log.e("ServiceActivity", "Prescription processing failed", e)
             runOnUiThread {
                 speak("I had trouble reading the prescription. Please say the medicine names one by one.") {
                     prescriptionStatus = PrescriptionUploadStatus.WAITING
