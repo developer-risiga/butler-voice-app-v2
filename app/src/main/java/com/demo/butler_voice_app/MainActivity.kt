@@ -75,13 +75,13 @@ import com.demo.butler_voice_app.api.StorePrice
 import com.demo.butler_voice_app.api.PriceComparison
 import com.demo.butler_voice_app.api.ProductRecommendation
 import java.util.concurrent.TimeUnit
-import com.demo.butler_voice_app.utils.LRM
-import com.demo.butler_voice_app.utils.UserSessionManager_compat
 
 enum class AssistantState {
     IDLE, CHECKING_AUTH,
     ASKING_IS_NEW_USER, ASKING_NAME, ASKING_EMAIL, ASKING_PHONE, ASKING_PASSWORD,
     LISTENING, ASKING_QUANTITY, ASKING_MORE, CONFIRMING, REORDER_CONFIRM, EDITING_CART,
+    CONFIRMING_ADD_PRODUCT,  // template 3: waiting yes/no after price confirmation
+    ASKING_PRODUCT_TYPE,     // template 2: waiting for basmati/brown/normal
     ASKING_PAYMENT_MODE,
     WAITING_CARD_PAYMENT, WAITING_UPI_PAYMENT, WAITING_QR_PAYMENT,
     CONFIRMING_CARD_PAID, CONFIRMING_UPI_PAID, CONFIRMING_QR_PAID,
@@ -115,6 +115,20 @@ class MainActivity : ComponentActivity() {
     private var sessionLastProduct: String? = null
     private var sessionLastQty: Int = 0
     private var lastBookingId: String? = null
+
+    // ── Template personalization ──────────────────────────────────────────
+    // Set in proceedAfterIdentification so every BPE call can use {name}
+    private var sessionUserName: String = "ji"
+
+    // ── Template 2+3: pending product confirmation fields ─────────────────
+    // Set when user picks a brand; we show price + ask before adding to cart
+    private var pendingAddRecs: List<com.demo.butler_voice_app.api.ProductRecommendation> = emptyList()
+    private var pendingAddIndex: Int = 0
+    private var pendingAddQty: Int = 1
+    private var pendingAddItemName: String = ""
+
+    // ── Template 2: product type pending ──────────────────────────────────
+    private var pendingProductCategory: String = ""
 
     private var pendingProactiveData: ProactiveData? = null
     private var currentMood: UserMood = UserMood.CALM
@@ -168,12 +182,13 @@ class MainActivity : ComponentActivity() {
 
     private fun buildShortConfirm(lang: String): String {
         val items = cart.joinToString(", ") { item ->
-            val name = item.product.name.lowercase().split(" ")
+            val n = item.product.name.lowercase().split(" ")
                 .take(2).joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
-            "${item.quantity} $name"
+            "${item.quantity} $n"
         }
-        val total = "${cart.sumOf { it.product.price * it.quantity }.toInt()} rupees"
-        return ButlerPersonalityEngine.confirmOrder(items, total, lang)
+        val total = "₹${cart.sumOf { it.product.price * it.quantity }.toInt()}"
+        // Template 6: "Theek hai… bas itna hi hai na {name}? Order place karna hai?"
+        return ButlerPersonalityEngine.confirmOrder(sessionUserName, items, total, lang)
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -581,8 +596,7 @@ class MainActivity : ComponentActivity() {
             else                  -> "en-IN"
         }
         SessionLanguageManager.forceSet(lockedCode)
-        UserSessionManager_compat.firstName = name
-
+        sessionUserName = name  // ← set for all BPE template {name} calls
 
         // Warm demo cache while greeting plays
         lifecycleScope.launch(Dispatchers.IO) {
@@ -1252,9 +1266,9 @@ class MainActivity : ComponentActivity() {
                     cart.add(CartItem(product, qty))
                     sessionLastProduct = product.name; sessionLastQty = qty
                     currentState = AssistantState.ASKING_MORE
-                    val addedMsg = ButlerPersonalityEngine.itemAdded(product.name, lang, currentMood, cart.size)
-                    val moreMsg  = ButlerPersonalityEngine.askMore(lang, currentMood, cart.size, product.name)
-                    showCartAndSpeak("$addedMsg $moreMsg") { startListening() }
+                    val addedMsg = ButlerPersonalityEngine.itemAdded(
+                        sessionUserName, product.name, lang, currentMood, cart.size)
+                    showCartAndSpeak(addedMsg) { startListening() }
                 } else {
                     speak(ButlerPersonalityEngine.productNotFound("", lang)) {
                         currentState = AssistantState.LISTENING; startListening()
@@ -1262,7 +1276,9 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            AssistantState.ASKING_MORE    -> handleAskingMore(cleaned, text)
+            AssistantState.ASKING_MORE          -> handleAskingMore(cleaned, text)
+            AssistantState.CONFIRMING_ADD_PRODUCT -> handleConfirmingAddProduct(cleaned)
+            AssistantState.ASKING_PRODUCT_TYPE    -> handleAskingProductType(cleaned)
             AssistantState.EDITING_CART   -> handleCartEdit(cleaned, text)
 
             AssistantState.CONFIRMING -> {
@@ -1328,7 +1344,7 @@ class MainActivity : ComponentActivity() {
         val hasSaved = card != null
         val cardInfo = if (card != null) "${card.network} card ending ${card.last4}" else ""
         setUiState(ButlerUiState.PaymentChoice(pendingOrderTotal, pendingOrderSummary, hasSaved, cardInfo))
-        speak(ButlerPersonalityEngine.askPaymentMode(toSpeakableAmount(pendingOrderTotal), LanguageManager.getLanguage())) { startListening() }
+        speak(ButlerPersonalityEngine.askPaymentMode(sessionUserName, LanguageManager.getLanguage())) { startListening() }
     }
 
     private fun handlePaymentModeChoice(cleaned: String) {
@@ -1621,7 +1637,7 @@ class MainActivity : ComponentActivity() {
 
                 // Priority 3: Nothing to infer — ask what they want
                 currentState = AssistantState.LISTENING
-                val prompt = ButlerPersonalityEngine.askMore(lang, currentMood, cart.size, sessionLastProduct)
+                val prompt = ButlerPersonalityEngine.askMore(sessionUserName, lang, currentMood, cart.size, sessionLastProduct)
                 showCartAndSpeak(prompt) { startListening() }
             }
 
@@ -1655,7 +1671,32 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // ── Returns the English search term for the active suggestion ─────────
+    // ── Template 2: handle subtype selection (basmati/brown/normal) ──────
+    private fun handleAskingProductType(cleaned: String) {
+        val lang = LanguageManager.getLanguage()
+        // Map what user said to a refined search term
+        val refined = when {
+            cleaned.contains("basmati")                                           -> "basmati rice"
+            cleaned.contains("brown")                                             -> "brown rice"
+            cleaned.contains("normal") || cleaned.contains("regular") ||
+                    cleaned.contains("sona") || cleaned.contains("सोना") ||
+                    cleaned.contains("idli") || cleaned.contains("raw")           -> "rice"
+            cleaned.contains("toor")  || cleaned.contains("arhar") ||
+                    cleaned.contains("अरहर")                                      -> "toor dal"
+            cleaned.contains("moong") || cleaned.contains("मूंग")                -> "moong dal"
+            cleaned.contains("masoor")|| cleaned.contains("मसूर")                -> "masoor dal"
+            cleaned.contains("urad")  || cleaned.contains("उड़द")                -> "urad dal"
+            cleaned.contains("mustard")|| cleaned.contains("sarson") ||
+                    cleaned.contains("sarso")                                     -> "mustard oil"
+            cleaned.contains("sunflower")                                        -> "sunflower oil"
+            cleaned.contains("coconut")|| cleaned.contains("nariyal")           -> "coconut oil"
+            cleaned.contains("wheat") || cleaned.contains("gehun")              -> "wheat atta"
+            cleaned.contains("multigrain")                                        -> "multigrain atta"
+            else -> pendingProductCategory  // fallback: search original category
+        }
+        currentState = AssistantState.LISTENING
+        searchAndAskQuantity(refined)
+    }
     // Mirrors ButlerPersonalityEngine.getRelatedSuggestion but returns
     // an English search keyword for SmartProductRepository (not Devanagari).
     // e.g. sessionLastProduct = "Daawat Brown rice" → "rice" → suggestion "dal"
@@ -1756,6 +1797,27 @@ class MainActivity : ComponentActivity() {
 
     private fun searchAndAskQuantity(itemName: String, qty: Int = 0, unit: String? = null) {
         val lang = LanguageManager.getLanguage()
+
+        // ── Template 2: ASK_TYPE — "Which rice — basmati, brown or normal?" ──
+        // If user said a GENERIC category name (rice/dal/oil) with no quantity
+        // specified and no subtype, ask what type before searching.
+        // This makes Butler feel smarter: it thinks about what the user actually
+        // needs instead of dumping brand names immediately.
+        // Only triggers on first call (qty == 0) to avoid infinite re-triggering.
+        val genericTerms = setOf(
+            "rice", "dal", "daal", "oil", "tel", "atta", "flour",
+            "milk", "doodh", "tea", "chai",
+            "चावल", "दाल", "तेल", "आटा", "दूध", "चाय"
+        )
+        if (qty == 0 && itemName.lowercase().trim() in genericTerms) {
+            pendingProductCategory = itemName
+            currentState = AssistantState.ASKING_PRODUCT_TYPE
+            speak(ButlerPersonalityEngine.askProductType(itemName, sessionUserName, lang)) {
+                startListening()
+            }
+            return
+        }
+
         speakFillerThen {
             lifecycleScope.launch {
                 val recs = productRepo.getTopRecommendations(itemName, userLocation)
@@ -1896,9 +1958,10 @@ class MainActivity : ComponentActivity() {
                                 cart.add(CartItem(product, qty))
                                 sessionLastProduct = product.name; sessionLastQty = qty
                                 currentState = AssistantState.ASKING_MORE
-                                val addedMsg = ButlerPhraseBank.get("added_item", lang)
-                                val askMore  = ButlerPhraseBank.get("ask_more", lang)
-                                showCartAndSpeak("$addedMsg $qty ${product.name}. $askMore") { startListening() }
+                                // Template 4: "Theek hai, {product} cart mein add kar diya… aur kuch chahiye {name}?"
+                                val addedMsg = ButlerPersonalityEngine.itemAdded(
+                                    sessionUserName, product.name, lang, currentMood, cart.size)
+                                showCartAndSpeak(addedMsg) { startListening() }
                             } else {
                                 currentState = AssistantState.ASKING_QUANTITY
                                 speak(ButlerPersonalityEngine.askQuantity(product.name, lang)) { startListening() }
@@ -1921,15 +1984,25 @@ class MainActivity : ComponentActivity() {
         val pick = recs.getOrNull(index)
         val lang = LanguageManager.getLanguage()
         if (pick != null) {
-            val finalQty = if (qty > 0) qty else 1
-            cart.add(CartItem(ApiClient.Product(id = pick.productId, name = pick.productName, price = pick.priceRs, unit = pick.unit), finalQty))
-            sessionLastProduct = pick.productName; sessionLastQty = finalQty
-            currentState = AssistantState.ASKING_MORE
+            // ── Template 3: CONFIRM_ADD_PRODUCT ────────────────────────────
+            // Don't silently add. Show price and ask: "{product} ₹{price} ka hai…
+            // kya ise cart mein add karna hai {name}?"
+            // User must say yes before item enters cart.
+            pendingAddRecs      = recs
+            pendingAddIndex     = index
+            pendingAddQty       = if (qty > 0) qty else 1
+            pendingAddItemName  = itemName
+            currentState        = AssistantState.CONFIRMING_ADD_PRODUCT
 
-            val addedMsg  = ButlerPersonalityEngine.itemAdded(pick.productName, lang, currentMood, cart.size)
-            val moreMsg   = ButlerPersonalityEngine.askMore(lang, currentMood, cart.size, pick.productName)
-            val msg = "$addedMsg $moreMsg"
-            showCartAndSpeak(msg) { startListening() }
+            // Is this the first item or a subsequent one?
+            val msg = if (cart.isEmpty()) {
+                ButlerPersonalityEngine.confirmAddProduct(
+                    sessionUserName, pick.productName, pick.priceRs.toInt(), lang)
+            } else {
+                ButlerPersonalityEngine.confirmAddNext(
+                    sessionUserName, pick.productName, pick.priceRs.toInt(), lang)
+            }
+            speakKeepingRecsVisible(msg) { startListening() }
         } else {
             speakKeepingRecsVisible(
                 when {
@@ -1951,6 +2024,85 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 )
+            }
+        }
+    }
+
+    // ── Template 3/5: handle the yes/no after price confirmation ─────────
+    private fun handleConfirmingAddProduct(cleaned: String) {
+        val lang = LanguageManager.getLanguage()
+        val pick = pendingAddRecs.getOrNull(pendingAddIndex)
+
+        if (pick == null) {
+            currentState = AssistantState.LISTENING; startListening(); return
+        }
+
+        when {
+            // User says YES → add to cart → template 4 (ITEM_ADDED)
+            MultilingualMatcher.isYes(cleaned) || cleaned.contains("हाँ") ||
+                    cleaned.contains("हां") || cleaned.contains("ha ") ||
+                    cleaned.contains("han ") || cleaned.contains("le lo") ||
+                    cleaned.contains("le lena") || cleaned.contains("add karo") ||
+                    cleaned.contains("daal do") || cleaned.contains("rakh do") -> {
+
+                cart.add(CartItem(ApiClient.Product(
+                    id    = pick.productId,
+                    name  = pick.productName,
+                    price = pick.priceRs,
+                    unit  = pick.unit
+                ), pendingAddQty))
+                sessionLastProduct = pick.productName
+                sessionLastQty     = pendingAddQty
+                currentState       = AssistantState.ASKING_MORE
+
+                val categoryWord = extractCategoryWord(pendingAddItemName)
+                val hasCategory  = categoryWord.isNotBlank() &&
+                        pick.productName.lowercase().contains(categoryWord.lowercase())
+                val displayName  = if (categoryWord.isNotBlank() && !hasCategory)
+                    "${pick.productName.split(" ").take(2).joinToString(" ")} $categoryWord"
+                else pick.productName.split(" ").take(2).joinToString(" ")
+
+                // Template 4: "Theek hai, {product} cart mein add kar diya… aur kuch chahiye {name}?"
+                val addedMsg = ButlerPersonalityEngine.itemAdded(
+                    sessionUserName, displayName, lang, currentMood, cart.size)
+                showCartAndSpeak(addedMsg) { startListening() }
+            }
+
+            // User says NO → ask which brand they want instead
+            MultilingualMatcher.isNo(cleaned) || cleaned.contains("नहीं") ||
+                    cleaned.contains("nahi") || cleaned.contains("koi aur") -> {
+
+                val askMsg = when {
+                    lang.startsWith("hi") -> "कौन सा chahiye? Brand ka naam bolein."
+                    lang.startsWith("te") -> "Endha brand kavali? Peyru cheppandi."
+                    else -> "Which brand? Say the name."
+                }
+                speakKeepingRecsVisible(askMsg) {
+                    startListeningForSelection(
+                        onNumber = { n ->
+                            handleRecSelectionByIndex(n - 1, pendingAddRecs, pendingAddQty, pendingAddItemName)
+                        },
+                        onOther = { spoken ->
+                            val words = spoken.lowercase().split(" ").filter { it.length >= 3 }
+                            val match = pendingAddRecs.firstOrNull { rec ->
+                                words.any { sw -> rec.productName.lowercase().contains(sw) }
+                            }
+                            handleRecSelectionByIndex(
+                                if (match != null) pendingAddRecs.indexOf(match) else 0,
+                                pendingAddRecs, pendingAddQty, pendingAddItemName
+                            )
+                        }
+                    )
+                }
+            }
+
+            // Unclear → ask again politely
+            else -> {
+                val askMsg = when {
+                    lang.startsWith("hi") -> "हाँ ya नहीं?"
+                    else                  -> "Yes or no?"
+                }
+                speak(askMsg) { startListening() }
             }
         }
     }
@@ -2236,6 +2388,32 @@ class MainActivity : ComponentActivity() {
                 currentState = AssistantState.CONFIRMING
                 showCartAndSpeak("last order ready hai. ${buildShortConfirm(LanguageManager.getLanguage())}") { startListening() }
             }
+        }
+    }
+
+    // ── Maps itemName search term → spoken category word ─────────────────
+    // Used in handleConfirmingAddProduct to append the product noun to the
+    // brand name in TTS: "Daawat Brown rice" not just "Daawat Brown".
+    private fun extractCategoryWord(itemName: String): String {
+        val s = itemName.lowercase()
+        return when {
+            s.contains("rice")   || s.contains("chawal")  || s.contains("basmati") -> "rice"
+            s.contains("dal")    || s.contains("daal")    || s.contains("lentil")  -> "dal"
+            s.contains("oil")    || s.contains("tel")                               -> "oil"
+            s.contains("milk")   || s.contains("doodh")                             -> "milk"
+            s.contains("atta")   || s.contains("flour")   || s.contains("aata")    -> "atta"
+            s.contains("sugar")  || s.contains("cheeni")  || s.contains("shakkar") -> "sugar"
+            s.contains("salt")   || s.contains("namak")                             -> "salt"
+            s.contains("tea")    || s.contains("chai")                              -> "tea"
+            s.contains("ghee")                                                      -> "ghee"
+            s.contains("bread")  || s.contains("pav")                               -> "bread"
+            s.contains("egg")                                                        -> "eggs"
+            s.contains("coffee")                                                     -> "coffee"
+            s.contains("butter") || s.contains("makhan")                            -> "butter"
+            s.contains("curd")   || s.contains("dahi")                              -> "curd"
+            s.contains("soap")   || s.contains("sabun")                             -> "soap"
+            s.contains("biscuit")                                                    -> "biscuit"
+            else -> ""
         }
     }
 
