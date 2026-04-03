@@ -32,6 +32,46 @@ object ButlerSpeechFormatter {
         return t.trim()
     }
 
+    /**
+     * Format with emotion-aware text transformation.
+     * ElevenLabs responds strongly to punctuation, CAPS, and spacing.
+     * These text-level cues reinforce the voice_settings parameters.
+     *
+     * Call this version instead of format() when tone is known.
+     */
+    fun formatWithEmotion(text: String, lang: String, tone: com.demo.butler_voice_app.EmotionTone): String {
+        var t = format(text, lang)
+        t = when (tone) {
+            // EXCITED: exclamation adds energy, key words in caps
+            com.demo.butler_voice_app.EmotionTone.EXCITED -> {
+                t.replace(Regex("[.]\\s*$"), "!")
+                    .replace("ho gaya", "ho gaya!")
+                    .replace("हो गया", "हो गया!")
+                    .replace("perfect", "perfect!")
+                    .replace("परफेक्ट", "परफेक्ट!")
+            }
+            // EMPATHETIC: add pauses between words for slower, gentler delivery
+            com.demo.butler_voice_app.EmotionTone.EMPATHETIC -> {
+                t.replace(". ", "... ")
+                    .replace("boliye", "boliye...")
+                    .replace("phir se", "phir se...")
+                    .replace("फिर से", "फिर से...")
+            }
+            // EMERGENCY: ALL CAPS key phrases + fast delivery markers
+            com.demo.butler_voice_app.EmotionTone.EMERGENCY -> {
+                t.replace("ambulance", "AMBULANCE")
+                    .replace("emergency", "EMERGENCY")
+                    .replace("घबराइए मत", "घबराइए मत!")
+                    .replace(Regex("[!]?\\s*$"), "!!")
+            }
+            // WARM: ellipsis pauses make delivery feel natural and unhurried
+            com.demo.butler_voice_app.EmotionTone.WARM -> t
+            // NORMAL: no changes needed, clean delivery
+            com.demo.butler_voice_app.EmotionTone.NORMAL -> t
+        }
+        return t.trim()
+    }
+
     // ── 1. Provider names — strip trailing dashes, double spaces ─────────────
     private fun fixProviderNames(t: String): String {
         return t

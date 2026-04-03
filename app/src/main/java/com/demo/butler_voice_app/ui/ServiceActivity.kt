@@ -88,7 +88,7 @@ class ServiceActivity : ComponentActivity() {
         userLng = intent.getDoubleExtra("user_lng", 0.0).takeIf { it != 0.0 }
 
         sarvamSTT = SarvamSTTManager(this, BuildConfig.SARVAM_API_KEY)
-        ttsManager = TTSManager(this, BuildConfig.ELEVENLABS_API_KEY, "RwXLkVKnRloV1UPh3Ccx")
+        ttsManager = TTSManager(this, BuildConfig.ELEVENLABS_API_KEY, "K2Byg54sHB1oHegvENtI")
         ttsManager.init {
             val sector = intent.getStringExtra(EXTRA_SECTOR)?.let {
                 if (it.isBlank()) null

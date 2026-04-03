@@ -379,7 +379,7 @@ class MainActivity : ComponentActivity() {
         ttsManager = TTSManager(
             context          = this,
             elevenLabsApiKey = BuildConfig.ELEVENLABS_API_KEY,
-            voiceId          = "RwXLkVKnRloV1UPh3Ccx"
+            voiceId          = "K2Byg54sHB1oHegvENtI"
         )
         ttsManager.init { checkMicPermission() }
 
@@ -2164,7 +2164,7 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             val lang      = LanguageManager.getLanguage()
             val finalText = TranslationManager.translate(text, lang)
-            val ttsText   = com.demo.butler_voice_app.utils.ButlerSpeechFormatter.format(finalText, lang)
+            val ttsText   = com.demo.butler_voice_app.utils.ButlerSpeechFormatter.formatWithEmotion(finalText, lang, tone)
             Log.d("Butler", "Original: $text")
             Log.d("Butler", "TTS ($lang): $ttsText")
             val cartItems = cart.map { CartDisplayItem(it.product.name, it.quantity, it.product.price) }
@@ -2585,7 +2585,7 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             val lang      = LanguageManager.getLanguage()
             val finalText = TranslationManager.translate(text, lang)
-            val ttsText   = com.demo.butler_voice_app.utils.ButlerSpeechFormatter.format(finalText, lang)
+            val ttsText   = com.demo.butler_voice_app.utils.ButlerSpeechFormatter.formatWithEmotion(finalText, lang, tone)
             Log.d("Butler", "Original: $text")
             Log.d("Butler", "TTS ($lang): $ttsText")
             runOnUiThread {
@@ -2606,8 +2606,9 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             val lang      = LanguageManager.getLanguage()
             val finalText = TranslationManager.translate(text, lang)
+            val ttsText   = com.demo.butler_voice_app.utils.ButlerSpeechFormatter.formatWithEmotion(finalText, lang, tone)
             runOnUiThread {
-                ttsManager.speak(text = finalText, language = lang, tone = tone, onDone = { onDone?.invoke() })
+                ttsManager.speak(text = ttsText, language = lang, tone = tone, onDone = { onDone?.invoke() })
             }
         }
     }

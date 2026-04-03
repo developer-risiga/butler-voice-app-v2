@@ -44,13 +44,13 @@ enum class EmotionTone {
 class TTSManager(
     private val context: Context,
     private val elevenLabsApiKey: String,
-    private val voiceId: String = "RwXLkVKnRloV1UPh3Ccx"
+    private val voiceId: String = "K2Byg54sHB1oHegvENtI"
 ) {
 
     companion object {
         private const val TAG          = "TTS"
-        private const val VOICE_EN     = "RwXLkVKnRloV1UPh3Ccx"
-        private const val VOICE_HI     = "RwXLkVKnRloV1UPh3Ccx"
+        private const val VOICE_EN     = "K2Byg54sHB1oHegvENtI"
+        private const val VOICE_HI     = "K2Byg54sHB1oHegvENtI"
         private const val ELEVEN_MODEL = "eleven_multilingual_v2"
         private val DEVANAGARI         = Regex("[\\u0900-\\u097F]")
 
@@ -112,71 +112,64 @@ class TTSManager(
         )
 
         // ══════════════════════════════════════════════════════════════════
-        // TONE SETTINGS — THIS IS THE FIX
+        // TONE SETTINGS — EXTREME RANGE VERSION
         //
-        // OLD: All tones had HIGH stability (0.68–0.90) and LOW style (0.00–0.12)
-        //      → All sounded identical and flat.
+        // Previous values were too close together (0.42 vs 0.55 stability).
+        // The human ear needs at least 0.3+ gap in style to clearly notice.
+        // These values span the full audible range of the ElevenLabs voice.
         //
-        // NEW: Tones span the full range. The difference between EMERGENCY (0.20)
-        //      and NORMAL (0.55) is immediately audible. WARM (style=0.40) vs
-        //      NORMAL (style=0.10) sounds like two different personalities.
+        //   style 0.0  = completely flat, robotic, newsreader
+        //   style 0.5+ = strong personality, emotion clearly audible
+        //   style 0.9  = maximum expression (emergency/excited)
+        //
+        //   stability 0.1 = maximum pitch variation (urgent/excited)
+        //   stability 0.6 = stable, clear, consistent (normal info)
         // ══════════════════════════════════════════════════════════════════
         private val TONE_SETTINGS = mapOf(
 
-            // EMERGENCY — ambulance, medical, danger
-            // stability=0.20: maximum expression, pitch variation, urgency
-            // style=0.70: intense and commanding (was 0.00 = completely flat/robotic)
-            // speed=1.08: slightly faster = urgency
-            // OLD: stability=0.90, style=0.00 → sounded flat and robotic for emergencies
+            // EMERGENCY — ambulance, heart attack, danger
+            // Sounds COMMANDING and URGENT — unmistakably serious
             EmotionTone.EMERGENCY to VoiceSettings(
-                stability = 0.20,        // LOW = maximum expression
-                similarityBoost = 0.88,
-                style = 0.70,            // HIGH = urgent, serious, commanding
-                speed = 1.08             // faster = urgency
+                stability = 0.12,        // near-minimum = maximum pitch variation
+                similarityBoost = 0.90,
+                style = 0.88,            // intense, urgent, commanding
+                speed = 1.12             // faster = urgency
             ),
 
-            // EMPATHETIC — silence retries, errors, user frustrated
-            // stability=0.32: emotional, gentle variation
-            // style=0.48: soft sympathy clearly audible (was 0.03 = nearly no character)
-            // speed=0.75: slower = patience, giving user time (was 0.82 = too fast)
-            // OLD: stability=0.75, style=0.03 → nearly identical to NORMAL
+            // EMPATHETIC — retry after silence, errors, frustration
+            // Sounds SOFT, GENTLE, PATIENT — clearly different from normal
             EmotionTone.EMPATHETIC to VoiceSettings(
-                stability = 0.32,        // LOW-MEDIUM = emotional, gentle
-                similarityBoost = 0.82,
-                style = 0.48,            // MEDIUM-HIGH = soft sympathy audible
-                speed = 0.75             // SLOW = patient, not rushing user
+                stability = 0.22,        // emotional, gentle variation
+                similarityBoost = 0.85,
+                style = 0.72,            // strong warmth and sympathy
+                speed = 0.72             // noticeably SLOWER = patient, unhurried
             ),
 
-            // NORMAL — prices, product lists, factual info
-            // Stable and clear. Not robotic, not performative.
+            // NORMAL — prices, product lists, facts
+            // Sounds CLEAR and NEUTRAL — informational, no emotion
             EmotionTone.NORMAL to VoiceSettings(
-                stability = 0.55,        // MEDIUM = stable, consistent
-                similarityBoost = 0.72,
-                style = 0.10,            // LOW = neutral info delivery
-                speed = 0.88
+                stability = 0.62,        // stable, consistent delivery
+                similarityBoost = 0.70,
+                style = 0.02,            // near-zero style = flat info delivery
+                speed = 0.92
             ),
 
-            // WARM — greetings, item added, order placed
-            // stability=0.42: natural friendly variation (was 0.68 = too flat)
-            // style=0.40: warmth clearly audible (was 0.12 = barely any personality)
-            // speed=0.82: slightly slow = unhurried, comfortable
-            // OLD: stability=0.68, style=0.12 → nearly same as NORMAL, no warmth
+            // WARM — greetings, item added, relationship moments
+            // Sounds FRIENDLY and RELAXED — clearly warmer than NORMAL
             EmotionTone.WARM to VoiceSettings(
-                stability = 0.42,        // LOW-MEDIUM = expressive natural range
-                similarityBoost = 0.78,
-                style = 0.40,            // MEDIUM = warmth and personality audible
-                speed = 0.82             // slightly slow = unhurried, friendly
+                stability = 0.38,        // natural variation = sounds human
+                similarityBoost = 0.80,
+                style = 0.52,            // strong warmth, clearly different from NORMAL 0.02
+                speed = 0.80             // slower = unhurried, comfortable
             ),
 
-            // EXCITED — payment done, confirmations, good news (NEW tone)
-            // stability=0.28: dynamic, lively
-            // style=0.55: clear upbeat energy
-            // speed=0.95: slightly faster = cheerful
+            // EXCITED — payment done, order confirmed, celebrations
+            // Sounds UPBEAT and ENERGETIC — the happiest Butler gets
             EmotionTone.EXCITED to VoiceSettings(
-                stability = 0.28,        // LOW = dynamic, energetic
-                similarityBoost = 0.76,
-                style = 0.55,            // HIGH = clear upbeat energy
-                speed = 0.95             // slightly faster = cheerful pace
+                stability = 0.18,        // dynamic, lively
+                similarityBoost = 0.78,
+                style = 0.80,            // high energy, clearly celebratory
+                speed = 1.00             // natural pace with energy
             )
         )
     }
