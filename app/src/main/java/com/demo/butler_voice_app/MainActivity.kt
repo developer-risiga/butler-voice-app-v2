@@ -75,6 +75,8 @@ import com.demo.butler_voice_app.api.StorePrice
 import com.demo.butler_voice_app.api.PriceComparison
 import com.demo.butler_voice_app.api.ProductRecommendation
 import java.util.concurrent.TimeUnit
+import com.demo.butler_voice_app.utils.LRM
+import com.demo.butler_voice_app.utils.UserSessionManager_compat
 
 enum class AssistantState {
     IDLE, CHECKING_AUTH,
@@ -579,6 +581,8 @@ class MainActivity : ComponentActivity() {
             else                  -> "en-IN"
         }
         SessionLanguageManager.forceSet(lockedCode)
+        UserSessionManager_compat.firstName = name
+
 
         // Warm demo cache while greeting plays
         lifecycleScope.launch(Dispatchers.IO) {
