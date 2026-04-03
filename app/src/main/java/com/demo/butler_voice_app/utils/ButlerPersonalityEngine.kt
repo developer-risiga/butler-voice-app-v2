@@ -6,27 +6,29 @@ import java.util.Calendar
 /**
  * ButlerPersonalityEngine — every word Butler speaks, humanised.
  *
- * KEY RULE FOR ALL STRINGS:
- *   - Never mix Devanagari + Latin in the same sentence.
- *   - Keep sentences short — TTS reads them better.
+ * VOICE DESIGN PRINCIPLE (from demo feedback):
+ *   Natural > Enthusiastic. Clean > Expressive.
+ *   Butler sounds like a helpful, unhurried kirana assistant —
+ *   not a cheerful chatbot. No "Badhiya!", no "Perfect!", no "Welcome back!".
+ *   Short sentences. Active verbs. No mixed script.
  *
- * TRANSLATION NOTE for orderPlaced Hindi strings:
- *   TranslationManager.translate() detects source language before deciding
- *   whether to translate. Pure Hinglish (no Devanagari) gets detected as
- *   English → translated to Hindi → mixed script output.
- *   FIX: Hindi orderPlaced strings include at least one Devanagari word so
- *   TranslationManager logs "Same language (hi == hi), skipping".
- *
- * ITEM ADDED NOTE:
- *   $productName passed in from handleRecSelectionByIndex is now
- *   "Brand Category" format — e.g. "Daawat Brown rice", "24 Mantra dal".
- *   Strings use $full (brand + category, up to 3 words) so the user always
- *   hears what product was added, not just a brand name.
- *   "cart mein aa gaya" replaces "le liya" — clearer for grocery context.
+ * COMPLETE REPLACEMENT MAP (Hindi demo flow):
+ *   reorderGreeting  : "Roy, wahi chahiye kya — Daawat Brown, ...?"
+ *   itemAdded (1)    : "Daawat Brown rice dal diya."
+ *   itemAdded (2)    : "24 Mantra daal dal diya."
+ *   askMore sug      : "Daal bhi saath mein du?"
+ *   askMore plain    : "Bas itna? / Kuch aur?"
+ *   didntHear (1)    : "Kuch suna nahi. Thoda aur oonchi awaaz mein boliye."
+ *   didntHear (2)    : "Samajh nahi aaya. Phir se boliye."
+ *   confirmOrder     : "Ek Daawat Brown, ek 24 Mantra. Total ₹90. Order kar doon?"
+ *   askPaymentMode   : "UPI se doge ya card se?"
+ *   upiInstruction   : "UPI ID hai butler@upi. $amount bhej dena."
+ *   askIfPaid (UPI)  : "Ho gaya payment? $amount aa gaye?"
+ *   paymentDone      : "Acha, ho gaya."
+ *   orderPlaced      : "Order BUT-000085 lag gaya. 30 minute mein delivery aa jayegi. Thank you."
  */
 object ButlerPersonalityEngine {
 
-    // ── Session de-duplication ────────────────────────────────────────────
     private val lastUsed = mutableMapOf<String, Int>()
 
     private fun pick(key: String, variants: List<String>): String {
@@ -55,79 +57,79 @@ object ButlerPersonalityEngine {
         return when {
             lang.startsWith("hi") -> when {
                 lastProduct != null -> pick("hi_greet_ret", listOf(
-                    "$name ji, namaste! $lastProduct phir se mangwaoon?",
-                    "Arrey $name ji! Kya haal hai? $lastProduct chahiye aaj?",
-                    "$name ji, aagaye! Pichla $lastProduct tha. Wahi lein?",
-                    "Namaste $name ji! $lastProduct ya kuch naya?",
-                    "$name bhai, swagat! Aaj kya mangwaaoon?"
+                    "$name, $lastProduct chahiye kya?",
+                    "$name, pichli baar $lastProduct liya tha. Wahi doon?",
+                    "$name, $lastProduct fir se?",
+                    "$name ji, kya chahiye aaj?",
+                    "$name, bolo kya laana hai."
                 ))
                 time == "morning" -> pick("hi_greet_morn", listOf(
-                    "Good morning $name ji! Subah ki zaroorat batao.",
-                    "Namaste $name ji! Subah subah kya chahiye?",
-                    "$name ji, good morning! Kya la doon?"
+                    "$name ji, subah ki zaroorat batao.",
+                    "$name, subah mein kya chahiye?",
+                    "$name ji, kya laana hai?"
                 ))
                 time == "evening" -> pick("hi_greet_eve", listOf(
-                    "Namaste $name ji! Shaam ko kya chahiye?",
-                    "$name ji, good evening! Kya mangwaaoon?",
-                    "Arrey $name ji! Shaam ka kya lana hai?"
+                    "$name ji, shaam mein kya chahiye?",
+                    "$name, kya mangwaaein?",
+                    "$name ji, bolo kya laana hai."
                 ))
                 else -> pick("hi_greet_new", listOf(
-                    "Namaste $name ji! Kya la doon aaj?",
-                    "$name ji, swagat hai! Kya chahiye?",
-                    "Arrey $name ji! Kaise hain? Kya mangwaaoon?",
-                    "Namaste $name ji! Batao, kya chahiye?"
+                    "$name ji, kya chahiye?",
+                    "$name, bolo kya laana hai.",
+                    "$name ji, kya mangwaaein?",
+                    "$name, haan boliye."
                 ))
             }
             lang.startsWith("te") -> when {
                 lastProduct != null -> pick("te_greet_ret", listOf(
-                    "Namaskaram $name garu! $lastProduct meeru tecchukovadam? Ledanta?",
-                    "$name garu, bayalderaaru! Pichade $lastProduct. Meeru tistara?",
+                    "$name garu! $lastProduct meeru tecchukovadam? Ledanta?",
+                    "$name garu, $lastProduct kavala?",
                     "Namaskaram $name! Innikemi kavali?"
                 ))
                 time == "morning" -> pick("te_greet_morn", listOf(
                     "Subha prabhatam $name garu! Emi kavali?",
-                    "$name garu, mangalavasaram! Emi teestara?"
+                    "$name garu, emi teestara?"
                 ))
                 else -> pick("te_greet_base", listOf(
                     "Namaskaram $name garu! Emi kavali?",
-                    "$name garu, bayalderaaru! Emi cheppandee?",
+                    "$name garu, emi cheppandee?",
                     "Namaskaram $name! Innikemi kavali?"
                 ))
             }
             lang.startsWith("ta") -> pick("ta_greet", listOf(
                 "Vanakkam $name! Enna vendum?",
-                "$name, vanakkam! Enna tharen?"
+                "$name, enna tharen?"
             ))
             lang.startsWith("kn") -> pick("kn_greet", listOf(
                 "Namaskara $name! Enu beku?",
-                "$name, namaskara! Enu tegolabeeku?"
+                "$name, enu tegolabeeku?"
             ))
             lang.startsWith("ml") -> pick("ml_greet", listOf(
                 "Namaskaram $name! Enthu veno?",
-                "$name, namaskaram! Enthu venam?"
+                "$name, enthu venam?"
             ))
             lang.startsWith("pa") -> pick("pa_greet", listOf(
                 "Sat sri akal $name ji! Ki chahida?",
-                "$name ji, welcome! Ki mangwaiye?"
+                "$name ji, ki mangwaiye?"
             ))
             lang.startsWith("gu") -> pick("gu_greet", listOf(
                 "Namaste $name! Shu joiye?",
-                "$name, namaste! Shu mangaavun?"
+                "$name, shu mangaavun?"
             ))
             else -> when {
                 lastProduct != null -> pick("en_greet_ret", listOf(
-                    "Hey $name! Last time you had $lastProduct — same again?",
-                    "Welcome back $name! $lastProduct or something new today?",
-                    "Hi $name! Good to have you. What do you need?"
+                    "Hey $name! Same as last time — $lastProduct?",
+                    "Hi $name! Want $lastProduct again?",
+                    "$name, what do you need?"
                 ))
                 time == "morning" -> pick("en_greet_morn", listOf(
-                    "Good morning $name! What can I get you?",
-                    "Morning $name! What do you need today?"
+                    "Morning $name! What do you need?",
+                    "Good morning $name! What can I get you?"
                 ))
                 else -> pick("en_greet_new", listOf(
-                    "Hey $name! What can I get you?",
                     "Hi $name! What do you need?",
-                    "Welcome $name! What shall I order?"
+                    "Hey $name! What can I get you?",
+                    "$name, what shall I order?"
                 ))
             }
         }
@@ -135,44 +137,47 @@ object ButlerPersonalityEngine {
 
     // ═════════════════════════════════════════════════════════════════════
     // 2. REORDER SUGGESTION
+    //
+    // CHANGE: Remove "Welcome back", "Arrey", "Pichli baar X mangaya tha"
+    // preamble. Just ask directly: "$name, wahi chahiye kya — $items?"
     // ═════════════════════════════════════════════════════════════════════
 
     fun reorderGreeting(name: String, items: String, lang: String): String {
         return when {
             lang.startsWith("hi") -> pick("hi_reorder", listOf(
-                "$name ji, pichli baar $items mangaya tha. Wahi chahiye?",
-                "Arrey $name! $items phir se chahiye?",
-                "$name, $items ka order karoon?",
-                "$name ji, $items phir se order karein?"
+                "$name, wahi chahiye kya — $items?",
+                "$name, $items fir se du?",
+                "$name ji, $items order karoon?",
+                "$name, $items chahiye?"
             ))
             lang.startsWith("te") -> pick("te_reorder", listOf(
-                "$name garu, chivari sari $items teecchukonnaaru. Ippudu kavala?",
+                "$name garu, $items kavala?",
                 "$name, $items meeru mandistara?"
             ))
             lang.startsWith("ta") -> pick("ta_reorder", listOf(
-                "$name, kadalasiya $items vaanginenga. Innum venuma?",
-                "$name, $items again poduma?"
+                "$name, $items venuma?",
+                "$name, $items poduma?"
             ))
             lang.startsWith("kn") -> pick("kn_reorder", listOf(
-                "$name, kelasa sari $items tegonaaru. Ippudu beku?",
+                "$name, $items beku?",
                 "$name, $items again beku?"
             ))
             lang.startsWith("ml") -> pick("ml_reorder", listOf(
-                "$name, kzhinja thavanaye $items vaanghi. Ippo venum?",
+                "$name, $items venum?",
                 "$name, $items again venam?"
             ))
             lang.startsWith("pa") -> pick("pa_reorder", listOf(
-                "$name ji, pichhli baar $items mangwaaya si. Wahi chahida?",
+                "$name ji, $items chahida?",
                 "$name, $items phir mangwaiye?"
             ))
             lang.startsWith("gu") -> pick("gu_reorder", listOf(
-                "$name, cheli vaar $items mangavyu hatu. Pharthi joiye?",
+                "$name, $items joiye?",
                 "$name, $items again joiye?"
             ))
             else -> pick("en_reorder", listOf(
-                "Welcome back $name! Want the usual — $items?",
-                "Hey $name! Shall I reorder $items?",
-                "$name, same as last time — $items?"
+                "$name, same as last time — $items?",
+                "Hey $name! $items again?",
+                "$name, want the usual — $items?"
             ))
         }
     }
@@ -180,50 +185,38 @@ object ButlerPersonalityEngine {
     // ═════════════════════════════════════════════════════════════════════
     // 3. ITEM ADDED CONFIRMATION
     //
-    // CHANGE from previous version:
-    //   $productName is now "Brand Category" e.g. "Daawat Brown rice"
-    //   $short = first 2 words = "Daawat Brown"  (brand, used for speed)
-    //   $full  = first 3 words = "Daawat Brown rice" (brand + product noun)
+    // CHANGE: "Perfect! $full le liya / cart mein aa gaya"
+    //      → "$full dal diya."
     //
-    //   Hindi strings changed:
-    //   BEFORE: "Perfect! $short le liya."  → "Perfect! Daawat Brown le liya."
-    //           (sounds like user picked up the brand, not a grocery item)
-    //   AFTER:  "Theek hai! $full cart mein aa gaya."
-    //           → "Theek hai! Daawat Brown rice cart mein aa gaya."
-    //           (clear: the rice product was added to cart)
+    // "dal diya" = "put it in / added it" — active, clear, short.
+    // $full = brand + category ("Daawat Brown rice", "24 Mantra daal")
+    // $short = brand only ("Daawat Brown") — used when speed matters
     // ═════════════════════════════════════════════════════════════════════
 
     fun itemAdded(productName: String, lang: String, mood: UserMood, cartSize: Int): String {
-        // short: brand name only (first 2 words) — for fast reads
         val short = productName.split(" ").take(2)
             .joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
-        // full: brand + category (first 3 words) — tells user what product
         val full = productName.split(" ").take(3)
             .joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
         return when {
             lang.startsWith("hi") -> when (mood) {
                 UserMood.FRUSTRATED, UserMood.RUSHED -> pick("hi_added_r", listOf(
-                    // Short and direct — frustrated user wants speed, no filler
-                    "Theek.", "$short — done.", "Ho gaya.", "Cart mein aa gaya."
+                    "Theek.", "$short — ho gaya.", "Dal diya.", "Rakh diya."
                 ))
                 else -> when (cartSize) {
                     1 -> pick("hi_added_1", listOf(
-                        // First item — say full name so user knows what was added
-                        "Theek hai! $full cart mein aa gaya.",
-                        "$full add ho gaya.",
-                        "Badhiya! $full — sahi choice.",
-                        "Haan! $full.",
-                        "$full — perfect."
+                        "$full dal diya.",
+                        "$full rakh diya.",
+                        "$full — ho gaya.",
+                        "$full le liya."
                     ))
                     2 -> pick("hi_added_2", listOf(
-                        // Second item — slightly shorter
-                        "$full bhi cart mein.",
-                        "$full bhi aa gaya.",
-                        "Haan, $full bhi."
+                        "$full dal diya.",
+                        "$full bhi rakh diya.",
+                        "$full bhi ho gaya."
                     ))
                     else -> pick("hi_added_n", listOf(
-                        // 3+ items — very brief, keep pace
-                        "$short bhi.", "Done.", "$full — ho gaya."
+                        "$short bhi.", "$full — ho gaya.", "Dal diya."
                     ))
                 }
             }
@@ -232,26 +225,26 @@ object ButlerPersonalityEngine {
                     "Sare.", "$short ayindi.", "Done."
                 ))
                 else -> pick("te_added", listOf(
-                    "Bagundi! $full teecchukonnaanu.",
+                    "$full teecchukonnaanu.",
                     "$full perfect choice!",
                     "Ha! $full.",
-                    "Sare, $full le tecchaanu."
+                    "Sare, $full."
                 ))
             }
             lang.startsWith("ta") -> pick("ta_added", listOf(
-                "Sari! $full vaanginein.", "$full aachi.", "Ok $full."
+                "$full vaanginein.", "$full aachi.", "Ok $full."
             ))
             lang.startsWith("kn") -> pick("kn_added", listOf(
-                "Aaytu! $full tagondu.", "$full aaytu.", "Ok $full."
+                "$full tagondu.", "$full aaytu.", "Ok $full."
             ))
             lang.startsWith("ml") -> pick("ml_added", listOf(
-                "Sheri! $full eduthu.", "$full ayi.", "Ok $full."
+                "$full eduthu.", "$full ayi.", "Ok $full."
             ))
             lang.startsWith("pa") -> pick("pa_added", listOf(
-                "Changaa! $full cart vich.", "$full aa gaya.", "Ok $full."
+                "$full rakh dita.", "$full aa gaya.", "Ok $full."
             ))
             lang.startsWith("gu") -> pick("gu_added", listOf(
-                "Saaru! $full cart ma.", "$full thai gayu.", "Ok $full."
+                "$full cart ma.", "$full thai gayu.", "Ok $full."
             ))
             else -> when (mood) {
                 UserMood.FRUSTRATED, UserMood.RUSHED -> pick("en_added_r", listOf(
@@ -259,15 +252,15 @@ object ButlerPersonalityEngine {
                 ))
                 else -> when (cartSize) {
                     1 -> pick("en_added_1", listOf(
-                        "Perfect! $full added.",
-                        "Great choice — $full it is!",
-                        "Got it! $full added."
+                        "$full added.",
+                        "Got it — $full.",
+                        "$full — done."
                     ))
                     2 -> pick("en_added_2", listOf(
-                        "$full too.", "$full added as well.", "Done, $full."
+                        "$full too.", "$full added as well.", "$full — done."
                     ))
                     else -> pick("en_added_n", listOf(
-                        "$short too.", "Added.", "Done.", "Got it."
+                        "$short too.", "Added.", "Done."
                     ))
                 }
             }
@@ -276,6 +269,10 @@ object ButlerPersonalityEngine {
 
     // ═════════════════════════════════════════════════════════════════════
     // 4. ASK MORE
+    //
+    // CHANGE: suggestion string from "daal chahiye saath mein?"
+    //      → "Daal bhi saath mein du?"
+    // "du?" = "shall I give?" — natural kirana counter phrasing
     // ═════════════════════════════════════════════════════════════════════
 
     fun askMore(lang: String, mood: UserMood, cartSize: Int, lastProduct: String?): String {
@@ -287,16 +284,16 @@ object ButlerPersonalityEngine {
                 ))
                 else -> if (suggestion != null && cartSize == 1) {
                     pick("hi_more_sug", listOf(
+                        "$suggestion bhi saath mein du?",
                         "$suggestion bhi chahiye?",
-                        "$suggestion chahiye saath mein?",
                         "Aur $suggestion?"
                     ))
                 } else {
                     pick("hi_more", listOf(
+                        "Bas itna?",
                         "Kuch aur?",
                         "Aur kya chahiye?",
                         "Kuch aur lena hai?",
-                        "Bas itna?",
                         "Kuch aur mangwaaoon?"
                     ))
                 }
@@ -329,8 +326,11 @@ object ButlerPersonalityEngine {
                     "More?", "Anything else?", "That it?"
                 ))
                 else -> pick("en_more", listOf(
-                    "Anything else?", "What else do you need?", "More?",
-                    "Shall I add anything else?", "That all for today?"
+                    "Anything else?",
+                    "What else do you need?",
+                    "More?",
+                    "Shall I add anything else?",
+                    "That all for today?"
                 ))
             }
         }
@@ -346,9 +346,9 @@ object ButlerPersonalityEngine {
         return when {
             lang.startsWith("hi") -> pick("hi_qty", listOf(
                 "$short kitna chahiye? Ek kilo, do kilo?",
-                "Kitna lein $short? Ek ya do?",
+                "Kitna loon $short? Ek ya do?",
                 "$short — ek packet ya zyada?",
-                "Kitna mangwaaoon $short?"
+                "Kitna du $short?"
             ))
             lang.startsWith("te") -> pick("te_qty", listOf(
                 "$short entha kavali? Oka kilo, rendo kilo?", "Enta kavali?"
@@ -387,9 +387,9 @@ object ButlerPersonalityEngine {
                     "Kaun sa?", "Naam bolein.", "Kaunsa?"
                 ))
                 else -> pick("hi_sel", listOf(
-                    "Kaunsa lena hai? Naam bolein.",
+                    "Kaunsa chahiye? Naam bolein.",
                     "Brand ka naam batao.",
-                    "Kaunsa chahiye?",
+                    "Kaunsa du?",
                     "Naam bolein.",
                     "Pasand karein."
                 ))
@@ -428,17 +428,22 @@ object ButlerPersonalityEngine {
 
     // ═════════════════════════════════════════════════════════════════════
     // 7. CART CONFIRMATION
+    //
+    // CHANGE: "Theek hai — 1 Daawat Brown, 1 24 Mantra — 90 rupees. Lagaoon?"
+    //      → "Ek Daawat Brown, ek 24 Mantra. Total ₹90. Order kar doon?"
+    //
+    // "Order kar doon?" = "Shall I place the order?" — professional, clear.
+    // No "Lagaoon?" (slap connotation), no "Chalte hain —" filler.
     // ═════════════════════════════════════════════════════════════════════
 
     fun confirmOrder(items: String, total: String, lang: String): String {
         return when {
             lang.startsWith("hi") -> pick("hi_confirm", listOf(
-                "$items — $total. Order karein?",
-                "Total $total — $items. Place karoon?",
-                "Theek hai — $items, $total. Confirm karein?",
-                "$items, $total banta hai. Order de doon?",
-                "$items — jod ke $total. Order ho jaaye?",
-                "$items. $total. Pakka karein?"
+                "$items. Total $total. Order kar doon?",
+                "$items — $total. Order karoon?",
+                "Total $total — $items. Order kar doon?",
+                "$items. $total banta hai. Order?",
+                "$items — $total. Pakka karoon?"
             ))
             lang.startsWith("te") -> pick("te_confirm", listOf(
                 "$items — $total. Order pettana?",
@@ -464,47 +469,52 @@ object ButlerPersonalityEngine {
                 "$items — $total. Shall I order?",
                 "Total $total for $items. Place it?",
                 "$items, $total. Go ahead?",
-                "Got $items. $total total — confirm?",
-                "Looks good — $items, $total. Order?"
+                "Got $items. $total — confirm?",
+                "$items, $total. Order?"
             ))
         }
     }
 
     // ═════════════════════════════════════════════════════════════════════
     // 8. PAYMENT MODE ASK
+    //
+    // CHANGE: "Payment kaise karoge? UPI, card, ya QR scan?"
+    //      → "UPI se doge ya card se?"
+    //
+    // Short, direct. Real kirana language. No "Payment kaise karoge"
     // ═════════════════════════════════════════════════════════════════════
 
     fun askPaymentMode(amount: String, lang: String): String {
         return when {
             lang.startsWith("hi") -> pick("hi_pay_ask", listOf(
-                "$amount ka payment kaise karein? UPI, card, ya QR?",
-                "Payment kaise karoge? UPI, card, ya QR scan?",
-                "$amount — UPI bhejein ya card? QR bhi hai.",
-                "Kaise pay karein? UPI, card, ya QR?"
+                "UPI se doge ya card se?",
+                "$amount — UPI ya card?",
+                "UPI, card, ya QR — kaise doge?",
+                "Kaise dena hai — UPI ya card?"
             ))
             lang.startsWith("te") -> pick("te_pay_ask", listOf(
-                "$amount payment ela cheyali? UPI, card, leda QR?",
-                "Payment ela? UPI, card, QR?"
+                "UPI istara leda card?",
+                "$amount ela istara? UPI ya card?"
             ))
             lang.startsWith("ta") -> pick("ta_pay_ask", listOf(
-                "$amount payment epdi? UPI, card, QR?", "Epdi pay pannuvenga?"
+                "UPI la kuduppeenga, card la?", "Epdi pay pannuvenga?"
             ))
             lang.startsWith("kn") -> pick("kn_pay_ask", listOf(
-                "$amount payment hege? UPI, card, QR?", "Hege pay madali?"
+                "UPI na card — hege pay madali?", "Hege pay madali?"
             ))
             lang.startsWith("ml") -> pick("ml_pay_ask", listOf(
-                "$amount payment engane? UPI, card, QR?", "Engane pay cheyyam?"
+                "UPI aano card aano?", "Engane pay cheyyam?"
             ))
             lang.startsWith("pa") -> pick("pa_pay_ask", listOf(
-                "$amount payment kiven karan? UPI, card, QR?", "Kiven paisa denaa?"
+                "UPI de ke card de?", "Kiven paisa denaa?"
             ))
             lang.startsWith("gu") -> pick("gu_pay_ask", listOf(
-                "$amount payment kem? UPI, card, QR?", "Kem pay karishu?"
+                "UPI ke card?", "Kem pay karishu?"
             ))
             else -> pick("en_pay_ask", listOf(
-                "How would you like to pay $amount? UPI, card, or QR?",
-                "$amount — UPI, card, or scan QR?",
-                "Payment for $amount — how? UPI, card, or QR?"
+                "UPI or card?",
+                "$amount — how do you want to pay? UPI or card?",
+                "UPI, card, or QR?"
             ))
         }
     }
@@ -512,69 +522,73 @@ object ButlerPersonalityEngine {
     // ═════════════════════════════════════════════════════════════════════
     // 9. UPI INSTRUCTION
     //
-    // FIX: Never speak butler@upi — ButlerSpeechFormatter converts @ → "at"
-    // producing "butler at UPI pe bhejo" which sounds broken.
-    // UPI ID is shown on screen — tell user to look at screen.
+    // CHANGE: "UPI ID screen pe dikh raha hai..."
+    //      → "UPI ID hai butler@upi. $amount bhej dena."
+    //
+    // User-specified exact phrasing. Clear and direct.
     // ═════════════════════════════════════════════════════════════════════
 
     fun upiInstruction(amount: String, lang: String): String {
         return when {
             lang.startsWith("hi") -> pick("hi_upi", listOf(
-                "$amount bhejo — UPI ID screen pe dikh raha hai. Ho jaaye toh batana.",
-                "Screen pe UPI ID dekh ke $amount transfer karein. Bata dena.",
-                "UPI se $amount bhejein — ID screen pe hai. Done hone pe bolein.",
-                "$amount ka UPI screen pe hai. Bhej ke batana."
+                "UPI ID hai butler@upi. $amount bhej dena.",
+                "$amount bhejo — UPI ID screen pe dikh raha hai.",
+                "UPI pe $amount bhejein. ID screen pe hai.",
+                "Screen pe UPI ID dekh ke $amount bhejo."
             ))
             lang.startsWith("te") -> pick("te_upi", listOf(
-                "$amount pampu — UPI ID screen lo undi. Ayinaaka cheppandi.",
-                "Screen lo UPI ID chusi $amount pampu. Chesaaka cheppandi."
+                "UPI ID butler@upi. $amount pampu.",
+                "$amount pampu — UPI ID screen lo undi."
             ))
             lang.startsWith("ta") -> pick("ta_upi", listOf(
-                "$amount anuppu — UPI ID screen-la irukku. Aanadhum sollunga.",
-                "Screen-la UPI ID paathu $amount anuppu. Done aana sollunga."
+                "UPI ID butler@upi. $amount anuppu.",
+                "$amount anuppu — UPI ID screen-la irukku."
             ))
             lang.startsWith("kn") -> pick("kn_upi", listOf(
-                "$amount kali — UPI ID screen mele ide. Aadamele heli.",
-                "Screen mele UPI ID nodi $amount kali. Madidamele heli."
+                "UPI ID butler@upi. $amount kali.",
+                "$amount kali — UPI ID screen mele ide."
             ))
             lang.startsWith("ml") -> pick("ml_upi", listOf(
-                "$amount aykku — UPI ID screen-il kaanam. Ayal parayo.",
-                "Screen-il UPI ID nokki $amount aykku. Cheshal parayo."
+                "UPI ID butler@upi. $amount aykku.",
+                "$amount aykku — UPI ID screen-il kaanam."
             ))
             lang.startsWith("pa") -> pick("pa_upi", listOf(
-                "$amount bhejo — UPI ID screen te hai. Ho jaaye te dasao.",
-                "Screen te UPI ID dekh ke $amount bhejo. Done hone te dasao."
+                "UPI ID hai butler@upi. $amount bhejo.",
+                "$amount bhejo — UPI ID screen te hai."
             ))
             lang.startsWith("gu") -> pick("gu_upi", listOf(
-                "$amount moklo — UPI ID screen par chhe. Thai jaay tyare kaho.",
-                "Screen par UPI ID joi ne $amount moklo. Done thay tyare kaho."
+                "UPI ID chhe butler@upi. $amount moklo.",
+                "$amount moklo — UPI ID screen par chhe."
             ))
             else -> pick("en_upi", listOf(
-                "Send $amount via UPI — the ID is shown on screen. Let me know when done.",
-                "Check the UPI ID on screen and send $amount. Tell me when it's through.",
-                "UPI ID is on screen. Pay $amount and say done."
+                "UPI ID is butler@upi. Send $amount.",
+                "Send $amount to butler@upi. Let me know when done.",
+                "UPI ID on screen. Pay $amount and say done."
             ))
         }
     }
 
     // ═════════════════════════════════════════════════════════════════════
     // 10. PAYMENT CONFIRMATION ASK
+    //
+    // CHANGE: "UPI ho gaya? nabbe rupaye pahuncha?"
+    //      → "Ho gaya payment? $amount aa gaye?"
     // ═════════════════════════════════════════════════════════════════════
 
     fun askIfPaid(lang: String, mode: String, amount: String): String {
         return when {
             lang.startsWith("hi") -> when (mode) {
                 "upi"  -> pick("hi_paid_upi", listOf(
-                    "UPI ho gaya? $amount pahuncha?",
+                    "Ho gaya payment? $amount aa gaye?",
                     "$amount bhej diya?",
-                    "UPI done?",
-                    "Ho gayi payment?"
+                    "Payment ho gaya?",
+                    "UPI ho gaya?"
                 ))
                 "card" -> pick("hi_paid_card", listOf(
-                    "Card se $amount ho gaya?", "Payment complete?", "Card done?"
+                    "Card se ho gaya?", "Payment complete?", "Card done?"
                 ))
                 else   -> pick("hi_paid_qr", listOf(
-                    "QR scan ho gaya?", "$amount pay hua?", "Done?"
+                    "QR scan ho gaya?", "$amount pay hua?", "Ho gaya?"
                 ))
             }
             lang.startsWith("te") -> pick("te_paid", listOf(
@@ -603,71 +617,78 @@ object ButlerPersonalityEngine {
 
     // ═════════════════════════════════════════════════════════════════════
     // 11. PAYMENT DONE REACTION
+    //
+    // CHANGE: "Perfect!", "Shukriya!", "Badhiya!" (too cheerful)
+    //      → "Acha, ho gaya." (calm, professional, natural)
     // ═════════════════════════════════════════════════════════════════════
 
     fun paymentDone(lang: String): String {
         return when {
             lang.startsWith("hi") -> pick("hi_paydone", listOf(
-                "Perfect!", "Shukriya!", "Badhiya!", "Ho gaya!"
+                "Acha, ho gaya.",
+                "Theek hai.",
+                "Ho gaya."
             ))
             lang.startsWith("te") -> pick("te_paydone", listOf(
-                "Bagundi!", "Dhanyavaadaalu!", "Perfect!"
+                "Sare, ayindi.", "Aindi.", "Ok."
             ))
-            lang.startsWith("ta") -> pick("ta_paydone", listOf("Nandri!", "Perfect!", "Sari!"))
-            lang.startsWith("kn") -> pick("kn_paydone", listOf("Dhanyavada!", "Perfect!", "Aaytu!"))
-            lang.startsWith("ml") -> pick("ml_paydone", listOf("Nandri!", "Perfect!", "Ayi!"))
-            lang.startsWith("pa") -> pick("pa_paydone", listOf("Shukriya!", "Changaa!", "Ho gaya!"))
-            lang.startsWith("gu") -> pick("gu_paydone", listOf("Shukriya!", "Saaru!", "Thai gayu!"))
-            else -> pick("en_paydone", listOf("Perfect!", "Got it!", "Great, thank you!", "Received!"))
+            lang.startsWith("ta") -> pick("ta_paydone", listOf("Sari.", "Aachi.", "Ok."))
+            lang.startsWith("kn") -> pick("kn_paydone", listOf("Sari.", "Aaytu.", "Ok."))
+            lang.startsWith("ml") -> pick("ml_paydone", listOf("Sari.", "Ayi.", "Ok."))
+            lang.startsWith("pa") -> pick("pa_paydone", listOf("Theek hai.", "Ho gaya.", "Ok."))
+            lang.startsWith("gu") -> pick("gu_paydone", listOf("Saru.", "Thai gayu.", "Ok."))
+            else -> pick("en_paydone", listOf("Got it.", "Okay.", "Received.", "Done."))
         }
     }
 
     // ═════════════════════════════════════════════════════════════════════
     // 12. ORDER PLACED
     //
-    // FIX: each Hindi string has Devanagari → TranslationManager skips it
-    // → no mixed script (ऑर्डर confirm, tees minute में delivery etc.)
+    // CHANGE: "बढ़िया Roy! Order BUT-000085 laga. 30 minute mein delivery. Shukriya!"
+    //      → "Order BUT-000085 lag gaya. 30 minute mein delivery aa jayegi. Thank you."
+    //
+    // Cleaner. No "Badhiya", no name, professional tone.
+    // Contains Devanagari → TranslationManager skips, no mixed script.
     // ═════════════════════════════════════════════════════════════════════
 
     fun orderPlaced(name: String, orderId: String, amount: String, etaMins: Int, lang: String): String {
         val eta = if (etaMins > 0) etaMins else 30
         return when {
             lang.startsWith("hi") -> pick("hi_order_placed", listOf(
-                "हो गया $name ji! Order $orderId confirm. $eta minute में pahunch jayega. Shukriya!",
-                "$name ji, order $orderId confirm हो गया. $eta minute में aa jayega. Dhanyavaad!",
-                "बढ़िया $name! Order $orderId cart se nikal gaya. $eta minute mein delivery. Shukriya!",
-                "Done $name ji! Order $orderId — $eta minute में. Bahut shukriya!",
-                "$name ji, $orderId confirm! $eta minute में pahunchega. Dhanyavaad!"
+                "Order $orderId lag गया. $eta minute mein delivery aa jayegi. Thank you.",
+                "$orderId confirm हो गया. $eta minute mein aa jayega. Shukriya.",
+                "Order $orderId हो गया. $eta minute mein pahunch jayega.",
+                "हो गया. Order $orderId — $eta minute mein delivery. Thank you.",
+                "$orderId laga. $eta minute mein आ जायेगा. Dhanyavaad."
             ))
             lang.startsWith("te") -> pick("te_order_placed", listOf(
-                "$name garu, order confirm ayindi! $orderId. $eta nimishaallo vastundi. Dhanyavaadaalu!",
-                "Baagundi $name! Order $orderId. $eta minutes lo deliveri. Chala dhanyavaadaalu!"
+                "Order $orderId confirm ayindi. $eta nimishaallo vastundi. Dhanyavaadaalu.",
+                "$orderId laga. $eta minutes lo deliveri. Chala dhanyavaadaalu."
             ))
             lang.startsWith("ta") -> pick("ta_order_placed", listOf(
-                "$name, order confirm! $orderId. $eta nitcham varum. Nandri!",
-                "Sari $name! $orderId — $eta nimidam. Nandri!"
+                "Order $orderId confirm. $eta nitcham varum. Nandri.",
+                "$orderId — $eta nimidam. Nandri."
             ))
             lang.startsWith("kn") -> pick("kn_order_placed", listOf(
-                "$name, order aaytu! $orderId. $eta nimishada hage baruttade. Dhanyavada!",
-                "Aaytu $name! $orderId — $eta nimisha. Dhanyavada!"
+                "Order $orderId aaytu. $eta nimishada hage baruttade. Dhanyavada.",
+                "$orderId — $eta nimisha. Dhanyavada."
             ))
             lang.startsWith("ml") -> pick("ml_order_placed", listOf(
-                "$name, order confirmed! $orderId. $eta minuteinu orathe ettum. Nandri!",
-                "Ayi $name! $orderId — $eta minute. Nandri!"
+                "Order $orderId confirmed. $eta minuteinu orathe ettum. Nandri.",
+                "$orderId — $eta minute. Nandri."
             ))
             lang.startsWith("pa") -> pick("pa_order_placed", listOf(
-                "$name ji, order confirm ho gaya! $orderId. $eta minute vich aa jauga. Shukriya!",
-                "Ho gaya $name! $orderId — $eta minute. Bahut shukriya!"
+                "Order $orderId confirm ho gaya. $eta minute vich aa jauga. Shukriya.",
+                "$orderId — $eta minute. Shukriya."
             ))
             lang.startsWith("gu") -> pick("gu_order_placed", listOf(
-                "$name, order confirm thai gayu! $orderId. $eta minute ma aavse. Shukriya!",
-                "Thai gayu $name! $orderId — $eta minute. Shukriya!"
+                "Order $orderId confirm thai gayu. $eta minute ma aavse. Shukriya.",
+                "$orderId — $eta minute. Shukriya."
             ))
             else -> pick("en_order_placed", listOf(
-                "Done $name! Order $orderId confirmed. Arriving in about $eta minutes. Thank you!",
-                "All set $name! $orderId — $eta minutes to your door. Thanks!",
-                "Order placed! $orderId. Should be there in $eta minutes. Thank you $name!",
-                "Confirmed $name! $orderId — delivery in $eta minutes. Cheers!"
+                "Order $orderId placed. Delivery in about $eta minutes. Thank you.",
+                "$orderId confirmed — $eta minutes to your door. Thanks.",
+                "Order placed. $orderId, $eta minutes. Thank you $name."
             ))
         }
     }
@@ -680,9 +701,9 @@ object ButlerPersonalityEngine {
         val short = itemName.take(20)
         return when {
             lang.startsWith("hi") -> pick("hi_notfound", listOf(
-                "Woh abhi available nahi. Kuch aur?",
+                "Woh abhi nahi hai. Kuch aur?",
                 "$short nahi mila. Koi aur brand?",
-                "Sorry, $short stock mein nahi. Kya lein phir?",
+                "$short stock mein nahi. Kya loon phir?",
                 "$short nahi hai. Kuch aur?"
             ))
             lang.startsWith("te") -> pick("te_notfound", listOf(
@@ -704,7 +725,7 @@ object ButlerPersonalityEngine {
                 "Te available nathi. Biju shu?", "$short na maddyo. Kahi biju?"
             ))
             else -> pick("en_notfound", listOf(
-                "That's not available right now. Anything else?",
+                "That's not available. Anything else?",
                 "$short not in stock. Want something else?",
                 "Couldn't find $short. What else?"
             ))
@@ -718,10 +739,10 @@ object ButlerPersonalityEngine {
     fun cartEmpty(lang: String): String {
         return when {
             lang.startsWith("hi") -> pick("hi_empty", listOf(
-                "Abhi kuch nahi hai. Kya lein?",
-                "Cart khaali hai. Kya mangwaaoon?",
-                "Kuch add nahi hua. Kya chahiye?",
-                "Abhi kuch nahi. Bolo kya lena hai."
+                "Abhi kuch nahi hai. Kya loon?",
+                "Cart khaali hai. Kya chahiye?",
+                "Kuch add nahi hua. Kya mangwaaein?",
+                "Kuch nahi. Bolo kya lena hai."
             ))
             lang.startsWith("te") -> pick("te_empty", listOf(
                 "Ippudu emi ledu. Emi kavali?", "Cart khaali ga undi. Cheppandi?"
@@ -751,31 +772,50 @@ object ButlerPersonalityEngine {
 
     // ═════════════════════════════════════════════════════════════════════
     // 15. DIDN'T HEAR / RETRY
+    //
+    // CHANGE (1st retry): "Sorry, ek baar aur? Thoda jor se."
+    //      → "Kuch suna nahi. Thoda aur oonchi awaaz mein boliye."
+    //
+    // CHANGE (2nd retry): "Fir bolein."
+    //      → "Samajh nahi aaya. Phir se boliye."
+    //
+    // "boliye" = polite imperative. "bolein" = slightly formal.
     // ═════════════════════════════════════════════════════════════════════
 
     fun didntHear(lang: String, mood: UserMood, retryCount: Int): String {
         return when {
             lang.startsWith("hi") -> when {
                 mood == UserMood.FRUSTRATED -> pick("hi_retry_frus", listOf(
-                    "Maafi — zara aur seedha bolein.",
-                    "Sorry, ek baar aur? Thoda jor se.",
-                    "Suna nahi. Paas aakar bolein."
+                    "Kuch suna nahi. Thoda aur oonchi awaaz mein boliye.",
+                    "Samajh nahi aaya. Phir se boliye.",
+                    "Awaaz thodi kam hai. Paas aakar boliye."
                 ))
                 retryCount >= 4 -> pick("hi_retry_many", listOf(
-                    "Mic ke paas aakar bolein.",
-                    "Thoda jor se bolein.",
+                    "Mic ke paas aakar boliye.",
+                    "Thoda jor se boliye.",
                     "Signal weak lag raha. Ek baar aur?"
                 ))
                 retryCount == 3 -> pick("hi_retry_3", listOf(
-                    "Ek baar aur bolein.", "Fir se?", "Dobara?"
+                    "Samajh nahi aaya. Phir se boliye.",
+                    "Fir se?",
+                    "Dobara boliye?"
+                ))
+                retryCount == 2 -> pick("hi_retry_2", listOf(
+                    "Samajh nahi aaya. Phir se boliye.",
+                    "Kuch suna nahi. Thoda aur oonchi awaaz mein boliye.",
+                    "Dobara?"
                 ))
                 else -> pick("hi_retry", listOf(
-                    "Haan?", "Kya?", "Dobara?", "Fir bolein.", "Suna nahi.", "Ek baar aur?"
+                    "Kuch suna nahi. Thoda aur oonchi awaaz mein boliye.",
+                    "Haan?",
+                    "Kya?",
+                    "Fir boliye.",
+                    "Suna nahi."
                 ))
             }
             lang.startsWith("te") -> when (mood) {
                 UserMood.FRUSTRATED -> pick("te_retry_frus", listOf(
-                    "Maafi. Inkaa clearly cheppandi.", "Vinaledu. Kastapadandi."
+                    "Vinaledu. Clearly cheppandi.", "Malli cheppandi."
                 ))
                 else -> pick("te_retry", listOf(
                     "Haa?", "Emi?", "Malli cheppandi.", "Vinaledu."
@@ -788,9 +828,9 @@ object ButlerPersonalityEngine {
             lang.startsWith("gu") -> pick("gu_retry", listOf("Ha?", "Shu?", "Sambhaldhu nahi.", "Kaho."))
             else -> when (mood) {
                 UserMood.FRUSTRATED -> pick("en_retry_frus", listOf(
+                    "Didn't catch that. A bit louder?",
                     "Sorry, say that again?",
-                    "Didn't catch that — louder?",
-                    "My bad, one more time?"
+                    "Can't hear you clearly."
                 ))
                 else -> pick("en_retry", listOf(
                     "Sorry?", "Come again?", "Hmm?", "Say that again?", "Didn't catch that."
@@ -807,8 +847,8 @@ object ButlerPersonalityEngine {
         return when {
             lang.startsWith("hi") -> when (mood) {
                 UserMood.FRUSTRATED -> pick("hi_giveup_frus", listOf(
-                    "Koi baat nahi. Mic check karein aur jab ready ho tab hey Butler bolein.",
-                    "Chaliye, baad mein baat karte hain.",
+                    "Koi baat nahi. Jab ready hon, hey Butler bolein.",
+                    "Chaliye, baad mein karte hain.",
                     "Signal problem lag raha. Thodi der baad try karein."
                 ))
                 else -> pick("hi_giveup", listOf(
