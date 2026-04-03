@@ -1879,24 +1879,21 @@ class MainActivity : ComponentActivity() {
                                     wantsLast     -> handleRecSelectionByIndex(2, recs, qty, itemName)
                                     wantsFirst    -> handleRecSelectionByIndex(0, recs, qty, itemName)
                                     else -> {
-                                        val spokenWords = sLow.split(" ")
-                                            .filter { it.length >= 3 }
+                                        // ── FIX: Cross-script brand matching ─────────────────────────
+                                        // PROBLEM: Sarvam STT returns "दावत" when user says "Daawat".
+                                        // Product names in DB are English: "Daawat Brown Basmati".
+                                        // Old: "दावत".startsWith("daawat") = FALSE → no match → asks again.
+                                        //
+                                        // FIX: 3-pass matching:
+                                        //   Pass 1: Direct English word match (user spoke English)
+                                        //   Pass 2: Normalize Devanagari → English, then match again
+                                        //   Pass 3: Phonetic contains check (loose substring match)
+                                        //   Fallback: Pick the first rec rather than re-asking (user
+                                        //             already confirmed by saying a name — just pick best)
+                                        // ─────────────────────────────────────────────────────────────
 
-                                        val pick = recs.maxByOrNull { rec ->
-                                            val recWords = rec.productName.lowercase().split(" ")
-                                            spokenWords.count { sw ->
-                                                recWords.any { rw ->
-                                                    rw.startsWith(sw) || sw.startsWith(rw)
-                                                }
-                                            }
-                                        }?.takeIf { rec ->
-                                            val recWords = rec.productName.lowercase().split(" ")
-                                            spokenWords.any { sw ->
-                                                recWords.any { rw ->
-                                                    rw.startsWith(sw) || sw.startsWith(rw)
-                                                }
-                                            }
-                                        }
+                                        val normalized = normalizeBrandSpelling(sLow)
+                                        val pick = matchBrandFromSpoken(sLow, normalized, recs)
 
                                         if (pick != null) {
                                             handleRecSelectionByIndex(recs.indexOf(pick), recs, qty, itemName)
@@ -1907,12 +1904,6 @@ class MainActivity : ComponentActivity() {
                                                         it.replaceFirstChar { c -> c.uppercase() }
                                                     }
                                             }
-                                            // ── FIX: recapMsg mixed script ────────────────────────────────
-                                            // "Kaunsa rice du?" → TranslationManager detects English →
-                                            // translates → "Kaunsa चावल है? Names में से." → MIXED.
-                                            // Fix: use Devanagari item name → starts with "कौनसा" →
-                                            // TranslationManager detects "hi" → skips → ElevenLabs
-                                            // reads "Kaunsa चावल du? Brand1, Brand2." cleanly ✅
                                             val itemDevanagari = when {
                                                 itemName.contains("rice")  || itemName.contains("chawal")  -> "चावल"
                                                 itemName.contains("dal")   || itemName.contains("daal")    -> "दाल"
@@ -1936,8 +1927,18 @@ class MainActivity : ComponentActivity() {
                                             speakKeepingRecsVisible(recapMsg) {
                                                 startListeningForSelection(
                                                     onNumber = { n -> handleRecSelectionByIndex(n - 1, recs, qty, itemName) },
-                                                    onOther  = { _ ->
-                                                        handleRecSelectionByIndex(0, recs, qty, itemName)
+                                                    onOther  = { spokenAgain ->
+                                                        // ── Second attempt: normalize + match again ──
+                                                        // If still no match, fall through to first option
+                                                        // so we never ask the same question 3 times.
+                                                        val sLow2 = spokenAgain.lowercase().trim()
+                                                            .replace(Regex("[।,.!?]"), "")
+                                                        val norm2  = normalizeBrandSpelling(sLow2)
+                                                        val pick2  = matchBrandFromSpoken(sLow2, norm2, recs)
+                                                        handleRecSelectionByIndex(
+                                                            if (pick2 != null) recs.indexOf(pick2) else 0,
+                                                            recs, qty, itemName
+                                                        )
                                                     },
                                                     retryPrompt = nameRetryPrompt
                                                 )
@@ -2389,6 +2390,112 @@ class MainActivity : ComponentActivity() {
                 showCartAndSpeak("last order ready hai. ${buildShortConfirm(LanguageManager.getLanguage())}") { startListening() }
             }
         }
+    }
+
+    // ── Maps Devanagari/phonetic brand name → English for cross-script match ─
+    // PROBLEM: Sarvam STT returns "दावत" when user says "Daawat" in Hindi.
+    // Product names in the DB are English ("Daawat Brown Basmati").
+    // Direct string comparison fails across scripts.
+    // This map covers the most common Indian grocery brands + their Hindi spellings.
+    private fun normalizeBrandSpelling(spoken: String): String {
+        val brandMap = mapOf(
+            // ── Rice brands ───────────────────────────────────────────────
+            "दावत" to "daawat", "दावात" to "daawat", "dawat" to "daawat", "daavat" to "daawat",
+            "इंडिया गेट" to "india gate", "इण्डिया गेट" to "india gate",
+            "यूनिटी" to "unity", "आर्चीज़" to "archies", "आर्चीस" to "archies",
+            "सोनम" to "sonam", "सोनारी" to "sonari", "दुबार" to "dubar",
+            "कोहिनूर" to "kohinoor", "लाल किला" to "lal qilla",
+            // ── Oil brands ────────────────────────────────────────────────
+            "फॉर्च्यून" to "fortune", "फार्च्यून" to "fortune", "फर्च्यून" to "fortune",
+            "पतंजलि" to "patanjali", "सफोला" to "saffola", "सफ्फोला" to "saffola",
+            "फ्रीडम" to "freedom", "गोल्डविनर" to "goldwinner", "विमल" to "vimal",
+            "डाल्डा" to "dalda", "रूचि" to "ruchi", "सनफ्लावर" to "sunflower",
+            "गावर" to "gaurav", "सरसों" to "mustard", "तिल" to "sesame",
+            // ── Atta / Flour brands ───────────────────────────────────────
+            "आशीर्वाद" to "aashirvaad", "आशिर्वाद" to "aashirvaad", "आशीर्वाद" to "aashirvaad",
+            "अन्नपूर्णा" to "annapurna", "पिलसबरी" to "pillsbury",
+            "शक्ति भोग" to "shakti bhog", "रिलायंस" to "reliance select",
+            // ── Dal brands ────────────────────────────────────────────────
+            "तूर" to "toor", "अरहर" to "arhar", "मूंग" to "moong",
+            "मसूर" to "masoor", "उड़द" to "urad", "चना" to "chana",
+            // ── Salt brands ───────────────────────────────────────────────
+            "टाटा" to "tata", "कैप्टन कुक" to "captain cook", "अनपुर्णा" to "annapurna",
+            // ── Milk / Dairy brands ───────────────────────────────────────
+            "अमूल" to "amul", "नंदिनी" to "nandini", "मदर डेयरी" to "mother dairy",
+            "गोकुल" to "gokul", "सांची" to "sanchi", "परागन" to "parag",
+            // ── Tea brands ────────────────────────────────────────────────
+            "ताज महल" to "taj mahal", "रेड लेबल" to "red label",
+            "ब्रुक बॉन्ड" to "brooke bond", "टेटली" to "tetley",
+            "वाघ बकरी" to "wagh bakri", "गिरनार" to "girnar",
+            // ── Sugar brands ──────────────────────────────────────────────
+            "धाम्पुर" to "dhampur", "केसरी" to "kesari",
+            // ── Ghee brands ───────────────────────────────────────────────
+            "अमूल घी" to "amul ghee", "पतंजलि घी" to "patanjali ghee",
+            "नंदिनी घी" to "nandini ghee", "गोवर्धन" to "gowardhan",
+            // ── Biscuit brands ────────────────────────────────────────────
+            "पारले" to "parle", "ब्रिटानिया" to "britannia", "सनफीस्ट" to "sunfeast",
+            // ── Telugu/Tamil brand names (common phonetics) ───────────────
+            "దావత్" to "daawat", "ఇండియా గేట్" to "india gate",
+            "ఫార్చ్యూన్" to "fortune", "పతంజలి" to "patanjali",
+            "அமுல்" to "amul", "பதஞ்சலி" to "patanjali",
+            "ಅಮೂಲ್" to "amul", "ಪತಂಜಲಿ" to "patanjali"
+        )
+        var result = spoken
+        // Sort by length descending so longer phrases match before shorter ones
+        brandMap.entries.sortedByDescending { it.key.length }.forEach { (script, latin) ->
+            if (result.contains(script)) result = result.replace(script, latin)
+        }
+        return result
+    }
+
+    // ── 3-pass brand matcher: handles Latin, Devanagari, and phonetic ─────
+    // Pass 1: Direct word match (Latin → Latin, for English speakers)
+    // Pass 2: Normalized match (Devanagari → Latin, for Hindi speakers)
+    // Pass 3: Phonetic contains check (loose match for any remaining cases)
+    //
+    // Returns the best matching ProductRecommendation or null.
+    private fun matchBrandFromSpoken(
+        sLow: String,
+        normalized: String,
+        recs: List<ProductRecommendation>
+    ): ProductRecommendation? {
+
+        fun wordScore(query: String, rec: ProductRecommendation): Int {
+            val recWords   = rec.productName.lowercase().split(" ")
+            val queryWords = query.split(" ").filter { it.length >= 3 }
+            return queryWords.count { sw -> recWords.any { rw -> rw.startsWith(sw) || sw.startsWith(rw) } }
+        }
+
+        fun containsScore(query: String, rec: ProductRecommendation): Int {
+            val recLow = rec.productName.lowercase()
+            // Single-word query directly contained in product name (e.g. "daawat" in "daawat brown")
+            val queryWords = query.split(" ").filter { it.length >= 3 }
+            return queryWords.count { sw -> recLow.contains(sw) }
+        }
+
+        // Pass 1 + 2: word boundary matching on original and normalized
+        val directPick = recs.maxByOrNull { rec ->
+            maxOf(wordScore(sLow, rec), wordScore(normalized, rec))
+        }?.takeIf { rec ->
+            maxOf(wordScore(sLow, rec), wordScore(normalized, rec)) > 0
+        }
+        if (directPick != null) return directPick
+
+        // Pass 3: loose contains check on original and normalized
+        val containsPick = recs.maxByOrNull { rec ->
+            maxOf(containsScore(sLow, rec), containsScore(normalized, rec))
+        }?.takeIf { rec ->
+            maxOf(containsScore(sLow, rec), containsScore(normalized, rec)) > 0
+        }
+        if (containsPick != null) return containsPick
+
+        // Pass 4: if the entire spoken text is contained in any product name
+        // (handles short one-word brand names like "amul", "tata")
+        val singleWordPick = recs.firstOrNull { rec ->
+            rec.productName.lowercase().contains(sLow) ||
+                    rec.productName.lowercase().contains(normalized)
+        }
+        return singleWordPick
     }
 
     // ── Maps itemName search term → spoken category word ─────────────────
