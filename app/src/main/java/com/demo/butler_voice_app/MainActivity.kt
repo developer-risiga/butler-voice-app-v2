@@ -560,60 +560,42 @@ class MainActivity : ComponentActivity() {
         history: List<com.demo.butler_voice_app.api.PurchaseSummary>,
         lang: String
     ) {
-        if (history.isNotEmpty()) {
-            lifecycleScope.launch {
-                val userId = FamilyProfileManager.activeProfile?.userId
-                    ?: UserSessionManager.currentUserId() ?: ""
-                val suggestions = SmartReorderManager.getSuggestions(userId)
-                val smartMsg = if (suggestions.isNotEmpty()) {
-                    val items = suggestions.take(3).joinToString(", ") { s ->
-                        s.productName.lowercase().split(" ")
-                            .take(2).joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
-                    }
-                    ButlerPersonalityEngine.reorderGreeting(name, items, lang)
-                } else null
-                runOnUiThread {
-                    val lockedCode = when {
-                        lang.startsWith("hi") -> "hi-IN"
-                        lang.startsWith("te") -> "te-IN"
-                        lang.startsWith("ta") -> "ta-IN"
-                        lang.startsWith("kn") -> "kn-IN"
-                        lang.startsWith("ml") -> "ml-IN"
-                        lang.startsWith("pa") -> "pa-IN"
-                        lang.startsWith("gu") -> "gu-IN"
-                        lang.startsWith("mr") -> "mr-IN"
-                        else                  -> "en-IN"
-                    }
-                    SessionLanguageManager.forceSet(lockedCode)
-
-                    lifecycleScope.launch(Dispatchers.IO) {
-                        try {
-                            productRepo.getTopRecommendations("rice", userLocation)
-                            productRepo.getTopRecommendations("dal",  userLocation)
-                            productRepo.getTopRecommendations("oil",  userLocation)
-                            Log.d("Butler", "Demo cache warmed: rice, dal, oil")
-                        } catch (_: Exception) {}
-                    }
-
-                    if (smartMsg != null && suggestions.isNotEmpty()) {
-                        pendingReorderSuggestions = suggestions
-                        currentState = AssistantState.REORDER_CONFIRM
-                        speak(smartMsg, EmotionTone.WARM) { startListening() }
-                    } else {
-                        currentState = AssistantState.LISTENING
-                        val lastProduct = history.firstOrNull()?.product_name?.takeIf { it.isNotBlank() }
-                        val shortLast = lastProduct?.lowercase()?.split(" ")?.take(2)
-                            ?.joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
-                        val greeting = ButlerPersonalityEngine.greeting(name, lang, shortLast, currentMood)
-                        speak(greeting, EmotionTone.WARM) { startListening() }
-                    }
-                }
-            }
-        } else {
-            currentState = AssistantState.LISTENING
-            val greeting = ButlerPersonalityEngine.greeting(name, lang, null, currentMood)
-            speak(greeting, EmotionTone.WARM) { startListening() }
+        // ── FIX Issue 1: Never proactively say "Want the usual Daawat Brown?" ──
+        // User didn't ask to reorder. Butler was guessing and sounding presumptuous.
+        // "Want the usual?" before user has asked for ANYTHING is a bad UX pattern.
+        // Fix: Always greet normally. User can say "same as last time" / "wahi do"
+        // to trigger reorder. SmartReorderManager still available via REORDER_CONFIRM
+        // when user explicitly requests it in handleOrderIntent.
+        // ─────────────────────────────────────────────────────────────────────────
+        val lockedCode = when {
+            lang.startsWith("hi") -> "hi-IN"
+            lang.startsWith("te") -> "te-IN"
+            lang.startsWith("ta") -> "ta-IN"
+            lang.startsWith("kn") -> "kn-IN"
+            lang.startsWith("ml") -> "ml-IN"
+            lang.startsWith("pa") -> "pa-IN"
+            lang.startsWith("gu") -> "gu-IN"
+            lang.startsWith("mr") -> "mr-IN"
+            else                  -> "en-IN"
         }
+        SessionLanguageManager.forceSet(lockedCode)
+
+        // Warm demo cache while greeting plays
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                productRepo.getTopRecommendations("rice", userLocation)
+                productRepo.getTopRecommendations("dal",  userLocation)
+                productRepo.getTopRecommendations("oil",  userLocation)
+                Log.d("Butler", "Demo cache warmed: rice, dal, oil")
+            } catch (_: Exception) {}
+        }
+
+        currentState = AssistantState.LISTENING
+        val lastProduct = history.firstOrNull()?.product_name?.takeIf { it.isNotBlank() && it != "null" }
+        val shortLast   = lastProduct?.lowercase()?.split(" ")?.take(2)
+            ?.joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
+        val greeting = ButlerPersonalityEngine.greeting(name, lang, shortLast, currentMood)
+        speak(greeting, EmotionTone.WARM) { startListening() }
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -694,7 +676,11 @@ class MainActivity : ComponentActivity() {
                             return@runOnUiThread
                         }
 
-                        if (sttRetryCount < 2) {
+                        // ── FIX Issue 2 + 7: Silence ≠ error. User is thinking.
+                        // Old: 2 silent retries then speak → user got "Didn't catch that"
+                        // too quickly after any pause. Caused frustration and looping.
+                        // Fix: 3 silent retries before speaking. More patient, less intrusive.
+                        if (sttRetryCount < 3) {
                             startListening()
                         } else {
                             sttRetryCount = 0
@@ -771,15 +757,16 @@ class MainActivity : ComponentActivity() {
                     val transcript = text.trim()
                     if (transcript.isBlank()) {
                         val lang = LanguageManager.getLanguage()
+                        // FIX Issue 4: No screen references — voice assistant must work without screen
                         val blankMsg = when {
-                            lang.startsWith("hi") -> "screen पर दिखा नाम बोलें।"
-                            lang.startsWith("te") -> "screen మీద పేరు చెప్పండి."
-                            lang.startsWith("ta") -> "screen-ல் பெயர் சொல்லுங்கள்."
-                            lang.startsWith("kn") -> "screen ಮೇಲಿನ ಹೆಸರು ಹೇಳಿ."
-                            lang.startsWith("ml") -> "screen-ൽ കാണുന്ന പേര് പറയൂ."
-                            lang.startsWith("pa") -> "screen ਤੇ ਦਿਖਾ ਨਾਮ ਦੱਸੋ।"
-                            lang.startsWith("gu") -> "screen પર દેખાતું નામ બોલો."
-                            else -> "Say the brand name you see on screen."
+                            lang.startsWith("hi") -> "Brand ka naam bolein."
+                            lang.startsWith("te") -> "Brand peyru cheppandi."
+                            lang.startsWith("ta") -> "Brand peyar sollungal."
+                            lang.startsWith("kn") -> "Brand hesaru heli."
+                            lang.startsWith("ml") -> "Brand peru parayo."
+                            lang.startsWith("pa") -> "Brand naam dasao."
+                            lang.startsWith("gu") -> "Brand naam bolo."
+                            else -> "Say the brand name."
                         }
                         speak(blankMsg) {
                             Handler(Looper.getMainLooper()).postDelayed({
@@ -1341,44 +1328,68 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handlePaymentModeChoice(cleaned: String) {
+        val lang    = LanguageManager.getLanguage()
+        val hasUPI  = cleaned.contains("upi")     || cleaned.contains("google pay") ||
+                cleaned.contains("phonepe") || cleaned.contains("paytm")      ||
+                cleaned.contains("bhim")    || cleaned.contains("यूपीआई")     || cleaned.contains("gpay")
+        val hasCard = cleaned.contains("card")    || cleaned.contains("debit")      ||
+                cleaned.contains("credit")  || cleaned.contains("saved")      ||
+                cleaned.contains("कार्ड")   || cleaned.contains("కార్డ్")
+        val hasQR   = cleaned.contains("qr")      || cleaned.contains("q r")        ||
+                cleaned.contains("q.r")     || cleaned.contains("scan")       || cleaned.contains("क्यूआर")
+
         when {
-            // ── FIX: UPI check BEFORE card check ──────────────────────────────
-            // Sarvam STT sometimes returns "UPI card" when user says "UPI".
-            // Old order: card check first → "UPI card".contains("card") = true → card flow.
-            // Fix: check UPI first. If text contains "upi", it IS UPI regardless of other words.
-            // "UPI card" → upi branch ✅  |  "card" alone → card branch ✅
-            cleaned.contains("upi") || cleaned.contains("google pay") || cleaned.contains("phonepe") ||
-                    cleaned.contains("paytm") || cleaned.contains("bhim") || cleaned.contains("यूपीआई") ||
-                    cleaned.contains("gpay") -> {
+            // ── FIX Issue 8: Both UPI and card in utterance → ASK, don't guess ─
+            // "UPI card" = ambiguous. Could be STT mishear OR genuine confusion.
+            // Old code: picked UPI (after previous fix) silently.
+            // New code: ask once clearly. User answers with a single word.
+            // ─────────────────────────────────────────────────────────────────
+            hasUPI && hasCard -> {
+                val askMsg = when {
+                    lang.startsWith("hi") -> "UPI से doge ya card se?"
+                    lang.startsWith("te") -> "UPI istara leda card?"
+                    else                  -> "UPI or card?"
+                }
+                speak(askMsg) { startListening() }
+            }
+
+            hasUPI -> {
                 val amount = toSpeakableAmount(pendingOrderTotal)
                 currentState = AssistantState.WAITING_UPI_PAYMENT
                 setUiState(ButlerUiState.WaitingPaymentConfirm("upi", pendingOrderTotal))
-                speak(ButlerPersonalityEngine.upiInstruction(amount, LanguageManager.getLanguage())) {
+                speak(ButlerPersonalityEngine.upiInstruction(amount, lang)) {
                     Handler(Looper.getMainLooper()).postDelayed({ askIfPaid("upi") }, 3000)
                 }
             }
-            cleaned.contains("card") || cleaned.contains("debit") || cleaned.contains("credit") ||
-                    cleaned.contains("saved") || cleaned.contains("कार्ड") || cleaned.contains("కార్డ్") -> {
+
+            hasCard -> {
                 val card   = PaymentManager.getSavedCard(this)
                 val amount = toSpeakableAmount(pendingOrderTotal)
                 currentState = AssistantState.WAITING_CARD_PAYMENT
                 setUiState(ButlerUiState.WaitingPaymentConfirm("card", pendingOrderTotal))
-                speak(if (card != null) "${card.network} card ${card.last4} pe $amount charge hoga. payment complete karein."
-                else "card details enter karein aur $amount pay karein.") {
+                speak(if (card != null) "${card.network} card ${card.last4} pe $amount charge hoga. Payment complete karein."
+                else "Card details enter karein aur $amount pay karein.") {
                     Handler(Looper.getMainLooper()).postDelayed({ askIfPaid("card") }, 2000)
                 }
             }
-            cleaned.contains("qr") || cleaned.contains("q r") ||
-                    cleaned.contains("q.r") || cleaned.contains("scan") ||
-                    cleaned.contains("क्यूआर") -> {
+
+            hasQR -> {
                 val amount = toSpeakableAmount(pendingOrderTotal)
                 currentState = AssistantState.WAITING_QR_PAYMENT
                 setUiState(ButlerUiState.ShowQRCode(pendingOrderTotal, pendingOrderSummary))
-                speakKeepingQRVisible("screen pe QR code hai. kisi bhi UPI app se $amount pay karein.") {
+                speakKeepingQRVisible("Screen pe QR code hai. Kisi bhi UPI app se $amount pay karein.") {
                     Handler(Looper.getMainLooper()).postDelayed({ askIfPaid("qr") }, 20000)
                 }
             }
-            else -> speak("card, UPI, ya QR bolein.") { startListening() }
+
+            else -> {
+                val askMsg = when {
+                    lang.startsWith("hi") -> "UPI से doge ya card se?"
+                    lang.startsWith("te") -> "UPI istara leda card?"
+                    else                  -> "UPI or card?"
+                }
+                speak(askMsg) { startListening() }
+            }
         }
     }
 
@@ -1571,18 +1582,40 @@ class MainActivity : ComponentActivity() {
     private fun handleAskingMore(cleaned: String, originalText: String) {
         val lang = LanguageManager.getLanguage()
         when {
-            // ── FIX Bug 2: isNoMoreIntent checked FIRST ───────────────────────
-            // "हाँ बस ऑर्डर कर दे" was matching isYes() before isNoMoreIntent()
-            // could catch "बस" + "ऑर्डर". Result: Butler looped asking "aur kya
-            // chahiye?" instead of going to checkout.
-            //
-            // Rule: "affirmation + done-signal" = user is done, not asking for more.
-            // isNoMoreIntent is more specific than isYes, so check it FIRST.
-            // ─────────────────────────────────────────────────────────────────
+            // ── isNoMoreIntent checked FIRST (explicit checkout phrases only) ──
             isNoMoreIntent(cleaned) -> readCartAndConfirm()
 
+            // ── FIX Issue 5 + 7: isYes branch — restore context ──────────────
+            // Old: "हाँ" → re-ask "kuch aur chahiye?" → LOOP.
+            // Why: Butler forgot it had just suggested "दाल भी साथ में दूं?" and
+            // user said yes to it. Context was lost.
+            //
+            // Fix: When user says yes, check in this order:
+            //   1. Did they embed a product name? → search that product directly
+            //   2. Was there an active suggestion? (दाल after rice) → search it
+            //   3. Only if neither → ask what they want
+            // ─────────────────────────────────────────────────────────────────
             MultilingualMatcher.isYes(cleaned) || cleaned.contains("add") || cleaned.contains("more") ||
                     cleaned.contains("और") || cleaned.contains("aur") -> {
+
+                // Priority 1: Product keyword embedded in utterance ("हाँ दाल भी चाहिए")
+                val instant = instantGroceryDetect(cleaned, lang)
+                if (instant != null) {
+                    currentState = AssistantState.LISTENING
+                    searchAndAskQuantity(instant.first, instant.second)
+                    return
+                }
+
+                // Priority 2: Active suggestion from last product ("Rice was added →
+                // suggestion was 'दाल'" → user said yes → search dal)
+                val suggestionItem = getSuggestionSearchTerm(sessionLastProduct, lang)
+                if (suggestionItem != null) {
+                    currentState = AssistantState.LISTENING
+                    searchAndAskQuantity(suggestionItem)
+                    return
+                }
+
+                // Priority 3: Nothing to infer — ask what they want
                 currentState = AssistantState.LISTENING
                 val prompt = ButlerPersonalityEngine.askMore(lang, currentMood, cart.size, sessionLastProduct)
                 showCartAndSpeak(prompt) { startListening() }
@@ -1616,6 +1649,23 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    // ── Returns the English search term for the active suggestion ─────────
+    // Mirrors ButlerPersonalityEngine.getRelatedSuggestion but returns
+    // an English search keyword for SmartProductRepository (not Devanagari).
+    // e.g. sessionLastProduct = "Daawat Brown rice" → "rice" → suggestion "dal"
+    private fun getSuggestionSearchTerm(lastProduct: String?, lang: String): String? {
+        if (lastProduct == null) return null
+        val p = lastProduct.lowercase()
+        val map = mapOf(
+            "rice"  to "dal",  "dal"    to "rice",  "oil"    to "atta",
+            "atta"  to "oil",  "milk"   to "bread",  "bread"  to "butter",
+            "tea"   to "sugar","sugar"  to "tea",    "ghee"   to "dal",
+            "eggs"  to "bread","curd"   to "rice",   "butter" to "bread",
+            "chawal" to "dal", "daal"   to "rice",   "tel"    to "atta"
+        )
+        return map.entries.firstOrNull { p.contains(it.key) }?.value
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -1708,55 +1758,29 @@ class MainActivity : ComponentActivity() {
                 if (recs.isNotEmpty()) {
                     runOnUiThread { setUiState(ButlerUiState.ShowingRecommendations(itemName, recs)) }
 
-                    if (currentMood == UserMood.FRUSTRATED &&
-                        currentState != AssistantState.IN_SERVICE_SUBTYPE_FLOW) {
-                        val best = recs.first()
-                        val shortName = best.productName.lowercase().split(" ")
-                            .take(2).joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
-                        val price = "₹${best.priceRs.toInt()}"
-                        val msg = when {
-                            lang.startsWith("hi") ->
-                                "$shortName $price — सबसे अच्छा है। लेना है?"
-                            lang.startsWith("te") ->
-                                "$shortName $price — అత్యుత్తమం. తీసుకోనా?"
-                            else ->
-                                "$shortName $price — best option. Want it?"
-                        }
-                        runOnUiThread {
-                            speakKeepingRecsVisible(msg, EmotionTone.EMPATHETIC) {
-                                startListeningForSelection(
-                                    onNumber = { handleRecSelectionByIndex(0, recs, qty, itemName) },
-                                    onOther  = { spoken ->
-                                        val spokenWords = spoken.lowercase().split(" ").filter { it.length >= 3 }
-                                        val pick = recs.maxByOrNull { rec ->
-                                            val recWords = rec.productName.lowercase().split(" ")
-                                            spokenWords.count { sw -> recWords.any { rw -> rw.startsWith(sw) || sw.startsWith(rw) } }
-                                        }?.takeIf { rec ->
-                                            val recWords = rec.productName.lowercase().split(" ")
-                                            spokenWords.any { sw -> recWords.any { rw -> rw.startsWith(sw) || sw.startsWith(rw) } }
-                                        }
-                                        handleRecSelectionByIndex(
-                                            if (pick != null) recs.indexOf(pick) else 0,
-                                            recs, qty, itemName
-                                        )
-                                    }
-                                )
-                            }
-                        }
-                        return@launch
-                    }
+                    // ── FIX Issue 3: REMOVED single-best-option FRUSTRATED path ──
+                    // Old: mood=FRUSTRATED → "Daawat Brown ₹45 — best option. Want it?"
+                    // Wrong: Butler was skipping user choice entirely.
+                    // "Rice has many types. Butler skipped user choice."
+                    // Fix: ALWAYS show 3 options regardless of mood.
+                    // FRUSTRATED users still get a shorter, direct readout (handled in
+                    // buildProductVoiceReadout format) but they MUST choose the brand.
+                    // ─────────────────────────────────────────────────────────────────
 
                     val readout = buildProductVoiceReadout(recs, itemName, lang)
 
+                    // ── FIX Issue 4: Never mention screen — voice-first ───────────
+                    // "screen पर दिखा नाम बोलें।" breaks voice-first UX.
+                    // Butler must work with eyes closed. Just ask for the brand name.
                     val nameRetryPrompt = when {
-                        lang.startsWith("hi") -> "screen पर दिखा नाम बोलें।"
-                        lang.startsWith("te") -> "screen మీద పేరు చెప్పండి."
-                        lang.startsWith("ta") -> "screen-ல் பெயர் சொல்லுங்கள்."
-                        lang.startsWith("kn") -> "screen ಮೇಲಿನ ಹೆಸರು ಹೇಳಿ."
-                        lang.startsWith("ml") -> "screen-ൽ കാണുന്ന പേര് പറയൂ."
-                        lang.startsWith("pa") -> "screen ਤੇ ਦਿਖਾ ਨਾਮ ਦੱਸੋ।"
-                        lang.startsWith("gu") -> "screen પર દેખાતું નામ બોલો."
-                        else                  -> "Say the brand name you see on screen."
+                        lang.startsWith("hi") -> "Brand ka naam bolein."
+                        lang.startsWith("te") -> "Brand peyru cheppandi."
+                        lang.startsWith("ta") -> "Brand peyar sollungal."
+                        lang.startsWith("kn") -> "Brand hesaru heli."
+                        lang.startsWith("ml") -> "Brand peru parayo."
+                        lang.startsWith("pa") -> "Brand naam dasao."
+                        lang.startsWith("gu") -> "Brand naam bolo."
+                        else                  -> "Say the brand name."
                     }
 
                     speakKeepingRecsVisible(readout) {
@@ -1905,14 +1929,14 @@ class MainActivity : ComponentActivity() {
         } else {
             speakKeepingRecsVisible(
                 when {
-                    lang.startsWith("hi") -> "screen पर दिखा नाम बोलें।"
-                    lang.startsWith("te") -> "screen మీద పేరు చెప్పండి."
-                    lang.startsWith("ta") -> "screen-ல் பெயர் சொல்லுங்கள்."
-                    lang.startsWith("kn") -> "screen ಮೇಲಿನ ಹೆಸರು ಹೇಳಿ."
-                    lang.startsWith("ml") -> "screen-ൽ കാണുന്ന പേര് പറയൂ."
-                    lang.startsWith("pa") -> "screen ਤੇ ਦਿਖਾ ਨਾਮ ਦੱਸੋ।"
-                    lang.startsWith("gu") -> "screen પર દેખાતું નામ બોલો."
-                    else                  -> "Say the brand name you see on screen."
+                    lang.startsWith("hi") -> "Brand ka naam bolein."
+                    lang.startsWith("te") -> "Brand peyru cheppandi."
+                    lang.startsWith("ta") -> "Brand peyar sollungal."
+                    lang.startsWith("kn") -> "Brand hesaru heli."
+                    lang.startsWith("ml") -> "Brand peru parayo."
+                    lang.startsWith("pa") -> "Brand naam dasao."
+                    lang.startsWith("gu") -> "Brand naam bolo."
+                    else                  -> "Say the brand name."
                 }
             ) {
                 startListeningForSelection(
@@ -2032,14 +2056,28 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun isNoMoreIntent(s: String): Boolean {
+        // ── FIX Issue 6 CRITICAL: "Nothing" ≠ "Proceed to checkout" ─────────
+        // Old list included: "no","nope","nothing","stop","nahi"
+        // "कुछ नहीं" / "nothing" / "stop" → user means STOP, not "place my order"
+        // This was silently routing to checkout on ambiguous words = WRONG ORDERS.
+        //
+        // Fix: ONLY explicit "I'm done adding, place the order" phrases trigger checkout.
+        // Ambiguous negative words (no, nahi, nothing, stop) → fall through to else branch.
+        // User must use an explicit done/checkout signal to confirm.
+        // ─────────────────────────────────────────────────────────────────────
         if (MultilingualMatcher.isDone(s)) return true
         if (IndianLanguageProcessor.DONE_PHRASES.any { s.contains(it, ignoreCase = true) }) return true
         return listOf(
-            "no","nope","done","nothing","finish","stop","checkout","place order",
-            "बस","हो गया","bas","nahi","kar do",
+            // ✅ EXPLICIT done-with-cart signals only:
+            "done","finish","checkout","place order",
+            "बस","bas",
             "ऑर्डर करो","order karo","order kar do","order kardo",
             "ऑर्डर कर दो","ऑर्डर कर","place karo","place kar",
-            "bas karo","ho gaya","theek hai ab","ab karo"
+            "kar do","bas karo","theek hai ab","ab karo",
+            "order kar doon","order de do","confirm"
+            // ❌ REMOVED: "no","nope","nothing","stop","nahi","ho gaya"
+            // These are ambiguous — "nothing" and "nahi" alone mean STOP/CANCEL,
+            // not "proceed to checkout". Do not include them here.
         ).any { s.contains(it, ignoreCase = true) }
     }
 
