@@ -1362,7 +1362,12 @@ class MainActivity : ComponentActivity() {
                     Handler(Looper.getMainLooper()).postDelayed({ askIfPaid("upi") }, 3000)
                 }
             }
-            cleaned.contains("qr") || cleaned.contains("scan") || cleaned.contains("क्यूआर") -> {
+            // ── FIX: Sarvam STT returns "Q R." (with space) for "QR"
+            // "q r.".contains("qr") = false → Butler repeats payment ask
+            // Fix: check for "q r" (with space) and "q.r" variants ──────
+            cleaned.contains("qr") || cleaned.contains("q r") ||
+                    cleaned.contains("q.r") || cleaned.contains("scan") ||
+                    cleaned.contains("क्यूआर") -> {
                 val amount = toSpeakableAmount(pendingOrderTotal)
                 currentState = AssistantState.WAITING_QR_PAYMENT
                 setUiState(ButlerUiState.ShowQRCode(pendingOrderTotal, pendingOrderSummary))
@@ -1809,17 +1814,27 @@ class MainActivity : ComponentActivity() {
                                                         it.replaceFirstChar { c -> c.uppercase() }
                                                     }
                                             }
-                                            val itemDisplay2 = when {
-                                                itemName.contains("rice")  || itemName.contains("chawal")  -> "rice"
-                                                itemName.contains("dal")   || itemName.contains("daal")    -> "daal"
-                                                itemName.contains("oil")   || itemName.contains("tel")     -> "tel"
-                                                itemName.contains("milk")                                   -> "doodh"
-                                                itemName.contains("atta")  || itemName.contains("flour")   -> "atta"
+                                            // ── FIX: recapMsg mixed script ────────────────────────────────
+                                            // "Kaunsa rice du?" → TranslationManager detects English →
+                                            // translates → "Kaunsa चावल है? Names में से." → MIXED.
+                                            // Fix: use Devanagari item name → starts with "कौनसा" →
+                                            // TranslationManager detects "hi" → skips → ElevenLabs
+                                            // reads "Kaunsa चावल du? Brand1, Brand2." cleanly ✅
+                                            val itemDevanagari = when {
+                                                itemName.contains("rice")  || itemName.contains("chawal")  -> "चावल"
+                                                itemName.contains("dal")   || itemName.contains("daal")    -> "दाल"
+                                                itemName.contains("oil")   || itemName.contains("tel")     -> "तेल"
+                                                itemName.contains("milk")  || itemName.contains("doodh")   -> "दूध"
+                                                itemName.contains("atta")  || itemName.contains("flour")   -> "आटा"
+                                                itemName.contains("sugar") || itemName.contains("cheeni")  -> "चीनी"
+                                                itemName.contains("salt")  || itemName.contains("namak")   -> "नमक"
+                                                itemName.contains("tea")   || itemName.contains("chai")    -> "चाय"
+                                                itemName.contains("ghee")                                   -> "घी"
                                                 else -> itemName
                                             }
                                             val recapMsg = when {
                                                 lang.startsWith("hi") ->
-                                                    "Kaunsa $itemDisplay2 du? $recapNames mein se."
+                                                    "कौनसा $itemDevanagari दूं? $recapNames."
                                                 lang.startsWith("te") ->
                                                     "Edi kavali? $recapNames."
                                                 else ->
