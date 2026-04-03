@@ -287,6 +287,7 @@ class MainActivity : ComponentActivity() {
                                 FamilyProfileManager.ensureCurrentUserRegistered(this@MainActivity, profile)
                                 currentState = AssistantState.LISTENING
                                 val firstName = profile.full_name?.split(" ")?.first() ?: displayName
+                                sessionUserName = firstName  // ← set name for BPE templates
                                 speak(IndianLanguageProcessor.getWelcomeGreeting(LanguageManager.getLanguage(), firstName)) { startListening() }
                             },
                             onFailure = { err ->
@@ -316,6 +317,7 @@ class MainActivity : ComponentActivity() {
                             FamilyProfileManager.ensureCurrentUserRegistered(this@MainActivity, profile)
                             currentState = AssistantState.LISTENING
                             val firstName = profile.full_name?.split(" ")?.first() ?: displayName.split(" ").first()
+                            sessionUserName = firstName  // ← set name for BPE templates
                             AnalyticsManager.logUserAuth("google", LanguageManager.getLanguage())
                             speak(IndianLanguageProcessor.getWelcomeGreeting(LanguageManager.getLanguage(), firstName)) { startListening() }
                         },
@@ -1126,6 +1128,7 @@ class MainActivity : ComponentActivity() {
                                 FamilyProfileManager.ensureCurrentUserRegistered(this@MainActivity, profile)
                                 currentState = AssistantState.LISTENING
                                 val firstName = profile.full_name?.split(" ")?.first() ?: tempName
+                                sessionUserName = firstName  // ← set name for BPE templates
                                 AnalyticsManager.logUserAuth("voice_signup", LanguageManager.getLanguage())
                                 speak(IndianLanguageProcessor.getWelcomeGreeting(lang, firstName)) { startListening() }
                             },
@@ -1374,30 +1377,33 @@ class MainActivity : ComponentActivity() {
             }
 
             hasUPI -> {
-                val amount = toSpeakableAmount(pendingOrderTotal)
+                // FIX: Use ₹ symbol ("₹50") not spelled words ("pachaas rupaye")
+                // ElevenLabs reads "₹50" naturally. Words get weird when TranslationManager
+                // translates them ("pachaas rupaye" → unexpected forms in some voices).
+                val amountRs = "₹${pendingOrderTotal.toInt()}"
                 currentState = AssistantState.WAITING_UPI_PAYMENT
                 setUiState(ButlerUiState.WaitingPaymentConfirm("upi", pendingOrderTotal))
-                speak(ButlerPersonalityEngine.upiInstruction(amount, lang)) {
+                speak(ButlerPersonalityEngine.upiInstruction(amountRs, lang)) {
                     Handler(Looper.getMainLooper()).postDelayed({ askIfPaid("upi") }, 3000)
                 }
             }
 
             hasCard -> {
-                val card   = PaymentManager.getSavedCard(this)
-                val amount = toSpeakableAmount(pendingOrderTotal)
+                val card     = PaymentManager.getSavedCard(this)
+                val amountRs = "₹${pendingOrderTotal.toInt()}"
                 currentState = AssistantState.WAITING_CARD_PAYMENT
                 setUiState(ButlerUiState.WaitingPaymentConfirm("card", pendingOrderTotal))
-                speak(if (card != null) "${card.network} card ${card.last4} pe $amount charge hoga. Payment complete karein."
-                else "Card details enter karein aur $amount pay karein.") {
+                speak(if (card != null) "${card.network} card ${card.last4} pe $amountRs charge hoga. Payment complete karein."
+                else "Card details enter karein aur $amountRs pay karein.") {
                     Handler(Looper.getMainLooper()).postDelayed({ askIfPaid("card") }, 2000)
                 }
             }
 
             hasQR -> {
-                val amount = toSpeakableAmount(pendingOrderTotal)
+                val amountRs = "₹${pendingOrderTotal.toInt()}"
                 currentState = AssistantState.WAITING_QR_PAYMENT
                 setUiState(ButlerUiState.ShowQRCode(pendingOrderTotal, pendingOrderSummary))
-                speakKeepingQRVisible("Screen pe QR code hai. Kisi bhi UPI app se $amount pay karein.") {
+                speakKeepingQRVisible("Screen pe QR code hai. Kisi bhi UPI app se $amountRs pay karein.") {
                     Handler(Looper.getMainLooper()).postDelayed({ askIfPaid("qr") }, 20000)
                 }
             }
@@ -1425,7 +1431,7 @@ class MainActivity : ComponentActivity() {
             AssistantState.CONFIRMING_CARD_PAID -> "card"
             else -> "qr"
         }
-        speak(ButlerPersonalityEngine.askIfPaid(paidLang, paidMode, toSpeakableAmount(pendingOrderTotal))) { startListening() }
+        speak(ButlerPersonalityEngine.askIfPaid(paidLang, paidMode, "₹${pendingOrderTotal.toInt()}")) { startListening() }
     }
 
     private fun handlePaidOrNotPaid(cleaned: String, mode: String) {
@@ -1443,15 +1449,15 @@ class MainActivity : ComponentActivity() {
             "ਨਹੀਂ","ਨਹੀ",
             "ના","નહીં"
         )
-        val lang   = LanguageManager.getLanguage()
-        val amount = toSpeakableAmount(pendingOrderTotal)
+        val lang     = LanguageManager.getLanguage()
+        val amountRs = "₹${pendingOrderTotal.toInt()}"
         when {
             paid.any    { cleaned.contains(it) } -> speak(ButlerPersonalityEngine.paymentDone(lang)) { placeOrder() }
             notPaid.any { cleaned.contains(it) } -> {
                 speak(when (mode) {
-                    "card" -> "theek hai! card se $amount pay karein."
-                    "upi"  -> "theek hai! UPI pe $amount bhejein."
-                    else   -> "theek hai! QR scan karke $amount pay karein."
+                    "card" -> "theek hai! card se $amountRs pay karein."
+                    "upi"  -> "theek hai! UPI pe $amountRs bhejein."
+                    else   -> "theek hai! QR scan karke $amountRs pay karein."
                 }) { Handler(Looper.getMainLooper()).postDelayed({ askIfPaid(mode) }, 8000) }
             }
             else -> speak("haan bolein toh paid, nahi bolein toh cancel.") { startListening() }
@@ -1898,39 +1904,34 @@ class MainActivity : ComponentActivity() {
                                         if (pick != null) {
                                             handleRecSelectionByIndex(recs.indexOf(pick), recs, qty, itemName)
                                         } else {
-                                            val recapNames = recs.joinToString(", ") { r ->
-                                                r.productName.lowercase().split(" ")
-                                                    .take(2).joinToString(" ") {
-                                                        it.replaceFirstChar { c -> c.uppercase() }
-                                                    }
-                                            }
-                                            val itemDevanagari = when {
-                                                itemName.contains("rice")  || itemName.contains("chawal")  -> "चावल"
-                                                itemName.contains("dal")   || itemName.contains("daal")    -> "दाल"
-                                                itemName.contains("oil")   || itemName.contains("tel")     -> "तेल"
-                                                itemName.contains("milk")  || itemName.contains("doodh")   -> "दूध"
-                                                itemName.contains("atta")  || itemName.contains("flour")   -> "आटा"
-                                                itemName.contains("sugar") || itemName.contains("cheeni")  -> "चीनी"
-                                                itemName.contains("salt")  || itemName.contains("namak")   -> "नमक"
-                                                itemName.contains("tea")   || itemName.contains("chai")    -> "चाय"
-                                                itemName.contains("ghee")                                   -> "घी"
+                                            // ── SHORT RECAP: user didn't say a recognized brand ──────────
+                                            // Brands are visible on screen — no need to re-read the list.
+                                            // Just ask "Kaunsa rice du?" — clean, natural, non-repetitive.
+                                            val itemDisplay = when {
+                                                itemName.contains("rice")  || itemName.contains("chawal")  -> if (lang.startsWith("hi")) "rice" else "rice"
+                                                itemName.contains("dal")   || itemName.contains("daal")    -> "daal"
+                                                itemName.contains("oil")   || itemName.contains("tel")     -> if (lang.startsWith("hi")) "tel" else "oil"
+                                                itemName.contains("milk")  || itemName.contains("doodh")   -> if (lang.startsWith("hi")) "doodh" else "milk"
+                                                itemName.contains("atta")  || itemName.contains("flour")   -> "atta"
+                                                itemName.contains("sugar") || itemName.contains("cheeni")  -> if (lang.startsWith("hi")) "cheeni" else "sugar"
+                                                itemName.contains("tea")   || itemName.contains("chai")    -> "chai"
+                                                itemName.contains("ghee")                                   -> "ghee"
                                                 else -> itemName
                                             }
                                             val recapMsg = when {
-                                                lang.startsWith("hi") ->
-                                                    "कौनसा $itemDevanagari दूं? $recapNames."
-                                                lang.startsWith("te") ->
-                                                    "Edi kavali? $recapNames."
-                                                else ->
-                                                    "Which one? $recapNames."
+                                                lang.startsWith("hi") -> "Kaunsa $itemDisplay du?"
+                                                lang.startsWith("te") -> "Edi kavali?"
+                                                lang.startsWith("ta") -> "Edu vendum?"
+                                                lang.startsWith("kn") -> "Yavudu beku?"
+                                                lang.startsWith("ml") -> "Eth veno?"
+                                                lang.startsWith("pa") -> "Kihra chahida?"
+                                                lang.startsWith("gu") -> "Kyu joiye?"
+                                                else                  -> "Which one?"
                                             }
                                             speakKeepingRecsVisible(recapMsg) {
                                                 startListeningForSelection(
                                                     onNumber = { n -> handleRecSelectionByIndex(n - 1, recs, qty, itemName) },
                                                     onOther  = { spokenAgain ->
-                                                        // ── Second attempt: normalize + match again ──
-                                                        // If still no match, fall through to first option
-                                                        // so we never ask the same question 3 times.
                                                         val sLow2 = spokenAgain.lowercase().trim()
                                                             .replace(Regex("[।,.!?]"), "")
                                                         val norm2  = normalizeBrandSpelling(sLow2)
@@ -2354,6 +2355,7 @@ class MainActivity : ComponentActivity() {
                 runOnUiThread {
                     currentState = AssistantState.LISTENING
                     val firstName   = profile.full_name?.split(" ")?.first() ?: "there"
+                    sessionUserName = firstName  // ← critical: set name for all BPE templates
                     val history     = UserSessionManager.purchaseHistory
                     AnalyticsManager.logUserAuth("login", LanguageManager.getLanguage())
                     val lastProduct = history.firstOrNull()?.product_name?.takeIf { it.isNotBlank() && it != "null" }

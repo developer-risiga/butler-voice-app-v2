@@ -217,7 +217,7 @@ object ButlerPersonalityEngine {
 
     fun confirmAddProduct(name: String, productName: String, price: Int, lang: String): String {
         val short = productName.split(" ").take(2)
-            .joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
+            .joinToString(" ") { it.lowercase().replaceFirstChar { c -> c.uppercase() } }
         return when {
             lang.startsWith("hi") -> pick("hi_confirm_add", listOf(
                 // Devanagari "का" → TranslationManager skips ✅
@@ -267,9 +267,9 @@ object ButlerPersonalityEngine {
 
     fun itemAdded(name: String, productName: String, lang: String, mood: UserMood, cartSize: Int): String {
         val short = productName.split(" ").take(2)
-            .joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
+            .joinToString(" ") { it.lowercase().replaceFirstChar { c -> c.uppercase() } }
         val full  = productName.split(" ").take(3)
-            .joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
+            .joinToString(" ") { it.lowercase().replaceFirstChar { c -> c.uppercase() } }
         return when {
             lang.startsWith("hi") -> when (mood) {
                 UserMood.FRUSTRATED, UserMood.RUSHED -> pick("hi_added_r", listOf(
@@ -368,7 +368,7 @@ object ButlerPersonalityEngine {
 
     fun confirmAddNext(name: String, productName: String, price: Int, lang: String): String {
         val short = productName.split(" ").take(2)
-            .joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
+            .joinToString(" ") { it.lowercase().replaceFirstChar { c -> c.uppercase() } }
         return when {
             lang.startsWith("hi") -> pick("hi_confirm_next", listOf(
                 // "का" is Devanagari anchor ✅
@@ -507,12 +507,14 @@ object ButlerPersonalityEngine {
     // ═════════════════════════════════════════════════════════════════════
 
     fun upiInstruction(amount: String, lang: String): String {
+        // amount is now "₹50" format (not spoken words) — ElevenLabs reads naturally
         return when {
             lang.startsWith("hi") -> pick("hi_upi", listOf(
-                // "ठीक है" Devanagari anchor ✅
+                // Template 8 exact: "Theek hai, UPI se payment kar lijiye… ho jaaye to batayein."
+                // "ठीक है" Devanagari anchor → TranslationManager skips ✅
                 "ठीक है, UPI se payment kar lijiye… ho jaaye to batayein.",
-                "ठीक है, $amount UPI se bhej dijiye… bata dena ho jaane par.",
-                "UPI ID screen पर है. $amount bhejein… ho jaaye to bataiye."
+                "ठीक है, $amount UPI se bhej dena… ho jaaye to bata dena.",
+                "UPI se $amount bhej do… ho jaaye to batao."
             ))
             lang.startsWith("te") -> pick("te_upi", listOf(
                 "Sare, UPI lo $amount pampu… ayinaaka cheppandi.",
@@ -637,7 +639,7 @@ object ButlerPersonalityEngine {
 
     fun askQuantity(productName: String, lang: String): String {
         val short = productName.split(" ").take(2)
-            .joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
+            .joinToString(" ") { it.lowercase().replaceFirstChar { c -> c.uppercase() } }
         return when {
             lang.startsWith("hi") -> pick("hi_qty", listOf(
                 "$short कितना chahiye? Ek kilo, do kilo?",
@@ -965,7 +967,7 @@ object ButlerPersonalityEngine {
 
     fun itemRemoved(productName: String, lang: String): String {
         val short = productName.split(" ").take(2)
-            .joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
+            .joinToString(" ") { it.lowercase().replaceFirstChar { c -> c.uppercase() } }
         return when {
             lang.startsWith("hi") -> pick("hi_removed", listOf(
                 "$short हटा diya.", "ठीक hai, $short nahi.", "$short remove kar diya."
