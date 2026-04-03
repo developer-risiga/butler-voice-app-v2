@@ -1342,6 +1342,21 @@ class MainActivity : ComponentActivity() {
 
     private fun handlePaymentModeChoice(cleaned: String) {
         when {
+            // ── FIX: UPI check BEFORE card check ──────────────────────────────
+            // Sarvam STT sometimes returns "UPI card" when user says "UPI".
+            // Old order: card check first → "UPI card".contains("card") = true → card flow.
+            // Fix: check UPI first. If text contains "upi", it IS UPI regardless of other words.
+            // "UPI card" → upi branch ✅  |  "card" alone → card branch ✅
+            cleaned.contains("upi") || cleaned.contains("google pay") || cleaned.contains("phonepe") ||
+                    cleaned.contains("paytm") || cleaned.contains("bhim") || cleaned.contains("यूपीआई") ||
+                    cleaned.contains("gpay") -> {
+                val amount = toSpeakableAmount(pendingOrderTotal)
+                currentState = AssistantState.WAITING_UPI_PAYMENT
+                setUiState(ButlerUiState.WaitingPaymentConfirm("upi", pendingOrderTotal))
+                speak(ButlerPersonalityEngine.upiInstruction(amount, LanguageManager.getLanguage())) {
+                    Handler(Looper.getMainLooper()).postDelayed({ askIfPaid("upi") }, 3000)
+                }
+            }
             cleaned.contains("card") || cleaned.contains("debit") || cleaned.contains("credit") ||
                     cleaned.contains("saved") || cleaned.contains("कार्ड") || cleaned.contains("కార్డ్") -> {
                 val card   = PaymentManager.getSavedCard(this)
@@ -1353,18 +1368,6 @@ class MainActivity : ComponentActivity() {
                     Handler(Looper.getMainLooper()).postDelayed({ askIfPaid("card") }, 2000)
                 }
             }
-            cleaned.contains("upi") || cleaned.contains("google pay") || cleaned.contains("phonepe") ||
-                    cleaned.contains("paytm") || cleaned.contains("bhim") || cleaned.contains("यूपीआई") -> {
-                val amount = toSpeakableAmount(pendingOrderTotal)
-                currentState = AssistantState.WAITING_UPI_PAYMENT
-                setUiState(ButlerUiState.WaitingPaymentConfirm("upi", pendingOrderTotal))
-                speak(ButlerPersonalityEngine.upiInstruction(amount, LanguageManager.getLanguage())) {
-                    Handler(Looper.getMainLooper()).postDelayed({ askIfPaid("upi") }, 3000)
-                }
-            }
-            // ── FIX: Sarvam STT returns "Q R." (with space) for "QR"
-            // "q r.".contains("qr") = false → Butler repeats payment ask
-            // Fix: check for "q r" (with space) and "q.r" variants ──────
             cleaned.contains("qr") || cleaned.contains("q r") ||
                     cleaned.contains("q.r") || cleaned.contains("scan") ||
                     cleaned.contains("क्यूआर") -> {
@@ -2000,7 +2003,10 @@ class MainActivity : ComponentActivity() {
             return
         }
         currentState = AssistantState.CONFIRMING
-        speakWithTransition(buildShortConfirm(LanguageManager.getLanguage())) { startListening() }
+        // FIX: Do NOT use speakWithTransition — HumanFillerManager.getTransition("hi")
+        // returns "सुनो" (Listen!) which sounds rude/commanding before a cart summary.
+        // Speak the confirm directly with no filler prepended.
+        showCartAndSpeak(buildShortConfirm(LanguageManager.getLanguage())) { startListening() }
     }
 
     // ══════════════════════════════════════════════════════════════════════
