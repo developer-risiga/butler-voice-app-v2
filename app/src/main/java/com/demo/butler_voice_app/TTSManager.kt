@@ -15,18 +15,30 @@ import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 // ── Emotion tone controls ElevenLabs voice_settings ──────────────────────────
-// Never use a cheerful/expressive tone for emergencies or distress.
 //
-// EMERGENCY  → high stability, zero style  → serious, controlled, urgent
-// EMPATHETIC → medium stability, low style → gentle, calm, caring
-// NORMAL     → default (ordering, greetings, questions)
-// WARM       → used for order confirmed, booking done
+// WHY IT SOUNDED THE SAME EVERY TIME:
+//   Old TONE_SETTINGS had ALL tones clustered at HIGH stability (0.68–0.90).
+//   ElevenLabs: HIGH stability = monotone/robotic. That's why every tone was flat.
+//
+//   New values span the full audible range (0.20–0.58):
+//   EMERGENCY  stability=0.20, style=0.70 → urgent, intense, commanding
+//   EMPATHETIC stability=0.32, style=0.48 → gentle, soft, patient
+//   NORMAL     stability=0.55, style=0.10 → clear, neutral info delivery
+//   WARM       stability=0.42, style=0.40 → friendly, natural, unhurried
+//   EXCITED    stability=0.28, style=0.55 → upbeat, energetic, cheerful
+//
+// TUNING GUIDE:
+//   Want warmer?      → lower stability (0.35–0.45), raise style (0.3–0.4)
+//   Want more calm?   → raise stability (0.6+), lower style (0.05)
+//   Want urgency?     → raise speed (1.0+), lower stability (0.2), raise style
+//   Want sympathy?    → lower stability (0.3–0.35), raise style (0.4), slow speed
 // ─────────────────────────────────────────────────────────────────────────────
 enum class EmotionTone {
-    EMERGENCY,    // "Ambulance bula raha hoon" — serious, no cheerfulness
-    EMPATHETIC,   // "Samajh gaye, tension mat lo" — gentle
-    NORMAL,       // Default for ordering/questions
-    WARM          // Order placed, booking confirmed — positive but not giddy
+    EMERGENCY,    // Ambulance/medical — urgent, commanding, fast
+    EMPATHETIC,   // Retry/error/frustration — gentle, slow, patient
+    NORMAL,       // Product info, prices — clear, neutral
+    WARM,         // Greeting, order placed, item added — friendly, unhurried
+    EXCITED       // Payment done, confirmations — upbeat, energetic (NEW)
 }
 
 class TTSManager(
@@ -42,30 +54,12 @@ class TTSManager(
         private const val ELEVEN_MODEL = "eleven_multilingual_v2"
         private val DEVANAGARI         = Regex("[\\u0900-\\u097F]")
 
-        // ── TTS TEXT NORMALIZER ───────────────────────────────────────────
-        // ElevenLabs mispronounces:
-        //   1. English loanwords written in Devanagari ("ऑर्डर" → "On Order")
-        //   2. Mixed-script sentences ("Ho गया" → broken pronunciation)
-        //   3. Partially translated strings ("दाल chahiye saath mein")
-        //
-        // Strategy: normalise to the dominant script BEFORE sending to TTS.
-        // Devanagari loanwords → Latin. Mixed Hindi-English → clean Hinglish.
-        // Native Hindi words (हाँ, क्या, etc.) are left untouched.
-        //
-        // ORDER MATTERS: longer/more specific phrases must come before shorter
-        // ones to prevent partial replacements (e.g. "ho gaya" before "gaya").
-        // ─────────────────────────────────────────────────────────────────
         private val TTS_WORD_MAP = linkedMapOf(
-            // ── Mixed-script phrase fixes (must be first) ─────────────────
-            // These appear when TranslationManager partially translates a string.
-            // "Ho गया" is the #1 offender from the logcat.
             "Ho गया"           to "Ho gaya",
             "ho गया"           to "ho gaya",
             "Ho Gaya"          to "ho gaya",
             "Haan! "           to "haan! ",
             "Aur "             to "aur ",
-
-            // ── Orders & Commerce ─────────────────────────────────────────
             "ऑर्डर"           to "order",
             "ऑर्डर्स"         to "orders",
             "कार्ट"            to "cart",
@@ -78,15 +72,11 @@ class TTSManager(
             "ऑप्शन्स"          to "options",
             "चेकआउट"          to "checkout",
             "लोड"              to "load",
-
-            // ── Payment ───────────────────────────────────────────────────
             "यूपीआई"           to "UPI",
             "क्यूआर"           to "QR",
             "कार्ड"            to "card",
             "डेबिट"            to "debit",
             "क्रेडिट"          to "credit",
-
-            // ── App & Account ─────────────────────────────────────────────
             "बटलर"             to "Butler",
             "अकाउंट"           to "account",
             "पासवर्ड"          to "password",
@@ -94,24 +84,16 @@ class TTSManager(
             "मोबाइल"           to "mobile",
             "नंबर"             to "number",
             "आईडी"             to "ID",
-
-            // ── Units ─────────────────────────────────────────────────────
             "किलो"             to "kilo",
             "लीटर"             to "litre",
             "पैकेट"            to "packet",
-
-            // ── Services ──────────────────────────────────────────────────
             "अम्बुलेंस"        to "ambulance",
             "एम्बुलेंस"        to "ambulance",
             "डॉक्टर"           to "doctor",
             "एमरजेंसी"         to "emergency",
             "फार्मेसी"         to "pharmacy",
-
-            // ── UI terms ──────────────────────────────────────────────────
             "स्क्रीन"          to "screen",
             "ब्रांड"            to "brand",
-
-            // ── Common Hinglish ───────────────────────────────────────────
             "परफेक्ट"          to "perfect",
             "ओके"              to "okay",
             "प्लीज़"            to "please",
@@ -129,14 +111,73 @@ class TTSManager(
             val speed: Double = 0.85
         )
 
+        // ══════════════════════════════════════════════════════════════════
+        // TONE SETTINGS — THIS IS THE FIX
+        //
+        // OLD: All tones had HIGH stability (0.68–0.90) and LOW style (0.00–0.12)
+        //      → All sounded identical and flat.
+        //
+        // NEW: Tones span the full range. The difference between EMERGENCY (0.20)
+        //      and NORMAL (0.55) is immediately audible. WARM (style=0.40) vs
+        //      NORMAL (style=0.10) sounds like two different personalities.
+        // ══════════════════════════════════════════════════════════════════
         private val TONE_SETTINGS = mapOf(
-            // stability: higher = more consistent, less "running away"
-            // style:     lower  = cleaner pronunciation, easier to understand
-            // speed:     <1.0   = slower — critical for housewife/elderly users
-            EmotionTone.EMERGENCY  to VoiceSettings(0.90, 0.90, 0.00, speed = 1.00),
-            EmotionTone.EMPATHETIC to VoiceSettings(0.75, 0.85, 0.03, speed = 0.82),
-            EmotionTone.NORMAL     to VoiceSettings(0.72, 0.82, 0.08, speed = 0.85),
-            EmotionTone.WARM       to VoiceSettings(0.68, 0.82, 0.12, speed = 0.83)
+
+            // EMERGENCY — ambulance, medical, danger
+            // stability=0.20: maximum expression, pitch variation, urgency
+            // style=0.70: intense and commanding (was 0.00 = completely flat/robotic)
+            // speed=1.08: slightly faster = urgency
+            // OLD: stability=0.90, style=0.00 → sounded flat and robotic for emergencies
+            EmotionTone.EMERGENCY to VoiceSettings(
+                stability = 0.20,        // LOW = maximum expression
+                similarityBoost = 0.88,
+                style = 0.70,            // HIGH = urgent, serious, commanding
+                speed = 1.08             // faster = urgency
+            ),
+
+            // EMPATHETIC — silence retries, errors, user frustrated
+            // stability=0.32: emotional, gentle variation
+            // style=0.48: soft sympathy clearly audible (was 0.03 = nearly no character)
+            // speed=0.75: slower = patience, giving user time (was 0.82 = too fast)
+            // OLD: stability=0.75, style=0.03 → nearly identical to NORMAL
+            EmotionTone.EMPATHETIC to VoiceSettings(
+                stability = 0.32,        // LOW-MEDIUM = emotional, gentle
+                similarityBoost = 0.82,
+                style = 0.48,            // MEDIUM-HIGH = soft sympathy audible
+                speed = 0.75             // SLOW = patient, not rushing user
+            ),
+
+            // NORMAL — prices, product lists, factual info
+            // Stable and clear. Not robotic, not performative.
+            EmotionTone.NORMAL to VoiceSettings(
+                stability = 0.55,        // MEDIUM = stable, consistent
+                similarityBoost = 0.72,
+                style = 0.10,            // LOW = neutral info delivery
+                speed = 0.88
+            ),
+
+            // WARM — greetings, item added, order placed
+            // stability=0.42: natural friendly variation (was 0.68 = too flat)
+            // style=0.40: warmth clearly audible (was 0.12 = barely any personality)
+            // speed=0.82: slightly slow = unhurried, comfortable
+            // OLD: stability=0.68, style=0.12 → nearly same as NORMAL, no warmth
+            EmotionTone.WARM to VoiceSettings(
+                stability = 0.42,        // LOW-MEDIUM = expressive natural range
+                similarityBoost = 0.78,
+                style = 0.40,            // MEDIUM = warmth and personality audible
+                speed = 0.82             // slightly slow = unhurried, friendly
+            ),
+
+            // EXCITED — payment done, confirmations, good news (NEW tone)
+            // stability=0.28: dynamic, lively
+            // style=0.55: clear upbeat energy
+            // speed=0.95: slightly faster = cheerful
+            EmotionTone.EXCITED to VoiceSettings(
+                stability = 0.28,        // LOW = dynamic, energetic
+                similarityBoost = 0.76,
+                style = 0.55,            // HIGH = clear upbeat energy
+                speed = 0.95             // slightly faster = cheerful pace
+            )
         )
     }
 
@@ -149,8 +190,6 @@ class TTSManager(
     private var androidTts: TextToSpeech? = null
     private var androidTtsReady = false
 
-    // ── INIT ──────────────────────────────────────────────────────────────
-
     fun init(onReady: () -> Unit) {
         androidTts = TextToSpeech(context) { status ->
             androidTtsReady = (status == TextToSpeech.SUCCESS)
@@ -158,9 +197,6 @@ class TTSManager(
             onReady()
         }
     }
-
-    // ── PUBLIC speak() ────────────────────────────────────────────────────
-    // tone defaults to NORMAL so all existing call sites compile unchanged.
 
     fun speak(
         text: String,
@@ -174,6 +210,7 @@ class TTSManager(
         val resolvedVoice  = resolveVoice(normalizedText, language)
         val settings       = TONE_SETTINGS[tone] ?: TONE_SETTINGS[EmotionTone.NORMAL]!!
         Log.d(TAG, "ElevenLabs [$language] tone=$tone voice=$resolvedVoice → \"${normalizedText.take(60)}\"")
+        Log.d(TAG, "  stability=${settings.stability} style=${settings.style} speed=${settings.speed}")
 
         val appContext = context.applicationContext
         Thread {
@@ -192,14 +229,6 @@ class TTSManager(
         }.start()
     }
 
-    // ── TTS NORMALIZER ────────────────────────────────────────────────────
-    //
-    // Applied before every ElevenLabs call.
-    // Fixes:
-    //   1. Devanagari loanwords → Latin  ("ऑर्डर" → "order")
-    //   2. Mixed-script phrases → clean  ("Ho गया" → "ho gaya")
-    //   3. Partial translations → uniform ("दाल chahiye" stays as-is — correct)
-    //
     private fun normalizeForTTS(text: String): String {
         var result = text
         TTS_WORD_MAP.forEach { (source, target) ->
@@ -208,8 +237,6 @@ class TTSManager(
         return result
     }
 
-    // ── VOICE RESOLUTION ──────────────────────────────────────────────────
-
     private fun resolveVoice(text: String, language: String): String {
         if (DEVANAGARI.containsMatchIn(text)) return VOICE_HI
         return when {
@@ -217,8 +244,6 @@ class TTSManager(
             else -> VOICE_EN
         }
     }
-
-    // ── ELEVENLABS HTTP ───────────────────────────────────────────────────
 
     private fun fetchElevenLabsAudio(
         text: String,
@@ -252,8 +277,6 @@ class TTSManager(
         }
         return response.body?.bytes()
     }
-
-    // ── MEDIAPLAYER ───────────────────────────────────────────────────────
 
     private fun playAudioBytes(context: Context, audioBytes: ByteArray, onDone: (() -> Unit)?) {
         val tmp = File(context.cacheDir, "butler_tts_${System.currentTimeMillis()}.mp3")
@@ -296,8 +319,6 @@ class TTSManager(
         finally { player = null }
     }
 
-    // ── ANDROID TTS FALLBACK ──────────────────────────────────────────────
-
     private fun speakWithAndroidTts(text: String, language: String, onDone: (() -> Unit)?) {
         val tts = androidTts
         if (tts == null || !androidTtsReady) { onDone?.invoke(); return }
@@ -320,8 +341,6 @@ class TTSManager(
             onDone?.invoke()
         }
     }
-
-    // ── STOP / SHUTDOWN ───────────────────────────────────────────────────
 
     fun stop()     { releasePlayer(); androidTts?.stop() }
     fun shutdown() { releasePlayer(); androidTts?.stop(); androidTts?.shutdown(); androidTts = null }

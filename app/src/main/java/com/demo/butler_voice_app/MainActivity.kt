@@ -689,10 +689,9 @@ class MainActivity : ComponentActivity() {
                             totalEmptyRetries = 0
                             sttRetryCount = 0
                             MoodDetector.reset()
-                            val giveUpMsg = ButlerPersonalityEngine.giveUp(lang, currentMood)
-                            val giveUpTone = if (currentMood == UserMood.FRUSTRATED)
-                                EmotionTone.EMPATHETIC else EmotionTone.NORMAL
-                            speak(giveUpMsg, giveUpTone) { startWakeWordListening() }
+                            val giveUpMsg  = ButlerPersonalityEngine.giveUp(lang, currentMood)
+                            // Give up with EMPATHETIC tone — user has been patient
+                            speak(giveUpMsg, ButlerPersonalityEngine.toneForGiveUp()) { startWakeWordListening() }
                             return@runOnUiThread
                         }
 
@@ -704,10 +703,9 @@ class MainActivity : ComponentActivity() {
                             startListening()
                         } else {
                             sttRetryCount = 0
-                            val retryTone: EmotionTone
-                            val retryMsg = ButlerPersonalityEngine.didntHear(lang, currentMood, totalEmptyRetries)
-                            retryTone = if (currentMood == UserMood.FRUSTRATED) EmotionTone.EMPATHETIC else EmotionTone.NORMAL
-                            speak(retryMsg, retryTone) { startListening() }
+                            val retryMsg  = ButlerPersonalityEngine.didntHear(lang, currentMood, totalEmptyRetries)
+                            // Retry with EMPATHETIC tone — never impatient, always gentle
+                            speak(retryMsg, ButlerPersonalityEngine.toneForRetry()) { startListening() }
                         }
                         return@runOnUiThread
                     }
@@ -1452,7 +1450,7 @@ class MainActivity : ComponentActivity() {
         val lang     = LanguageManager.getLanguage()
         val amountRs = "₹${pendingOrderTotal.toInt()}"
         when {
-            paid.any    { cleaned.contains(it) } -> speak(ButlerPersonalityEngine.paymentDone(lang)) { placeOrder() }
+            paid.any    { cleaned.contains(it) } -> speak(ButlerPersonalityEngine.paymentDone(lang), ButlerPersonalityEngine.toneForPaymentDone()) { placeOrder() }
             notPaid.any { cleaned.contains(it) } -> {
                 speak(when (mode) {
                     "card" -> "theek hai! card se $amountRs pay karein."
@@ -2004,7 +2002,7 @@ class MainActivity : ComponentActivity() {
                 ButlerPersonalityEngine.confirmAddNext(
                     sessionUserName, pick.productName, pick.priceRs.toInt(), lang)
             }
-            speakKeepingRecsVisible(msg) { startListening() }
+            speakKeepingRecsVisible(msg, ButlerPersonalityEngine.toneForConfirmAdd()) { startListening() }
         } else {
             speakKeepingRecsVisible(
                 when {
@@ -2067,7 +2065,7 @@ class MainActivity : ComponentActivity() {
                 // Template 4: "Theek hai, {product} cart mein add kar diya… aur kuch chahiye {name}?"
                 val addedMsg = ButlerPersonalityEngine.itemAdded(
                     sessionUserName, displayName, lang, currentMood, cart.size)
-                showCartAndSpeak(addedMsg) { startListening() }
+                showCartAndSpeak(addedMsg, ButlerPersonalityEngine.toneForItemAdded()) { startListening() }
             }
 
             // User says NO → ask which brand they want instead
@@ -2157,7 +2155,11 @@ class MainActivity : ComponentActivity() {
     // CART HELPERS
     // ══════════════════════════════════════════════════════════════════════
 
-    private fun showCartAndSpeak(text: String, onDone: (() -> Unit)? = null) {
+    private fun showCartAndSpeak(
+        text: String,
+        tone: EmotionTone = EmotionTone.WARM,
+        onDone: (() -> Unit)? = null
+    ) {
         sarvamSTT.stop()
         lifecycleScope.launch {
             val lang      = LanguageManager.getLanguage()
@@ -2172,7 +2174,7 @@ class MainActivity : ComponentActivity() {
                     setUiState(ButlerUiState.CartReview(cartItems, total, text))
                 else
                     setUiState(ButlerUiState.Speaking(ttsText, cart = cartItems))
-                ttsManager.speak(text = ttsText, language = lang, onDone = { onDone?.invoke() })
+                ttsManager.speak(text = ttsText, language = lang, tone = tone, onDone = { onDone?.invoke() })
             }
         }
     }
@@ -2185,10 +2187,11 @@ class MainActivity : ComponentActivity() {
             return
         }
         currentState = AssistantState.CONFIRMING
-        // FIX: Do NOT use speakWithTransition — HumanFillerManager.getTransition("hi")
-        // returns "सुनो" (Listen!) which sounds rude/commanding before a cart summary.
-        // Speak the confirm directly with no filler prepended.
-        showCartAndSpeak(buildShortConfirm(LanguageManager.getLanguage())) { startListening() }
+        // Template 6: use WARM tone — this is the "almost done" moment
+        showCartAndSpeak(
+            buildShortConfirm(LanguageManager.getLanguage()),
+            ButlerPersonalityEngine.toneForConfirmOrder()
+        ) { startListening() }
     }
 
     // ══════════════════════════════════════════════════════════════════════
