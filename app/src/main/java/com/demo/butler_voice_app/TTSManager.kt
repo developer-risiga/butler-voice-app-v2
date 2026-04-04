@@ -51,7 +51,7 @@ class TTSManager(
         private const val TAG          = "TTS"
         private const val VOICE_EN     = "K2Byg54sHB1oHegvENtI"
         private const val VOICE_HI     = "K2Byg54sHB1oHegvENtI"
-        private const val ELEVEN_MODEL = "eleven_multilingual_v2"
+        private const val ELEVEN_MODEL = "eleven_flash_v2_5"
         private val DEVANAGARI         = Regex("[\\u0900-\\u097F]")
 
         private val TTS_WORD_MAP = linkedMapOf(
@@ -112,64 +112,65 @@ class TTSManager(
         )
 
         // ══════════════════════════════════════════════════════════════════
-        // TONE SETTINGS — EXTREME RANGE VERSION
+        // TONE SETTINGS
         //
-        // Previous values were too close together (0.42 vs 0.55 stability).
-        // The human ear needs at least 0.3+ gap in style to clearly notice.
-        // These values span the full audible range of the ElevenLabs voice.
+        // All tones use high stability (0.85) to prevent ElevenLabs from
+        // randomly changing pitch, loudness, or adding unwanted laughs.
+        // Tones are differentiated only by speed:
+        //   EMERGENCY  0.95 — urgency via pace
+        //   EXCITED    0.90 — energy via pace
+        //   NORMAL     0.85 — neutral baseline
+        //   WARM       0.82 — slightly unhurried
+        //   EMPATHETIC 0.78 — patient, slow
         //
-        //   style 0.0  = completely flat, robotic, newsreader
-        //   style 0.5+ = strong personality, emotion clearly audible
-        //   style 0.9  = maximum expression (emergency/excited)
-        //
-        //   stability 0.1 = maximum pitch variation (urgent/excited)
-        //   stability 0.6 = stable, clear, consistent (normal info)
+        //   stability 0.85 = stable, predictable, no personality drift
+        //   style 0.0 = no exaggeration (avoids random emotional outbursts)
         // ══════════════════════════════════════════════════════════════════
         private val TONE_SETTINGS = mapOf(
 
             // EMERGENCY — ambulance, heart attack, danger
-            // Sounds COMMANDING and URGENT — unmistakably serious
+            // High stability = no random pitch jumps; slightly faster pace = urgency
             EmotionTone.EMERGENCY to VoiceSettings(
-                stability = 0.12,        // near-minimum = maximum pitch variation
-                similarityBoost = 0.90,
-                style = 0.88,            // intense, urgent, commanding
-                speed = 1.12             // faster = urgency
+                stability = 0.85,
+                similarityBoost = 0.80,
+                style = 0.0,
+                speed = 0.95
             ),
 
             // EMPATHETIC — retry after silence, errors, frustration
-            // Sounds SOFT, GENTLE, PATIENT — clearly different from normal
+            // High stability prevents random laughs/pitch swings; slow pace = patience
             EmotionTone.EMPATHETIC to VoiceSettings(
-                stability = 0.22,        // emotional, gentle variation
-                similarityBoost = 0.85,
-                style = 0.72,            // strong warmth and sympathy
-                speed = 0.72             // noticeably SLOWER = patient, unhurried
+                stability = 0.85,
+                similarityBoost = 0.80,
+                style = 0.0,
+                speed = 0.78
             ),
 
             // NORMAL — prices, product lists, facts
-            // Sounds CLEAR and NEUTRAL — informational, no emotion
+            // Neutral, clear, consistent delivery
             EmotionTone.NORMAL to VoiceSettings(
-                stability = 0.62,        // stable, consistent delivery
-                similarityBoost = 0.70,
-                style = 0.02,            // near-zero style = flat info delivery
-                speed = 0.92
+                stability = 0.85,
+                similarityBoost = 0.80,
+                style = 0.0,
+                speed = 0.85
             ),
 
             // WARM — greetings, item added, relationship moments
-            // Sounds FRIENDLY and RELAXED — clearly warmer than NORMAL
+            // Same stability to avoid personality drift; slightly slower
             EmotionTone.WARM to VoiceSettings(
-                stability = 0.38,        // natural variation = sounds human
+                stability = 0.85,
                 similarityBoost = 0.80,
-                style = 0.52,            // strong warmth, clearly different from NORMAL 0.02
-                speed = 0.80             // slower = unhurried, comfortable
+                style = 0.0,
+                speed = 0.82
             ),
 
             // EXCITED — payment done, order confirmed, celebrations
-            // Sounds UPBEAT and ENERGETIC — the happiest Butler gets
+            // Slightly faster pace signals energy without unpredictable variation
             EmotionTone.EXCITED to VoiceSettings(
-                stability = 0.18,        // dynamic, lively
-                similarityBoost = 0.78,
-                style = 0.80,            // high energy, clearly celebratory
-                speed = 1.00             // natural pace with energy
+                stability = 0.85,
+                similarityBoost = 0.80,
+                style = 0.0,
+                speed = 0.90
             )
         )
     }
