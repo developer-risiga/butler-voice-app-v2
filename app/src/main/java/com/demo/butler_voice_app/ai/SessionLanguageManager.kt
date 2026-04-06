@@ -6,28 +6,30 @@ import android.util.Log
  * Manages real-time language switching across a session.
  *
  * DESIGN PRINCIPLE:
- * The only reliable way to distinguish a false detection from a genuine speaker
- * is transcript length. A single short word ("हाँ", "ಅಂತ", "ହଁ") is likely a
- * mis-detection. A full sentence ("నాకు rice కావాలి", "mujhe dal chahiye") is
- * definitively a real person speaking.
+ * Transcript length is the only reliable signal for distinguishing a genuine
+ * speaker from a false STT detection. A single word in a foreign script is
+ * almost always noise. A full sentence is always a real person speaking.
  *
  * THRESHOLD TABLE:
- * ─────────────────────────────────────────────────────────────────
- *  Switch direction          │ Transcript │ Hits needed
- * ─────────────────────────────────────────────────────────────────
- *  Any → English             │ 3+ words   │ 2  (raised — protects Hindi sessions)
- *  Any → English             │ 1-2 words  │ blocked if no-switch word
- *  English → Indic           │ 3+ words   │ 1  (genuine speaker)
- *  English → Indic           │ 1-2 words  │ 2  (moderate protection)
- *  Indic → Different Indic   │ 3+ words   │ 1  (e.g. investor speaks Telugu)
- *  Indic → Different Indic   │ 1-2 words  │ 3  (likely false detection)
- *  Odia / Bengali            │ any        │ ∞  (blocked entirely)
- *  No-switch words (UPI/QR)  │ any        │ ∞  (blocked — universal terms)
- * ─────────────────────────────────────────────────────────────────
+ * ─────────────────────────────────────────────────────────────────────────
+ *  Switch direction            │ Words  │ Hits needed  │ Rationale
+ * ─────────────────────────────────────────────────────────────────────────
+ *  Any → English               │ 3+     │ 2            │ Protects Hindi sessions
+ *  Any → English               │ 1-2    │ blocked      │ "UPI", "ok" = code-switch
+ *  English → Indic             │ 3+     │ 1            │ User's real language
+ *  English → Indic             │ 1-2    │ 2            │ Short utterance
+ *  Indic → Different Indic     │ 3+     │ 2            │ FIXED: was 1 → Gujarati bug
+ *  Indic → Different Indic     │ 1-2    │ 3            │ Almost certainly noise
+ *  Odia / Bengali              │ any    │ ∞            │ Blocked (misdetection-prone)
+ *  No-switch words (UPI, QR)   │ any    │ ∞            │ Universal Indian terms
+ * ─────────────────────────────────────────────────────────────────────────
  *
- * FIX: "UPI" was causing hi-IN → en-IN flip mid-session.
- * "UPI", "QR", "OK" are universal terms used across all Indian languages.
- * Sarvam tags them as en-IN but they should never trigger a language switch.
+ * KEY FIX: Indic→Indic long utterance threshold was 1 (too sensitive).
+ * Example from logcat: session=hi-IN, Sarvam returns 5-word gu-IN →
+ *   "[gu 5w] New candidate: 1/1 → Switched: hi-IN → gu-IN"
+ * With threshold=2: requires 2 consecutive same-language detections.
+ * A real Gujarati speaker will naturally trigger this in 2 utterances.
+ * A false detection almost never repeats consecutively.
  */
 object SessionLanguageManager {
 
@@ -35,10 +37,9 @@ object SessionLanguageManager {
     private val ALLOWED = setOf("hi", "en", "te", "ta", "kn", "ml", "pa", "gu", "mr")
     private val INDIC   = setOf("hi", "te", "ta", "kn", "ml", "pa", "gu", "mr")
 
-    // ── Universal terms that must never trigger a language switch ─────────
-    // These appear in every Indian language context. Sarvam may tag them as
-    // en-IN, but switching language for a single "UPI" or "QR" destroys the
-    // session — user has to re-establish their language with 3+ utterances.
+    // Universal terms that appear in all Indian language contexts.
+    // Sarvam tags these as en-IN, but they must never trigger a language switch.
+    // "UPI" during a Hindi order = the user paying in UPI, not switching to English.
     private val NO_SWITCH_WORDS = setOf(
         "upi", "qr", "ok", "okay", "yes", "no", "ha", "id",
         "otp", "atm", "ac", "tv", "pc", "app", "pin", "sms",
@@ -51,12 +52,6 @@ object SessionLanguageManager {
     val ttsLanguage: String
         get() = lockedLanguage.substringBefore("-")
 
-    /**
-     * Language hint passed to Sarvam API as ?language_code= query param.
-     * Telling Sarvam what language to expect improves STT accuracy.
-     * Returns null when language hasn't been determined yet (fresh session)
-     * so Sarvam auto-detects instead of being locked to English by default.
-     */
     val sarvamHint: String?
         get() = if (languageExplicitlySet) lockedLanguage else null
 
@@ -65,20 +60,12 @@ object SessionLanguageManager {
     private var pendingThreshold: Int    = 3
     private var languageExplicitlySet: Boolean = false
 
-    /**
-     * Call on every non-blank STT result.
-     *
-     * @param sarvamLangCode  e.g. "hi-IN", "te-IN"
-     * @param transcript      The actual text — word count determines threshold
-     * @return true if locked language changed; caller must sync LanguageManager
-     */
     fun onDetection(sarvamLangCode: String, transcript: String = ""): Boolean {
         val base       = sarvamLangCode.substringBefore("-").lowercase()
         val lockedBase = lockedLanguage.substringBefore("-").lowercase()
 
-        // ── Script blocked entirely ────────────────────────────────────────
         if (base in BLOCKED) {
-            Log.d("SessionLang", "Blocked: $sarvamLangCode")
+            Log.d("SessionLang", "Blocked script: $sarvamLangCode")
             return false
         }
         if (base !in ALLOWED) {
@@ -86,7 +73,6 @@ object SessionLanguageManager {
             return false
         }
 
-        // ── Already locked to this language — confirm and clear pending ────
         if (base == lockedBase) {
             if (pendingLanguage.isNotBlank())
                 Log.d("SessionLang", "Confirmed $lockedLanguage — dropping candidate $pendingLanguage")
@@ -99,30 +85,26 @@ object SessionLanguageManager {
         val transcriptLower = transcript.trim().lowercase().replace(Regex("[।,!?.॥]"), "")
         val isLong          = wordCount >= 3
 
-        // ── Guard 1: universal no-switch words ────────────────────────────
-        // Single words like "UPI", "QR", "OK" used in all Indian languages.
-        // Never trigger a language switch regardless of what Sarvam detected.
+        // Guard 1: Universal no-switch words
         if (wordCount == 1 && transcriptLower in NO_SWITCH_WORDS) {
             Log.d("SessionLang", "No-switch word '$transcriptLower' — keeping $lockedLanguage")
             return false
         }
 
-        // ── Guard 2: switching back to English from Indic session ─────────
-        // A single English word mid-Hindi session (like "done", "okay") is
-        // almost always code-switching, not a real language change.
-        // Require 3 words minimum before considering English switch.
+        // Guard 2: Short English mid-Indic session = code-switching, not real switch
         if (base == "en" && lockedBase in INDIC && !isLong) {
             Log.d("SessionLang", "Short en utterance during $lockedBase session — ignored")
             return false
         }
 
         val threshold = when {
-            // Switching to English now requires 2 consecutive detections minimum
-            base == "en"                                   -> 2
-            lockedBase == "en" && isLong                   -> 1
-            lockedBase == "en"                             -> 2
-            lockedBase in INDIC && base in INDIC && isLong -> 2
-            else                                           -> 3
+            base == "en"                                      -> 2   // English requires 2 consecutive
+            lockedBase == "en" && isLong                      -> 1   // Long utterance after en-IN = real switch
+            lockedBase == "en"                                -> 2   // Short utterance after en-IN
+            // KEY FIX: was -> 1 for long Indic→Indic
+            // Now requires 2 consecutive to prevent Gujarati hallucination switching
+            lockedBase in INDIC && base in INDIC && isLong   -> 2
+            else                                              -> 3   // Short Indic→Indic = almost always noise
         }
 
         val pendingBase = pendingLanguage.substringBefore("-").lowercase()

@@ -38,23 +38,23 @@ class SarvamSTTManager(
         private const val MAX_RETRIES  = 4
 
         // ── Cross-script noise suppression ────────────────────────────────────
-        // Max word count threshold below which a different-script result is
-        // treated as noise rather than a genuine language switch.
         //
-        // WHY 2: Real language switches always carry meaningful content —
-        // a product name, a quantity, a sentence. A 1-2 word result in a
-        // completely different script (e.g. Kannada "ಅವತ್" during a Hindi
-        // session) is almost always background noise, a filler sound, or
-        // a mic artefact that Sarvam misidentified.
+        // PROBLEM THIS SOLVES:
+        // During a hi-IN session, Sarvam occasionally returns 1-3 word results
+        // in Gujarati/Kannada/Bengali — background noise it misidentified.
+        // Example: session=hi-IN, Sarvam returns "ಅವತ್" (kn-IN, 1 word).
+        // This was flipping the session language for no reason.
         //
-        // WHY NOT 0: We still want to catch single-word genuine inputs
-        // like "हाँ" or "UPI" — but those will MATCH the session language,
-        // so they pass through fine. Only cross-script single words are blocked.
+        // THRESHOLD = 6: Real Gujarati input always comes with a full sentence.
+        // A 1-6 word result in a completely different script = noise.
+        //
+        // CRITICAL RULE: NEVER suppress en-IN → Indic.
+        // After wake word, session = en-IN (forced default).
+        // Roy's first Hindi utterance is ALWAYS legitimate, never noise.
+        // Suppressing it forces Roy to repeat 4x → AIParser sees qty=4 (bug).
         // ─────────────────────────────────────────────────────────────────────
         private const val NOISE_WORD_THRESHOLD = 6
 
-        // Scripts that are considered "different" from Devanagari-family languages.
-        // If the session is hi-IN/mr-IN and Sarvam returns one of these, it's noise.
         private val NON_DEVANAGARI_CODES = setOf(
             "kn-IN", "te-IN", "ta-IN", "ml-IN", "gu-IN", "pa-IN", "bn-IN", "or-IN"
         )
@@ -68,13 +68,10 @@ class SarvamSTTManager(
     private val tokens      = AtomicInteger(MAX_TOKENS)
     private val lastRefill  = AtomicLong(System.currentTimeMillis())
 
-    // ── Mood Detection — exposes last recording's PCM buffer ─────────────────
     var lastPcmBuffer: ShortArray = ShortArray(0)
         private set
     var lastRecordingDurationMs: Long = 0L
         private set
-
-    // ── Public API ────────────────────────────────────────────────────────────
 
     fun startListening(onResult: (String) -> Unit, onError: () -> Unit) {
         if (isRecording) stop()
@@ -104,8 +101,6 @@ class SarvamSTTManager(
         recorder = null
     }
 
-    // ── Recording ─────────────────────────────────────────────────────────────
-
     private fun recordAudio(): ByteArray? {
         if (ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO)
             != PackageManager.PERMISSION_GRANTED) {
@@ -114,17 +109,12 @@ class SarvamSTTManager(
         }
 
         val bufSize = AudioRecord.getMinBufferSize(
-            SAMPLE_RATE,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT
+            SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
         ).coerceAtLeast(4096)
 
         recorder = AudioRecord(
-            MediaRecorder.AudioSource.MIC,
-            SAMPLE_RATE,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT,
-            bufSize
+            MediaRecorder.AudioSource.MIC, SAMPLE_RATE,
+            AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufSize
         )
 
         if (recorder?.state != AudioRecord.STATE_INITIALIZED) {
@@ -135,11 +125,11 @@ class SarvamSTTManager(
         recorder?.startRecording()
         Log.d(TAG, "Recording started")
 
-        val allBytes      = mutableListOf<Byte>()
-        val allShorts     = mutableListOf<Short>()
-        val buf           = ShortArray(bufSize / 2)
-        val startMs       = System.currentTimeMillis()
-        var lastSoundMs   = startMs
+        val allBytes    = mutableListOf<Byte>()
+        val allShorts   = mutableListOf<Short>()
+        val buf         = ShortArray(bufSize / 2)
+        val startMs     = System.currentTimeMillis()
+        var lastSoundMs = startMs
 
         while (isRecording) {
             val read = recorder?.read(buf, 0, buf.size) ?: break
@@ -149,7 +139,6 @@ class SarvamSTTManager(
             if (rms > 300) lastSoundMs = System.currentTimeMillis()
 
             for (i in 0 until read) allShorts.add(buf[i])
-
             val pcm = ByteArray(read * 2)
             for (i in 0 until read) {
                 pcm[i * 2]     = (buf[i].toInt() and 0xFF).toByte()
@@ -164,16 +153,13 @@ class SarvamSTTManager(
             if (now - startMs > MAX_REC_MS) break
         }
 
-        val durationMs = System.currentTimeMillis() - startMs
         lastPcmBuffer           = allShorts.toShortArray()
-        lastRecordingDurationMs = durationMs
+        lastRecordingDurationMs = System.currentTimeMillis() - startMs
 
         stop()
         if (allBytes.isEmpty()) return null
         return addWavHeader(allBytes.toByteArray())
     }
-
-    // ── Transcription ─────────────────────────────────────────────────────────
 
     private suspend fun transcribeWithRetry(audioBytes: ByteArray): String {
         var attempt = 0
@@ -193,8 +179,7 @@ class SarvamSTTManager(
                         Log.w(TAG, "Rate limited — waiting ${wait}ms (attempt $attempt/$MAX_RETRIES)")
                         delay(wait)
                     } else {
-                        Log.e(TAG, "STT error: $response")
-                        return ""
+                        Log.e(TAG, "STT error: $response"); return ""
                     }
                 }
                 obj.has("transcript") -> {
@@ -202,56 +187,54 @@ class SarvamSTTManager(
                     val langCode = obj.optString("language_code", "en-IN")
                     Log.d(TAG, "Locked: $langCode")
 
-                    // ── Cross-script noise suppression (Bug 3 fix) ────────────
-                    // Context: SarvamSTT sometimes returns a 1-2 word result in a
-                    // completely different script during an established session.
-                    // Example from logcat: session=hi-IN, Sarvam returns "ಅವತ್"
-                    // (kn-IN, 1 word) — this is background noise misidentified.
-                    //
-                    // Rule: if the session language is locked AND the detected
-                    // language is in a different script family AND the transcript
-                    // is very short (≤ NOISE_WORD_THRESHOLD words) → treat as blank.
-                    //
-                    // We use SessionLanguageManager.sarvamHint as the locked lang
-                    // reference — it's non-null only after the session language is
-                    // confirmed, which is exactly when we want this guard active.
-                    //
-                    // This does NOT block genuine language switches: real switches
-                    // always come with a product name or full phrase (3+ words),
-                    // so they pass through the word count threshold.
-                    // ─────────────────────────────────────────────────────────────
+                    // ── Cross-script noise suppression ────────────────────────
                     if (t.isNotBlank()) {
-                        val sessionHint = SessionLanguageManager.sarvamHint // e.g. "hi-IN"
+                        val sessionHint = SessionLanguageManager.sarvamHint
                         if (sessionHint != null && langCode != sessionHint) {
-                            val wordCount = t.trim()
-                                .split("\\s+".toRegex())
-                                .filter { it.isNotEmpty() }
-                                .size
-                            val sessionIsDevanagari = sessionHint in DEVANAGARI_CODES
-                            val detectedIsOtherScript = when {
-                                sessionIsDevanagari -> langCode in NON_DEVANAGARI_CODES
-                                else -> langCode in DEVANAGARI_CODES
-                            }
-                            if (detectedIsOtherScript && wordCount <= NOISE_WORD_THRESHOLD) {
-                                Log.w(TAG, "Cross-script noise suppressed: '$t' " +
-                                        "($langCode) session=$sessionHint wordCount=$wordCount")
-                                return ""   // blank → triggers existing retry logic in MainActivity
+                            val sessionBase = sessionHint.substringBefore("-").lowercase()
+
+                            // ══ CRITICAL FIX ══════════════════════════════════
+                            // NEVER suppress when session language is English.
+                            //
+                            // Root cause of the 4-retry bug:
+                            //   1. Wake word detected → session forced to en-IN
+                            //   2. Roy says "mujhe rice lena hai" (hi-IN, 4 words)
+                            //   3. OLD CODE: sessionHint=en-IN, detectedIsOtherScript=true,
+                            //      wordCount=4 ≤ 6 → SUPPRESSED → blank transcript
+                            //   4. Roy repeats 4x → AIParser: quantity=4 (wrong!)
+                            //
+                            // en-IN is ONLY a forced default, never a real user language.
+                            // Any Indic detection when session=en-IN = user's real language.
+                            // ══════════════════════════════════════════════════
+                            if (sessionBase == "en") {
+                                Log.d(TAG, "en-IN → $langCode: legitimate language start, passing through")
+                                // No suppression — fall through to return t
+                            } else {
+                                // Indic → Different Indic: apply noise suppression
+                                val wordCount = t.trim()
+                                    .split("\\s+".toRegex())
+                                    .filter { it.isNotEmpty() }
+                                    .size
+                                val sessionIsDevanagari = sessionHint in DEVANAGARI_CODES
+                                val detectedIsOtherScript = when {
+                                    sessionIsDevanagari -> langCode in NON_DEVANAGARI_CODES
+                                    else                -> langCode in DEVANAGARI_CODES
+                                }
+                                if (detectedIsOtherScript && wordCount <= NOISE_WORD_THRESHOLD) {
+                                    Log.w(TAG, "Cross-script noise suppressed: '$t' " +
+                                            "($langCode) session=$sessionHint wordCount=$wordCount")
+                                    return ""
+                                }
                             }
                         }
                     }
-                    // ── End noise suppression ─────────────────────────────────
 
-                    // ── Language detection is handled exclusively by MainActivity ──
-                    // SarvamSTTManager just returns the transcript. MainActivity
-                    // calls onDetection(langCode, transcript) with the full transcript
-                    // so word-count-based thresholds work correctly.
                     if (t.isBlank()) Log.e(TAG, "No transcript found")
                     else             Log.d(TAG, "Transcript: $t")
                     return t
                 }
                 else -> {
-                    Log.e(TAG, "Unexpected response: $response")
-                    return ""
+                    Log.e(TAG, "Unexpected response: $response"); return ""
                 }
             }
         }
@@ -259,23 +242,23 @@ class SarvamSTTManager(
         return ""
     }
 
-    // ── HTTP ──────────────────────────────────────────────────────────────────
-
     private fun sendHttp(audioBytes: ByteArray): String {
         return try {
             val body = MultipartBody.Builder()
                 .setType(MultipartBody.FORM)
-                .addFormDataPart("file", "audio.wav", audioBytes.toRequestBody("audio/wav".toMediaType()))
+                .addFormDataPart(
+                    "file", "audio.wav",
+                    audioBytes.toRequestBody("audio/wav".toMediaType())
+                )
                 .addFormDataPart("model", "saarika:v2.5")
                 .build()
 
-            // ── Pass locked language as hint to improve Sarvam accuracy ──────
-            // When Butler knows Roy speaks Hindi, it tells Sarvam to expect
-            // Hindi — this reduces mis-detections of short utterances.
-            // Returns null until language is confirmed (fresh session),
-            // so Sarvam auto-detects for the first utterance.
+            // Only send language hint for confirmed Indic sessions.
+            // For en-IN (the forced default), don't constrain Sarvam's detection —
+            // we want it to freely detect whatever language Roy is speaking.
             val hint = SessionLanguageManager.sarvamHint
-            val url  = if (hint != null) "$ENDPOINT?language_code=$hint" else ENDPOINT
+            val url  = if (hint != null && !hint.startsWith("en")) "$ENDPOINT?language_code=$hint"
+            else ENDPOINT
 
             val req = Request.Builder()
                 .url(url)
@@ -285,12 +268,9 @@ class SarvamSTTManager(
 
             http.newCall(req).execute().body?.string() ?: "{}"
         } catch (e: Exception) {
-            Log.e(TAG, "Network error: ${e.message}")
-            "{}"
+            Log.e(TAG, "Network error: ${e.message}"); "{}"
         }
     }
-
-    // ── Token bucket ──────────────────────────────────────────────────────────
 
     private suspend fun awaitToken() {
         while (true) {
@@ -316,14 +296,15 @@ class SarvamSTTManager(
         return (capped + Random.nextLong(-300L, 300L)).coerceAtLeast(500L)
     }
 
-    // ── WAV header ────────────────────────────────────────────────────────────
-
     private fun addWavHeader(pcm: ByteArray): ByteArray {
         val totalLen = pcm.size + 36
         val byteRate = SAMPLE_RATE * 2
         return ByteArray(44).also { h ->
-            fun Int.le4(i: Int) { h[i]=toByte(); h[i+1]=(shr(8)).toByte(); h[i+2]=(shr(16)).toByte(); h[i+3]=(shr(24)).toByte() }
-            fun Int.le2(i: Int) { h[i]=toByte(); h[i+1]=(shr(8)).toByte() }
+            fun Int.le4(i: Int) {
+                h[i] = toByte(); h[i+1] = (shr(8)).toByte()
+                h[i+2] = (shr(16)).toByte(); h[i+3] = (shr(24)).toByte()
+            }
+            fun Int.le2(i: Int) { h[i] = toByte(); h[i+1] = (shr(8)).toByte() }
             "RIFF".forEachIndexed { i, c -> h[i]    = c.code.toByte() }; totalLen.le4(4)
             "WAVE".forEachIndexed { i, c -> h[8+i]  = c.code.toByte() }
             "fmt ".forEachIndexed { i, c -> h[12+i] = c.code.toByte() }
