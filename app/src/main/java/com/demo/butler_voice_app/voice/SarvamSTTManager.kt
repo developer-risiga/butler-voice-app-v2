@@ -51,7 +51,7 @@ class SarvamSTTManager(
         // like "हाँ" or "UPI" — but those will MATCH the session language,
         // so they pass through fine. Only cross-script single words are blocked.
         // ─────────────────────────────────────────────────────────────────────
-        private const val NOISE_WORD_THRESHOLD = 3
+        private const val NOISE_WORD_THRESHOLD = 6
 
         // Scripts that are considered "different" from Devanagari-family languages.
         // If the session is hi-IN/mr-IN and Sarvam returns one of these, it's noise.
