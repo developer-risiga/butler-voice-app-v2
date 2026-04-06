@@ -391,6 +391,8 @@ class TTSManager(
 
         // Step 4 — Cleanup
         result = result
+            .replace("।", ".")
+            .replace("॥", ".")
             .replace(Regex("  +"), " ")
             .replace(Regex("\\.{4,}"), "...")
             .replace(Regex("\\s+\\."), ".")
