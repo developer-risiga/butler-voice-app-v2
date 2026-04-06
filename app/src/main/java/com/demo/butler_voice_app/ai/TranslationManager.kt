@@ -20,7 +20,6 @@ object TranslationManager {
         .readTimeout(8, TimeUnit.SECONDS)
         .build()
 
-    // LRU cache: 150 entries
     private val cache = object : LinkedHashMap<String, String>(150, 0.75f, true) {
         override fun removeEldestEntry(eldest: Map.Entry<String, String>) = size > 150
     }
@@ -32,36 +31,108 @@ object TranslationManager {
         "mr" to "Marathi", "bn" to "Bengali"
     )
 
-    // Words that must never be translated (proper nouns, brand names, etc.)
     private val preservedWords = setOf(
-        "Your", "You", "The", "What", "Would", "Like", "Order",
-        "Added", "Anything", "Welcome", "Back", "Last", "Time",
-        "Account", "Created", "Great", "Nice", "Meet", "Got",
-        "Now", "Say", "Please", "Sorry", "Could", "Find",
-        "Place", "Shall", "Thank", "Goodbye", "Tell", "Say",
-        "Butler", "UPI", "QR", "OTP", "ID"
+        "Butler", "UPI", "QR", "OTP", "ID", "GPay", "PhonePe", "Paytm",
+        "Roy", "BHIM", "NEFT", "IMPS"
     )
+
+    // ── Hinglish word list ─────────────────────────────────────────────────────
+    //
+    // WHY THIS EXISTS:
+    // ButlerPersonalityEngine generates phrases like:
+    //   "Kuch suna nahi. Thoda aur boliye."
+    //   "Ho gaya Roy, Unity Basmati le liya... aur kuch mangwaoge?"
+    //   "Bas itna hi hai na Roy? ek Unity Basmati, chauvan rupaye, order de doon?"
+    //
+    // These are ALREADY correct Hinglish — ElevenLabs reads them perfectly.
+    // But TranslationManager.detectScript() returns "en" for them (no Devanagari),
+    // so it sends them to GPT for translation to "Hindi".
+    // GPT returns mixed: "Kuch सुना नहीं. Thoda और बोलिए."
+    // TTSManager then has to normalize this back to "Kuch suna nahi. Thoda aur boliye."
+    //
+    // This round-trip (Roman → mixed Devanagari → Roman) is wasteful and creates
+    // messy logs. The fix: detect Roman Hinglish and skip translation entirely.
+    //
+    // A phrase is Hinglish if it contains 2+ words from this list.
+    // This covers all Butler output phrases without false-positives on real English.
+    // ─────────────────────────────────────────────────────────────────────────────
+    private val HINGLISH_WORDS = setOf(
+        // Verbs
+        "kuch", "nahi", "chahiye", "boliye", "bolein", "bolo", "batao",
+        "mangwao", "mangwaoge", "mangwaayein", "lena", "dena", "dijiye",
+        "karein", "kariye", "karna", "milega", "milegi", "mila", "mili",
+        "hoga", "hogi", "hua", "hui", "suna", "suni", "suniye",
+        "chaliye", "chalo", "jaao", "ruko", "dekho", "laao", "bhejo",
+        "bataiye", "pahunchega", "pahunchegi", "aayega", "aayegi",
+        "le liya", "le loon", "le lo", "kar diya", "kar do", "kar di",
+        "bata do", "bhej do", "ho gaya", "ho gayi", "aa gaya", "aa gayi",
+        "daal do", "rakh do", "nikaalo",
+        // Adjectives & adverbs
+        "theek", "achha", "achhi", "achhe", "badhiya", "pakka",
+        "bilkul", "zaroor", "jaldi", "thoda", "thodi", "zyada",
+        "khaali", "taiyaar", "shaandaar", "khatam", "sabse", "abhi",
+        "zara", "sasta", "mahanga", "taaza",
+        // Nouns
+        "rupaye", "rupiya", "paise", "minute", "awaaz", "naam",
+        "samaan", "baat", "kaam", "ghar", "aaj", "kal", "baad",
+        "pehle", "phir", "ab", "paas", "dukaan", "keemat", "daam",
+        "daal", "chawal", "tel", "atta", "doodh", "chai", "ghee",
+        "namak", "cheeni", "masala", "sabzi", "dahi", "makhan",
+        "anda", "ande", "kilo", "packet", "bottle", "brand",
+        // Question words
+        "kya", "kaunsa", "kitna", "kitni", "kitne", "kahaan", "kaise",
+        "koi", "kaun",
+        // Pronouns & connectors
+        "mujhe", "aapko", "aapka", "hamara", "lekin", "saath",
+        "mein", "aur", "bhi", "par", "se", "ke", "ka", "ki",
+        // Affirmations & social
+        "haan", "nahi", "bas", "shukriya", "maaf", "ghabraiye",
+        // Grocery & order specific
+        "order", "cart", "payment", "confirm", "delivery", "booking",
+        "checkout", "lagaoon", "daalu", "mangwaoge", "le doon",
+        "doon", "lagaa", "chahiye", "milega",
+        // Time
+        "tees", "bees", "pachaas", "chaalis", "ek sau", "do sau",
+        "paanch sau", "chauvan", "paintalis", "ikkaavan"
+    )
+
+    private fun isRomanHinglish(text: String): Boolean {
+        // If text has any Devanagari, it's already mixed — don't skip translation
+        if (text.any { c -> c.code in 0x0900..0x097F }) return false
+
+        val lower = text.lowercase()
+        val matchCount = HINGLISH_WORDS.count { word -> lower.contains(word) }
+        return matchCount >= 2
+    }
 
     suspend fun translate(text: String, targetLang: String): String {
         if (text.isBlank()) return text
 
-        // ── KEY FIX: skip if source text is already in target language ─────────
-        val sourceScript = detectScript(text)
-        val targetBase   = targetLang.substringBefore("-")
+        val targetBase = targetLang.substringBefore("-")
 
-        // If Devanagari/Telugu/etc. script detected and target matches → skip
+        // ── Already English → no translation needed ───────────────────────────
+        if (targetBase == "en") return text
+
+        // ── Same script detected → skip ───────────────────────────────────────
+        val sourceScript = detectScript(text)
         if (sourceScript == targetBase) {
             Log.d(TAG, "Same language ($sourceScript == $targetBase), skipping")
             return text
         }
 
-        // If target is English and text appears to already be English → skip
-        if (targetBase == "en" && sourceScript == "en") {
+        // ── Roman Hinglish → skip translation ─────────────────────────────────
+        //
+        // ButlerPersonalityEngine already generates correct Hinglish in Roman script.
+        // Sending "Ho gaya Roy, le liya... aur kuch mangwaoge?" to GPT for "Hindi"
+        // translation produces mixed output: "Ho गया Roy, ले लिया... aur kuch मांगवाओगे?"
+        // TTSManager then has to clean this up. Skip the round-trip entirely.
+        //
+        // Note: this only fires for Indic targets (hi, mr, te, etc.) because the
+        // targetBase == "en" early return above handles English already.
+        if (targetBase in setOf("hi", "mr", "pa", "gu") && isRomanHinglish(text)) {
+            Log.d(TAG, "Roman Hinglish — skipping translation, using as-is")
             return text
         }
-
-        // If target is English (no translation needed for English-target in Indian context)
-        if (targetBase == "en") return text
 
         val cacheKey = "$targetLang:$text"
         cache[cacheKey]?.let {
@@ -73,7 +144,6 @@ object TranslationManager {
             try {
                 val langName = langNames[targetBase] ?: return@withContext text
 
-                // ── Build placeholder map to protect proper nouns / codes ─────
                 val placeholderMap = mutableMapOf<String, String>()
                 var processedText  = text
                 var counter = 0
@@ -88,26 +158,21 @@ object TranslationManager {
                     }
                 }
 
-                // 1. ALL-CAPS product names e.g. "INDIA GATE SUPER RICE"
+                // Protect proper nouns: ALL-CAPS names, Order/Booking IDs, numbers with units
                 Regex("""\b[A-Z][A-Z ]{2,}\b""").findAll(text).forEach { protect(it.value.trim()) }
-
-                // 2. Order / Booking IDs e.g. "BUT-000049", "BK-1234"
                 Regex("""\b[A-Z]{2,}-\d+\b""").findAll(text).forEach { protect(it.value) }
-
-                // 3. Numeric values with units e.g. "143 rupees", "10 mins"
                 Regex("""\d+\s*(rupees?|rs\.?|₹|mins?|minutes?|km|kg|g|ml|l)\b""", RegexOption.IGNORE_CASE)
                     .findAll(text).forEach { protect(it.value.trim()) }
-
-                // 4. Capitalized proper names that aren't common words
                 Regex("""\b[A-Z][a-z]{1,19}\b""").findAll(text).forEach {
                     if (it.value !in preservedWords) protect(it.value)
                 }
 
                 val prompt = """Translate the following text to $langName.
-Use informal, friendly, spoken Indian tone — like a helpful voice assistant talking to a friend.
-Hinglish is fine for casual phrases if it sounds natural.
+Use informal, friendly, spoken Indian tone — like a helpful shopkeeper talking to a regular customer.
+Hinglish (Roman script Hindi with some English mixed in) is preferred over pure Devanagari.
+Return the text in Roman script, NOT Devanagari, whenever possible.
 CRITICAL: Keep every placeholder EXACTLY as-is: XX0XX, XX1XX, XX2XX etc — do NOT translate them.
-Return ONLY the translated text. No quotes, no preamble, no explanation.
+Return ONLY the translated text. No quotes, no preamble.
 Text: $processedText"""
 
                 val messages = JSONArray().apply {
@@ -132,8 +197,7 @@ Text: $processedText"""
                 val responseBody = response.body?.string() ?: return@withContext text
 
                 if (!response.isSuccessful) {
-                    // ── KEY FIX: graceful fallback on any HTTP error (400, 429, 500) ──
-                    Log.e(TAG, "Error ${response.code} — using original text as fallback")
+                    Log.e(TAG, "Error ${response.code} — falling back to original")
                     return@withContext text
                 }
 
@@ -146,14 +210,12 @@ Text: $processedText"""
                     .removePrefix("\"")
                     .removeSuffix("\"")
 
-                // Restore all placeholders
                 placeholderMap.forEach { (ph, original) ->
                     translated = translated.replace(ph, original)
                 }
 
-                // Safety check — if any placeholder leaked, return original
                 if (Regex("XX\\d+XX").containsMatchIn(translated)) {
-                    Log.w(TAG, "Placeholder leak detected, falling back to original")
+                    Log.w(TAG, "Placeholder leak — falling back to original")
                     return@withContext text
                 }
 
@@ -163,29 +225,23 @@ Text: $processedText"""
 
             } catch (e: Exception) {
                 Log.e(TAG, "Exception: ${e.message} — returning original")
-                text  // ALWAYS fall back gracefully
+                text
             }
         }
     }
 
-    // ── Script/language detection from text content ──────────────────────────
-
-    /**
-     * Detects the base language from Unicode character ranges.
-     * Returns BCP-47 base code: "hi", "te", "ta", "ml", "kn", "en"
-     */
     fun detectScript(text: String): String {
         var devanagari = 0; var telugu = 0; var tamil = 0
         var malayalam  = 0; var kannada = 0; var latin = 0
 
         for (c in text) {
             when (c.code) {
-                in 0x0900..0x097F -> devanagari++   // Hindi / Marathi
+                in 0x0900..0x097F -> devanagari++
                 in 0x0C00..0x0C7F -> telugu++
                 in 0x0B80..0x0BFF -> tamil++
                 in 0x0D00..0x0D7F -> malayalam++
                 in 0x0C80..0x0CFF -> kannada++
-                in 0x0041..0x007A -> latin++         // ASCII letters
+                in 0x0041..0x007A -> latin++
                 in 0x0061..0x007A -> latin++
             }
         }

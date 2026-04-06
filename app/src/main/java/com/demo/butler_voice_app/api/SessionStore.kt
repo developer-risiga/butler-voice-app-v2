@@ -6,14 +6,15 @@ import android.util.Log
 /**
  * Persistent session store — SharedPreferences backed.
  *
- * ── BUG 7 FIX ──────────────────────────────────────────────────────────────
- * Previous version had no refresh token storage. When the access token
- * expired (401), tryRestoreSession() cleared everything and forced full
- * re-login on every cold start.
+ * LANGUAGE MEMORY FIX:
+ * Butler always resets to en-IN after wake word. This means Roy (Hindi speaker)
+ * gets "Yes Roy, go ahead." every time even though he always speaks Hindi.
  *
- * This version stores both access_token AND refresh_token so MainActivity
- * can silently refresh before falling through to the AuthActivity screen.
- * ───────────────────────────────────────────────────────────────────────────
+ * Fix: Save the user's detected language after each session.
+ * Next session, restore it so the greeting is in the right language.
+ *
+ * saveUserLanguage() — called when language switches (in MainActivity STT handler)
+ * getUserLanguage()  — called in proceedAfterIdentification to set greeting language
  */
 object SessionStore {
 
@@ -24,9 +25,11 @@ object SessionStore {
     private const val KEY_NAME     = "name"
     private const val KEY_EMAIL    = "email"
 
-    private var prefs: android.content.SharedPreferences? = null
+    // Language preference stored per user ID
+    // Key format: "lang_pref_<userId>"
+    private const val KEY_LANG_PREFIX = "lang_pref_"
 
-    // ── Lifecycle ──────────────────────────────────────────────────────────
+    private var prefs: android.content.SharedPreferences? = null
 
     fun init(context: Context) {
         prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -35,10 +38,6 @@ object SessionStore {
 
     // ── Write ──────────────────────────────────────────────────────────────
 
-    /**
-     * Save a full session after login or signup.
-     * [refreshToken] should be the Supabase refresh_token from the auth response.
-     */
     fun saveSession(
         accessToken:  String,
         uid:          String,
@@ -57,10 +56,6 @@ object SessionStore {
         Log.d("SessionStore", "Session saved for uid=$uid name=$name")
     }
 
-    /**
-     * Called after a successful token refresh — updates tokens without
-     * touching uid / name / email.
-     */
     fun updateTokens(newAccessToken: String, newRefreshToken: String = "") {
         prefs?.edit()?.run {
             putString(KEY_ACCESS, newAccessToken)
@@ -71,8 +66,51 @@ object SessionStore {
     }
 
     fun clearSession() {
+        // Keep language preferences when clearing session — they are per-user
+        // and should survive logout/login cycles
+        val langKeys = prefs?.all?.keys?.filter { it.startsWith(KEY_LANG_PREFIX) } ?: emptyList()
+        val langValues = langKeys.associateWith { prefs?.getString(it, null) }
+
         prefs?.edit()?.clear()?.apply()
-        Log.d("SessionStore", "Session cleared")
+
+        // Restore language preferences
+        prefs?.edit()?.apply {
+            langValues.forEach { (key, value) ->
+                if (value != null) putString(key, value)
+            }
+            apply()
+        }
+
+        Log.d("SessionStore", "Session cleared (language preferences retained)")
+    }
+
+    // ── Language preference ────────────────────────────────────────────────
+    //
+    // Called from MainActivity when a language switch is detected.
+    // Only saves confirmed Indic languages (not "en" — that's the default).
+    //
+    // Usage in MainActivity STT handler:
+    //   if (langSwitched) {
+    //       UserSessionManager.currentUserId()?.let { uid ->
+    //           val lang = SessionLanguageManager.ttsLanguage  // e.g. "hi"
+    //           if (lang != "en") SessionStore.saveUserLanguage(uid, lang)
+    //       }
+    //   }
+    fun saveUserLanguage(userId: String, lang: String) {
+        if (userId.isBlank() || lang.isBlank() || lang == "en") return
+        prefs?.edit()?.putString("$KEY_LANG_PREFIX$userId", lang)?.apply()
+        Log.d("SessionStore", "Language preference saved: userId=$userId lang=$lang")
+    }
+
+    // Called from MainActivity.proceedAfterIdentification() to restore greeting language.
+    // Returns "en" if no preference stored (first-time user or English speaker).
+    fun getUserLanguage(userId: String): String {
+        if (userId.isBlank()) return "en"
+        return prefs?.getString("$KEY_LANG_PREFIX$userId", "en") ?: "en"
+    }
+
+    fun clearLanguagePreference(userId: String) {
+        prefs?.edit()?.remove("$KEY_LANG_PREFIX$userId")?.apply()
     }
 
     // ── Read ───────────────────────────────────────────────────────────────
@@ -86,7 +124,8 @@ object SessionStore {
     fun hasSession():      Boolean = !getToken().isNullOrBlank()
     fun hasRefreshToken(): Boolean = !getRefreshToken().isNullOrBlank()
 
-    // ── Aliases used by UserSessionManager ────────────────────────────────
+    // ── Aliases ────────────────────────────────────────────────────────────
+
     fun save(
         token:        String,
         uid:          String,
