@@ -14,38 +14,13 @@ import java.io.File
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 
-// ── Emotion tone → ElevenLabs voice_settings ─────────────────────────────────
-//
-// TONE DESIGN — tuned for warmth and professionalism:
-//
-//   PREVIOUS: all tones had stability=0.85, style=0.0 → identical flat delivery
-//   NOW: differentiated stability + style for genuine emotional color
-//
-//   ElevenLabs stability:
-//     0.90+ = controlled, robotic (use only for emergencies)
-//     0.78–0.82 = natural human variation (professional + warm)
-//     0.72–0.76 = expressive, emotional (empathy, excitement)
-//
-//   ElevenLabs style:
-//     0.0 = flat, no personality
-//     0.05–0.12 = subtle warmth (safe, no random outbursts)
-//     0.15–0.22 = audible emotion (empathy, celebration)
-//
-// ─────────────────────────────────────────────────────────────────────────────
-enum class EmotionTone {
-    EMERGENCY,    // Medical crisis — controlled, commanding
-    EMPATHETIC,   // Retry / error / user frustrated — gentle, patient
-    NORMAL,       // Product info, prices — clear, professional
-    WARM,         // Greeting, item added — friendly neighborhood assistant
-    EXCITED       // Payment done, order confirmed — celebratory
-}
+enum class EmotionTone { EMERGENCY, EMPATHETIC, NORMAL, WARM, EXCITED }
 
 class TTSManager(
     private val context: Context,
     private val elevenLabsApiKey: String,
     private val voiceId: String = "K2Byg54sHB1oHegvENtI"
 ) {
-
     companion object {
         private const val TAG          = "TTS"
         private const val VOICE_EN     = "K2Byg54sHB1oHegvENtI"
@@ -61,239 +36,233 @@ class TTSManager(
             '6' to "chhe", '7' to "saat",  '8' to "aath", '9' to "nau"
         )
 
-        // ── Devanagari → Roman: THE core pronunciation fix ───────────────────
+        // ── Currency: ₹ → language-appropriate spoken form ────────────────────
         //
-        // WHY THIS MATTERS:
-        //   ElevenLabs is trained on Roman-script text. When it receives Devanagari
-        //   ("ठीक है Roy"), it mispronounces or skips those characters, making Butler
-        //   sound robotic and broken.
+        // FIX: When session is gu-IN, ₹54 was showing as "54 rupees" (wrong).
+        // Now: gu-IN → "chauvan rupiya", hi-IN → "chauvan rupaye", etc.
+        // Hindi and Gujarati share nearly identical number words.
         //
-        //   Butler speaks Hinglish — Hindi meaning, Roman pronunciation.
-        //   This map converts every common Devanagari word to its Roman phonetic
-        //   equivalent BEFORE sending to ElevenLabs.
-        //   "ठीक है Roy... aur kuch chahiye?" → "theek hai Roy... aur kuch chahiye?"
-        //   ElevenLabs reads the result perfectly in a natural Indian accent.
-        //
-        // ORDER: Multi-word phrases MUST appear before single words to prevent
-        //   partial replacements. "हो गया" → "ho gaya" before "है" → "hai".
-        // ─────────────────────────────────────────────────────────────────────
-        private val DEVANAGARI_TO_ROMAN = linkedMapOf(
+        private val RUPEE_REGEX = Regex("₹(\\d+)")
 
-            // ── Multi-word phrases first ──────────────────────────────────────
-            "घबराइए मत"       to "ghabraiye mat",
-            "समझ नहीं आया"    to "samajh nahi aaya",
-            "फिर से बोलिए"    to "phir se boliye",
-            "फिर से बोलें"    to "phir se bolein",
-            "कुछ और चाहिए"    to "kuch aur chahiye",
-            "और कुछ चाहिए"    to "aur kuch chahiye",
-            "और कुछ"          to "aur kuch",
-            "कुछ और"          to "kuch aur",
-            "ले लिया"         to "le liya",
-            "ले लो"           to "le lo",
-            "ले लें"          to "le lein",
-            "कर दो"           to "kar do",
-            "बता दो"          to "bata do",
-            "बता दीजिए"       to "bata dijiye",
-            "हो गया है"       to "ho gaya hai",
-            "हो गई है"        to "ho gayi hai",
-            "हो गया"          to "ho gaya",
-            "हो गई"           to "ho gayi",
-            "आ गया"           to "aa gaya",
-            "आ गई"            to "aa gayi",
-            "कर दिया"         to "kar diya",
-            "कर दी"           to "kar di",
-            "नहीं है"         to "nahi hai",
-            "नहीं मिला"       to "nahi mila",
-            "नहीं मिली"       to "nahi mili",
-            "मत माँगा"        to "mat manga",
-            "add हो गया"      to "add ho gaya",
-            "place हो गया"    to "place ho gaya",
-            "minute में"      to "minute mein",
-            "मिनट में"        to "minute mein",
-            "Ho गया"          to "ho gaya",
-            "ho गया"          to "ho gaya",
-
-            // ── Common verbs ──────────────────────────────────────────────────
-            "बताइए"           to "bataiye",
-            "बोलिए"           to "boliye",
-            "बोलें"           to "bolein",
-            "मंगवाएं"         to "mangwaayein",
-            "मंगवाइए"         to "mangwaiye",
-            "मंगवाना"         to "mangwaana",
-            "चाहिए"           to "chahiye",
-            "लेना"            to "lena",
-            "देना"            to "dena",
-            "दीजिए"           to "dijiye",
-            "करना"            to "karna",
-            "करें"            to "karein",
-            "करिए"            to "kariye",
-            "पहुंचेगा"        to "pahunchega",
-            "पहुंचेगी"        to "pahunchegi",
-            "आएगा"            to "aayega",
-            "आएगी"            to "aayegi",
-            "भेज दो"          to "bhej do",
-            "भेज दीजिए"       to "bhej dijiye",
-            "मिलेगा"          to "milega",
-            "मिलेगी"          to "milegi",
-            "मिला"            to "mila",
-            "मिली"            to "mili",
-            "होगा"            to "hoga",
-            "होगी"            to "hogi",
-            "हुआ"             to "hua",
-            "हुई"             to "hui",
-
-            // ── Adjectives & adverbs ──────────────────────────────────────────
-            "ठीक"             to "theek",
-            "अच्छा"           to "achha",
-            "अच्छी"           to "achhi",
-            "अच्छे"           to "achhe",
-            "बढ़िया"          to "badhiya",
-            "सही"             to "sahi",
-            "पक्का"           to "pakka",
-            "बिल्कुल"         to "bilkul",
-            "जरूर"            to "zaroor",
-            "ज़रूर"            to "zaroor",
-            "जल्दी"           to "jaldi",
-            "थोड़ा"            to "thoda",
-            "थोड़ी"            to "thodi",
-            "ज्यादा"          to "zyada",
-            "खाली"            to "khaali",
-            "तैयार"           to "taiyaar",
-            "शानदार"          to "shaandaar",
-            "खत्म"            to "khatam",
-            "सबसे"            to "sabse",
-            "अभी"             to "abhi",
-            "थोड़ी देर"        to "thodi der",
-
-            // ── Common nouns ──────────────────────────────────────────────────
-            "रुपये"           to "rupaye",
-            "रुपया"           to "rupaya",
-            "पैसे"            to "paise",
-            "मिनट"            to "minute",
-            "आवाज़"            to "awaaz",
-            "आवाज"            to "awaaz",
-            "नाम"             to "naam",
-            "सामान"           to "samaan",
-            "बात"             to "baat",
-            "काम"             to "kaam",
-            "घर"              to "ghar",
-            "आज"              to "aaj",
-            "कल"              to "kal",
-            "बाद"             to "baad",
-            "पहले"            to "pehle",
-            "फिर"             to "phir",
-            "अब"              to "ab",
-            "पास"             to "paas",
-            "समझ"             to "samajh",
-
-            // ── Grocery words ─────────────────────────────────────────────────
-            "चावल"            to "chawal",
-            "दाल"             to "daal",
-            "तेल"             to "tel",
-            "आटा"             to "atta",
-            "दूध"             to "doodh",
-            "चाय"             to "chai",
-            "घी"              to "ghee",
-            "नमक"             to "namak",
-            "चीनी"            to "cheeni",
-            "मसाला"           to "masala",
-            "सब्जी"           to "sabzi",
-            "दही"             to "dahi",
-            "मक्खन"           to "makhan",
-            "अंडा"            to "anda",
-            "अंडे"            to "ande",
-            "किलो"            to "kilo",
-            "ग्राम"           to "gram",
-            "पैकेट"           to "packet",
-            "बोतल"            to "bottle",
-            "ब्रांड"           to "brand",
-
-            // ── Question words ────────────────────────────────────────────────
-            "क्या"            to "kya",
-            "कौनसा"           to "kaunsa",
-            "कौन सा"          to "kaun sa",
-            "कौन सी"          to "kaun si",
-            "कितना"           to "kitna",
-            "कितनी"           to "kitni",
-            "कितने"           to "kitne",
-            "कहाँ"            to "kahaan",
-            "कहां"            to "kahaan",
-            "कैसे"            to "kaise",
-            "कोई"             to "koi",
-            "कुछ"             to "kuch",
-
-            // ── Pronouns & connectors ─────────────────────────────────────────
-            "मुझे"            to "mujhe",
-            "आपको"            to "aapko",
-            "आपका"            to "aapka",
-            "आपकी"            to "aapki",
-            "आपके"            to "aapke",
-            "हमारा"           to "hamara",
-            "लेकिन"           to "lekin",
-            "साथ"             to "saath",
-            "में"             to "mein",
-
-            // ── Affirmations & social words ───────────────────────────────────
-            "हाँ"             to "haan",
-            "हां"             to "haan",
-            "जी हाँ"          to "ji haan",
-            "नहीं"            to "nahi",
-            "नही"             to "nahi",
-            "बस"              to "bas",
-            "शुक्रिया"        to "shukriya",
-            "धन्यवाद"         to "dhanyavaad",
-            "माफ करना"        to "maaf karna",
-            "घबराइए"          to "ghabraiye",
-            "चलिए"            to "chaliye",
-            "चलो"             to "chalo",
-            "जरा"             to "zara",
-
-            // ── Numbers (when spoken in Devanagari) ───────────────────────────
-            "एक"              to "ek",
-            "दो"              to "do",
-            "तीन"             to "teen",
-            "चार"             to "chaar",
-            "पाँच"            to "paanch",
-            "पांच"            to "paanch",
-
-            // ── Common verb "hai" last — shortest, most likely to false-match ─
-            "हैं"             to "hain",
-            "है"              to "hai"
+        // Complete map 1–99 (all grocery amounts fall here)
+        private val HINDI_1_TO_99 = mapOf(
+            1 to "ek",          2 to "do",          3 to "teen",        4 to "chaar",
+            5 to "paanch",      6 to "chhe",         7 to "saat",        8 to "aath",
+            9 to "nau",         10 to "das",         11 to "gyarah",     12 to "barah",
+            13 to "terah",       14 to "chaudah",     15 to "pandrah",    16 to "solah",
+            17 to "satrah",      18 to "atharah",     19 to "unnees",     20 to "bees",
+            21 to "ikkees",      22 to "baees",       23 to "teis",       24 to "chaubees",
+            25 to "pachees",     26 to "chhabbees",   27 to "sattaees",   28 to "athaais",
+            29 to "unatis",      30 to "tees",        31 to "ikatees",    32 to "battees",
+            33 to "taintees",    34 to "chauntees",   35 to "paintees",   36 to "chhattees",
+            37 to "saintees",    38 to "adtees",      39 to "unchaalis",  40 to "chaalis",
+            41 to "ikataalees",  42 to "bayalis",     43 to "taintalis",  44 to "chawalis",
+            45 to "paintalis",   46 to "chhiyalis",   47 to "saintalis",  48 to "adtalis",
+            49 to "unchaas",     50 to "pachaas",     51 to "ikkaavan",   52 to "baavan",
+            53 to "tirpan",      54 to "chauvan",     55 to "pachpan",    56 to "chhappan",
+            57 to "sattavan",    58 to "atthaavan",   59 to "unsath",     60 to "saath",
+            61 to "iksath",      62 to "baasath",     63 to "tirsath",    64 to "chaunsath",
+            65 to "painsath",    66 to "chhiyasath",  67 to "sadsath",    68 to "adsath",
+            69 to "unattar",     70 to "sattar",      71 to "ikhattar",   72 to "bahattar",
+            73 to "tihattar",    74 to "chauhattar",  75 to "pachattar",  76 to "chhihattar",
+            77 to "satattar",    78 to "atthattar",   79 to "unnasi",     80 to "assi",
+            81 to "ikkyaasi",    82 to "bayasi",      83 to "tirasi",     84 to "chaurasi",
+            85 to "pachasi",     86 to "chhiyasi",    87 to "sattaasi",   88 to "atthasi",
+            89 to "navasi",      90 to "nabbe",       91 to "ikyaanave",  92 to "baanave",
+            93 to "tianave",     94 to "chauranave",  95 to "pachaanave", 96 to "chhiyanave",
+            97 to "satanave",    98 to "atthanave",   99 to "ninyaanave"
         )
 
-        // ── Tech / UI terms (Devanagari → Roman) ─────────────────────────────
+        private val HINDI_HUNDREDS = mapOf(
+            1 to "ek sau",     2 to "do sau",     3 to "teen sau",   4 to "chaar sau",
+            5 to "paanch sau", 6 to "chhe sau",   7 to "saat sau",   8 to "aath sau",
+            9 to "nau sau"
+        )
+
+        private fun amountToHindi(n: Int): String {
+            if (n <= 0)   return n.toString()
+            if (n > 9999) return n.toString()
+            if (n < 100)  return HINDI_1_TO_99[n] ?: n.toString()
+            val h    = n / 100;  val r = n % 100
+            val hStr = HINDI_HUNDREDS[h] ?: return n.toString()
+            if (r == 0) return hStr
+            val rStr = HINDI_1_TO_99[r] ?: r.toString()
+            return "$hStr $rStr"
+        }
+
+        private fun rupeeToSpoken(amount: Int, language: String): String = when {
+            language.startsWith("hi") || language.startsWith("mr") ->
+                "${amountToHindi(amount)} rupaye"
+            language.startsWith("gu") || language.startsWith("pa") ->
+                "${amountToHindi(amount)} rupiya"
+            language.startsWith("te") -> "$amount rupayalu"
+            language.startsWith("ta") -> "$amount rubai"
+            language.startsWith("kn") -> "$amount rupai"
+            language.startsWith("ml") -> "$amount rupay"
+            else -> "Rs $amount"
+        }
+
+        // ── Devanagari → Roman: core pronunciation fix ────────────────────────
+        // Multi-word phrases MUST come before single words.
+        private val DEVANAGARI_TO_ROMAN = linkedMapOf(
+            "घबराइए मत"    to "ghabraiye mat",
+            "समझ नहीं आया" to "samajh nahi aaya",
+            "फिर से बोलिए" to "phir se boliye",
+            "फिर से बोलें" to "phir se bolein",
+            "कुछ और चाहिए" to "kuch aur chahiye",
+            "और कुछ चाहिए" to "aur kuch chahiye",
+            "और कुछ"       to "aur kuch",
+            "कुछ और"       to "kuch aur",
+            "ले लिया"      to "le liya",
+            "ले लो"        to "le lo",
+            "ले लें"       to "le lein",
+            "कर दो"        to "kar do",
+            "बता दो"       to "bata do",
+            "बता दीजिए"    to "bata dijiye",
+            "हो गया है"    to "ho gaya hai",
+            "हो गया"       to "ho gaya",
+            "हो गई"        to "ho gayi",
+            "आ गया"        to "aa gaya",
+            "आ गई"         to "aa gayi",
+            "कर दिया"      to "kar diya",
+            "कर दी"        to "kar di",
+            "नहीं है"      to "nahi hai",
+            "नहीं मिला"    to "nahi mila",
+            "नहीं मिली"    to "nahi mili",
+            "मत माँगा"     to "mat manga",
+            "minute में"   to "minute mein",
+            "मिनट में"     to "minute mein",
+            "Ho गया"       to "ho gaya",
+            "ho गया"       to "ho gaya",
+            "बताइए"        to "bataiye",
+            "बोलिए"        to "boliye",
+            "बोलें"        to "bolein",
+            "मंगवाएं"      to "mangwaayein",
+            "मंगवाइए"      to "mangwaiye",
+            "मंगवाना"      to "mangwaana",
+            "चाहिए"        to "chahiye",
+            "लेना"         to "lena",
+            "देना"         to "dena",
+            "दीजिए"        to "dijiye",
+            "करना"         to "karna",
+            "पहुंचेगा"     to "pahunchega",
+            "आएगा"         to "aayega",
+            "भेज दो"       to "bhej do",
+            "मिलेगा"       to "milega",
+            "मिला"         to "mila",
+            "मिली"         to "mili",
+            "होगा"         to "hoga",
+            "हुआ"          to "hua",
+            "ठीक"          to "theek",
+            "अच्छा"        to "achha",
+            "अच्छी"        to "achhi",
+            "अच्छे"        to "achhe",
+            "बढ़िया"       to "badhiya",
+            "पक्का"        to "pakka",
+            "बिल्कुल"      to "bilkul",
+            "जरूर"         to "zaroor",
+            "ज़रूर"         to "zaroor",
+            "जल्दी"        to "jaldi",
+            "थोड़ा"         to "thoda",
+            "ज्यादा"       to "zyada",
+            "तैयार"        to "taiyaar",
+            "शानदार"       to "shaandaar",
+            "खत्म"         to "khatam",
+            "अभी"          to "abhi",
+            "रुपये"        to "rupaye",
+            "रुपया"        to "rupaya",
+            "पैसे"         to "paise",
+            "मिनट"         to "minute",
+            "आवाज़"         to "awaaz",
+            "आवाज"         to "awaaz",
+            "नाम"          to "naam",
+            "सामान"        to "samaan",
+            "बात"          to "baat",
+            "काम"          to "kaam",
+            "घर"           to "ghar",
+            "आज"           to "aaj",
+            "कल"           to "kal",
+            "बाद"          to "baad",
+            "पहले"         to "pehle",
+            "फिर"          to "phir",
+            "अब"           to "ab",
+            "समझ"          to "samajh",
+            "चावल"         to "chawal",
+            "दाल"          to "daal",
+            "तेल"          to "tel",
+            "आटा"          to "atta",
+            "दूध"          to "doodh",
+            "चाय"          to "chai",
+            "घी"           to "ghee",
+            "नमक"          to "namak",
+            "चीनी"         to "cheeni",
+            "मसाला"        to "masala",
+            "सब्जी"        to "sabzi",
+            "दही"          to "dahi",
+            "मक्खन"        to "makhan",
+            "अंडा"         to "anda",
+            "अंडे"         to "ande",
+            "किलो"         to "kilo",
+            "पैकेट"        to "packet",
+            "बोतल"         to "bottle",
+            "ब्रांड"        to "brand",
+            "क्या"         to "kya",
+            "कौनसा"        to "kaunsa",
+            "कौन सा"       to "kaun sa",
+            "कौन सी"       to "kaun si",
+            "कितना"        to "kitna",
+            "कितनी"        to "kitni",
+            "कितने"        to "kitne",
+            "कहाँ"         to "kahaan",
+            "कैसे"         to "kaise",
+            "कोई"          to "koi",
+            "कुछ"          to "kuch",
+            "मुझे"         to "mujhe",
+            "आपको"         to "aapko",
+            "आपका"         to "aapka",
+            "आपकी"         to "aapki",
+            "आपके"         to "aapke",
+            "लेकिन"        to "lekin",
+            "साथ"          to "saath",
+            "में"          to "mein",
+            "हाँ"          to "haan",
+            "हां"          to "haan",
+            "जी हाँ"       to "ji haan",
+            "नहीं"         to "nahi",
+            "नही"          to "nahi",
+            "बस"           to "bas",
+            "शुक्रिया"     to "shukriya",
+            "धन्यवाद"      to "dhanyavaad",
+            "माफ करना"     to "maaf karna",
+            "घबराइए"       to "ghabraiye",
+            "चलिए"         to "chaliye",
+            "चलो"          to "chalo",
+            "एक"           to "ek",
+            "दो"           to "do",
+            "तीन"          to "teen",
+            "चार"          to "chaar",
+            "पाँच"         to "paanch",
+            "पांच"         to "paanch",
+            "हैं"          to "hain",
+            "है"           to "hai"
+        )
+
         private val TECH_WORD_MAP = linkedMapOf(
-            "ऑर्डर्स"         to "orders",
-            "ऑर्डर"           to "order",
-            "कार्ट"            to "cart",
-            "पेमेंट"           to "payment",
-            "कैंसिल"           to "cancel",
-            "कन्फर्म"          to "confirm",
-            "डिलीवरी"          to "delivery",
-            "बुकिंग"           to "booking",
-            "ऑप्शन्स"          to "options",
-            "ऑप्शन"            to "option",
-            "चेकआउट"          to "checkout",
-            "यूपीआई"           to "UPI",
-            "क्यूआर"           to "QR",
-            "डेबिट"            to "debit",
-            "क्रेडिट"          to "credit",
-            "कार्ड"            to "card",
-            "बटलर"             to "Butler",
-            "अकाउंट"           to "account",
-            "मोबाइल"           to "mobile",
-            "नंबर"             to "number",
-            "आईडी"             to "ID",
-            "स्क्रीन"          to "screen",
-            "अम्बुलेंस"        to "ambulance",
-            "एम्बुलेंस"        to "ambulance",
-            "डॉक्टर"           to "doctor",
-            "एमरजेंसी"         to "emergency",
-            "फार्मेसी"         to "pharmacy",
-            "परफेक्ट"          to "perfect",
-            "ओके"              to "okay",
-            "थैंक्यू"          to "thank you",
-            "सॉरी"             to "sorry"
+            "ऑर्डर्स" to "orders",   "ऑर्डर"   to "order",
+            "कार्ट"   to "cart",     "पेमेंट"  to "payment",
+            "कैंसिल"  to "cancel",   "कन्फर्म" to "confirm",
+            "डिलीवरी" to "delivery", "बुकिंग"  to "booking",
+            "चेकआउट"  to "checkout", "यूपीआई"  to "UPI",
+            "क्यूआर"  to "QR",       "डेबिट"   to "debit",
+            "क्रेडिट" to "credit",   "कार्ड"   to "card",
+            "बटलर"    to "Butler",   "अकाउंट"  to "account",
+            "मोबाइल"  to "mobile",   "नंबर"    to "number",
+            "आईडी"    to "ID",       "स्क्रीन" to "screen",
+            "अम्बुलेंस" to "ambulance", "एम्बुलेंस" to "ambulance",
+            "डॉक्टर"  to "doctor",   "एमरजेंसी" to "emergency",
+            "फार्मेसी" to "pharmacy", "परफेक्ट" to "perfect",
+            "ओके"     to "okay",     "थैंक्यू"  to "thank you",
+            "सॉरी"    to "sorry"
         )
 
         private data class VoiceSettings(
@@ -305,17 +274,17 @@ class TTSManager(
         )
 
         private val TONE_SETTINGS = mapOf(
-            EmotionTone.EMERGENCY  to VoiceSettings(stability=0.90, similarityBoost=0.82, style=0.0,  speed=1.0),
-            EmotionTone.EMPATHETIC to VoiceSettings(stability=0.75, similarityBoost=0.82, style=0.18, speed=0.76),
-            EmotionTone.NORMAL     to VoiceSettings(stability=0.82, similarityBoost=0.80, style=0.05, speed=0.87),
-            EmotionTone.WARM       to VoiceSettings(stability=0.78, similarityBoost=0.82, style=0.12, speed=0.80),
-            EmotionTone.EXCITED    to VoiceSettings(stability=0.72, similarityBoost=0.80, style=0.22, speed=0.93)
+            EmotionTone.EMERGENCY  to VoiceSettings(0.90, 0.82, 0.00, speed = 1.00),
+            EmotionTone.EMPATHETIC to VoiceSettings(0.75, 0.82, 0.18, speed = 0.76),
+            EmotionTone.NORMAL     to VoiceSettings(0.82, 0.80, 0.05, speed = 0.87),
+            EmotionTone.WARM       to VoiceSettings(0.78, 0.82, 0.12, speed = 0.80),
+            EmotionTone.EXCITED    to VoiceSettings(0.72, 0.80, 0.22, speed = 0.93)
         )
     }
 
     private val http = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(30,  TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
         .build()
 
     private var player: MediaPlayer? = null
@@ -362,14 +331,13 @@ class TTSManager(
         }.start()
     }
 
-    // ── normalizeForTTS ───────────────────────────────────────────────────────
-    // Pipeline (order is critical):
-    //   1. Order IDs (BUT-000145 → "order number ek chaar paanch")
-    //   2. Tech/UI terms ("ऑर्डर" → "order")
-    //   3. Common Devanagari → Roman ("ठीक है" → "theek hai")  ← biggest fix
-    //   4. Cleanup (spaces, dots)
-    // ─────────────────────────────────────────────────────────────────────────
-    private fun normalizeForTTS(text: String, language: String): String {
+    // ── normalizeForTTS pipeline ──────────────────────────────────────────────
+    // Step 1 — Order IDs       (BUT-000145  → "order number ek chaar paanch")
+    // Step 2 — Currency        (₹54         → "chauvan rupaye" / "chauvan rupiya")
+    // Step 3 — Tech/UI terms   (ऑर्डर       → "order")
+    // Step 4 — Devanagari→Roman(ठीक है      → "theek hai")
+    // Step 5 — Cleanup         (danda, em-dash, double spaces)
+    fun normalizeForTTS(text: String, language: String): String {
         var result = text
 
         // Step 1 — Order IDs
@@ -379,23 +347,37 @@ class TTSManager(
             "order number $spoken"
         }
 
-        // Step 2 — Tech/UI terms
+        // Step 2 — Currency (language-aware)
+        result = RUPEE_REGEX.replace(result) { match ->
+            val amount = match.groupValues[1].toIntOrNull() ?: return@replace match.value
+            rupeeToSpoken(amount, language)
+        }
+        // Also handle plain "Rs X" leftover patterns
+        result = result.replace(Regex("Rs\\s*(\\d+)")) { match ->
+            val amount = match.groupValues[1].toIntOrNull() ?: return@replace match.value
+            rupeeToSpoken(amount, language)
+        }
+
+        // Step 3 — Tech/UI terms
         TECH_WORD_MAP.forEach { (source, target) ->
             result = result.replace(source, target, ignoreCase = false)
         }
 
-        // Step 3 — Comprehensive Devanagari → Roman
+        // Step 4 — Devanagari → Roman
         DEVANAGARI_TO_ROMAN.forEach { (devanagari, roman) ->
             result = result.replace(devanagari, roman, ignoreCase = false)
         }
 
-        // Step 4 — Cleanup
+        // Step 5 — Cleanup
         result = result
-            .replace("।", ".")
-            .replace("॥", ".")
-            .replace(Regex("  +"), " ")
-            .replace(Regex("\\.{4,}"), "...")
-            .replace(Regex("\\s+\\."), ".")
+            .replace("।", ".")          // Devanagari danda → full stop
+            .replace("॥", ".")          // double danda
+            .replace("—", ", ")         // em-dash → comma pause
+            .replace("–", ", ")         // en-dash → comma pause
+            .replace(Regex("  +"), " ") // collapse multiple spaces
+            .replace(Regex("\\.{4,}"), "...")    // max 3 dots
+            .replace(Regex("\\s+\\."), ".")      // no space before dot
+            .replace(Regex(",\\s*,"), ",")        // no double commas
             .trim()
 
         return result
@@ -441,7 +423,7 @@ class TTSManager(
     private fun playAudioBytes(context: Context, audioBytes: ByteArray, onDone: (() -> Unit)?) {
         val tmp = File(context.cacheDir, "butler_tts_${System.currentTimeMillis()}.mp3")
         try { tmp.writeBytes(audioBytes) }
-        catch (e: Exception) { Log.e(TAG, "Temp file write failed: ${e.message}"); onDone?.invoke(); return }
+        catch (e: Exception) { Log.e(TAG, "Temp file write: ${e.message}"); onDone?.invoke(); return }
 
         releasePlayer()
         player = MediaPlayer().apply {
@@ -460,7 +442,7 @@ class TTSManager(
                 start()
                 Log.d(TAG, "Playback started (${audioBytes.size} bytes)")
             } catch (e: Exception) {
-                Log.e(TAG, "MediaPlayer setup failed: ${e.message}")
+                Log.e(TAG, "MediaPlayer setup: ${e.message}")
                 tmp.delete(); releasePlayer(); onDone?.invoke()
             }
         }

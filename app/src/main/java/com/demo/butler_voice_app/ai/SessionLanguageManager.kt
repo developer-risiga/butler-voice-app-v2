@@ -121,7 +121,7 @@ object SessionLanguageManager {
             base == "en"                                   -> 2
             lockedBase == "en" && isLong                   -> 1
             lockedBase == "en"                             -> 2
-            lockedBase in INDIC && base in INDIC && isLong -> 1
+            lockedBase in INDIC && base in INDIC && isLong -> 2
             else                                           -> 3
         }
 
