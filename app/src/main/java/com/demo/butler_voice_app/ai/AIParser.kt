@@ -44,6 +44,7 @@ object AIParser {
     private val parseMutex = Mutex()
     private var lastParsedTranscript: String = ""
 
+
     private val SYSTEM_PROMPT = """
 You are an intent parser for Butler, a multilingual Indian voice assistant.
 User speaks Hindi (hi), English (en), Marathi (mr), or Telugu (te).
@@ -60,40 +61,85 @@ Intent options:
                                  "yes I also want milk"    → grocery_order
                                  "bilkul, rice bhi dena"   → grocery_order
                                  "theek hai aur oil chahiye" → grocery_order
+
 - "grocery_reorder"  : repeat previous grocery order exactly
+
 - "service_request"  : needs home service (plumber, electrician, carpenter, cleaner,
                        painter, doctor, ambulance, pharmacy, mechanic, salon, taxi)
+
 - "service_reorder"  : rebook a previous service booking
-- "finish_order"     : user is DONE ordering, wants to checkout/confirm cart summary.
-                       ONLY when NO product name is mentioned.
-                       Triggers: नहीं, बस, khatam, done, that's all, nothing else,
-                       ho gaya, bas karo, checkout, place order, order karo, order kar do
+
+- "finish_order"     : user is DONE adding items, wants to stop adding and proceed.
+                       NO product name is mentioned.
+                       Use this when user says NO MORE ITEMS in any of these forms:
+                         • Simple negation alone: "नहीं", "nahi", "no"
+                         • Negation + "more/aur": "नहीं और कुछ", "nahi aur kuch"
+                         • Full refusal sentences:
+                             "नहीं और कुछ मत माँगा"         → finish_order
+                             "aur kuch nahi chahiye"        → finish_order
+                             "bas ho gaya"                  → finish_order
+                             "kuch nahi chahiye"            → finish_order
+                             "aur kuch mat lo"              → finish_order
+                             "bas itna hi"                  → finish_order
+                             "bas, khatam"                  → finish_order
+                             "nahi chahiye kuch aur"        → finish_order
+                             "बस आ गया, हो गया"             → finish_order
+                             "nothing else"                 → finish_order
+                             "that's all"                   → finish_order
+                             "done"                         → finish_order
+                         • Checkout triggers:
+                             "checkout", "place order", "order karo",
+                             "order kar do", "le lo", "finalize karo"
+
 - "confirm_order"    : user says YES to the ORDER SUMMARY that Butler just read aloud.
                        ONLY when Butler has already listed the full cart and asked
-                       "lagaoon?" or "shall I place it?".
-                       Triggers (ONLY when no product name follows):
-                       हाँ, yes, ok, theek hai, bilkul, haan, kar do, pakka, laga do
-- "cancel_order"     : user wants to cancel (cancel, nahi, रद्द, stop, mat karo, band karo)
+                       "order karoon?" or "lagaoon?" or "shall I place it?".
+                       ONLY when no product name follows the affirmation.
+                       Triggers: हाँ, yes, ok, theek hai, bilkul, haan, kar do,
+                                 pakka, laga do, haan order karo, haan kar do
+                       NEGATIVE EXAMPLES (these are NOT confirm_order):
+                         "हाँ, चावल भी लेना है"  → grocery_order  (product present)
+                         "हाँ ऑर्डर करो"         → confirm_order  (no product, affirm order)
+
+- "cancel_order"     : user wants to cancel the ENTIRE PLACED ORDER
+                       (cancel, रद्द, stop, mat karo, band karo, order cancel karo)
+                       NOT used for "no more items" — that is finish_order.
+
 - "navigate_back"    : go back / main menu
+
 - "unknown"          : genuinely unclear, no product and no clear intent
 
 CRITICAL DISAMBIGUATION RULES:
-1. "affirmation + [product name]"  = grocery_order   (NEVER confirm_order)
-2. "affirmation alone"             = confirm_order    (when no product follows)
-3. When in doubt between grocery_order and confirm_order → choose grocery_order
-4. Short filler words (haan, ok, theek) before a product name do NOT make it a confirmation
+1. "affirmation + [product name]"            → grocery_order   (NEVER confirm_order)
+2. "affirmation alone" (after cart summary)  → confirm_order
+3. "negation + [no product name]"            → finish_order    (NEVER cancel_order)
+4. "cancel / रद्द / cancel order"            → cancel_order
+5. When in doubt between grocery_order and confirm_order → choose grocery_order
+6. Short filler words (haan, ok, theek) before a product = grocery_order
+7. "बस आ गया", "ho gaya", "bas itna" without product = finish_order
 
-EXAMPLES TO LEARN FROM:
-- "हां, डाल लेना है"           → grocery_order,  items=[dal]
-- "haan dal bhi chahiye"      → grocery_order,  items=[dal]
-- "theek hai rice dena"       → grocery_order,  items=[rice]
-- "yes milk bhi chahiye"      → grocery_order,  items=[milk]
-- "हाँ"  (alone, after cart read) → confirm_order, items=[]
-- "yes" (alone, after cart read)  → confirm_order, items=[]
-- "bas karo"                  → finish_order,   items=[]
-- "order kar do"              → finish_order,   items=[]
-- "nahi chahiye"              → cancel_order,   items=[]
-- "plumber chahiye"           → service_request, service_category=plumber
+WORKED EXAMPLES — MEMORIZE THESE:
+User said                            │ intent
+─────────────────────────────────────┼────────────────────
+"हां, डाल लेना है"                  │ grocery_order  [dal]
+"haan dal bhi chahiye"               │ grocery_order  [dal]
+"theek hai rice dena"                │ grocery_order  [rice]
+"yes milk bhi chahiye"               │ grocery_order  [milk]
+"नहीं और कुछ मत माँगा"               │ finish_order
+"aur kuch nahi chahiye"              │ finish_order
+"bas ho gaya"                        │ finish_order
+"बस आ गया, हो गया"                   │ finish_order
+"kuch nahi chahiye"                  │ finish_order
+"nothing else"                       │ finish_order
+"done"                               │ finish_order
+"हाँ"  (alone, after cart read)      │ confirm_order
+"हाँ ऑर्डर करो"                      │ confirm_order
+"yes" (alone, after cart summary)    │ confirm_order
+"cancel karo"                        │ cancel_order
+"order cancel karo"                  │ cancel_order
+"plumber chahiye"                    │ service_request [plumber]
+"bas karo"                           │ finish_order
+"order kar do"                       │ finish_order
 
 Response schema — always this exact shape:
 {
@@ -123,6 +169,17 @@ Rules:
         }
 
         Log.d(TAG, "Parsing: '$transcript'")
+
+        // ── Fast-path local classifier ──────────────────────────────────────
+        // Catches the most common finish_order patterns without an API round-trip.
+        // If matched, we still use confidence=0.95 and skip OpenAI entirely.
+        // This eliminates ~3s latency for the "no more items" case which is the
+        // most time-sensitive moment in the ordering flow.
+        val localFinish = localFinishOrderCheck(transcript)
+        if (localFinish != null) {
+            Log.d(TAG, "Fast-path finish_order: '$transcript'")
+            return@withContext localFinish
+        }
 
         try {
             val reqBody = JSONObject().apply {
@@ -156,6 +213,51 @@ Rules:
             Log.e(TAG, "Exception: ${e.message}")
             fallback(transcript)
         }
+    }
+
+    // ── Local fast-path for finish_order ─────────────────────────────────────
+    // These patterns cover ~90% of real "done ordering" utterances from Indian
+    // users. Matching is case-insensitive and script-agnostic.
+    // IMPORTANT: only match if NO grocery keyword is present — prevents false
+    // positives on "nahi, rice chahiye" type corrections.
+    private val GROCERY_KEYWORDS = setOf(
+        "rice", "dal", "daal", "chawal", "oil", "milk", "doodh", "atta", "cheeni",
+        "namak", "chai", "ghee", "sugar", "flour", "sabzi", "aloo", "onion", "pyaaz",
+        "tomato", "tamatar", "chips", "biscuit", "soap", "shampoo", "masala",
+        "arhar", "moong", "masoor", "urad", "toor", "chana"
+    )
+
+    private val FINISH_ORDER_PATTERNS = listOf(
+        // Devanagari patterns
+        Regex("नहीं.{0,20}कुछ.{0,10}(मत|नहीं|और नहीं)", RegexOption.IGNORE_CASE),
+        Regex("बस.{0,15}(हो गया|आ गया|कर|ठीक|itna)", RegexOption.IGNORE_CASE),
+        Regex("कुछ नहीं चाहिए"),
+        Regex("और कुछ नहीं"),
+        Regex("बस इतना"),
+        // Hinglish / Roman patterns
+        Regex("\\bkuch\\b.{0,15}\\b(nahi|mat|nhi)\\b", RegexOption.IGNORE_CASE),
+        Regex("\\bnahi\\b.{0,20}\\b(kuch|aur)\\b", RegexOption.IGNORE_CASE),
+        Regex("\\bbas\\b.{0,20}\\b(ho gaya|hogaya|itna|khatam|kar|done)\\b", RegexOption.IGNORE_CASE),
+        Regex("\\b(that'?s all|nothing else|done|finish|khatam|bas karo)\\b", RegexOption.IGNORE_CASE),
+        Regex("\\b(checkout|place order|order kar do|order karo|finalize)\\b", RegexOption.IGNORE_CASE),
+        Regex("\\bho gaya\\b.{0,10}\\bbas\\b", RegexOption.IGNORE_CASE),
+        Regex("\\baur kuch (mat|nahi|nhi)\\b", RegexOption.IGNORE_CASE),
+    )
+
+    private fun localFinishOrderCheck(transcript: String): FullParsedIntent? {
+        val lower = transcript.lowercase()
+        // If any grocery keyword is present, don't fast-path — let OpenAI decide
+        if (GROCERY_KEYWORDS.any { lower.contains(it) }) return null
+        val matched = FINISH_ORDER_PATTERNS.any { it.containsMatchIn(transcript) }
+        if (!matched) return null
+        return FullParsedIntent(
+            routing        = IntentRouting.FinishOrder,
+            language       = LanguageDetector.detect(transcript),
+            confidence     = 0.95,
+            serviceCategory = null,
+            timePreference = null,
+            rawText        = transcript
+        )
     }
 
     fun resetDebounce() {

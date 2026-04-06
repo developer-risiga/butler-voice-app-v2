@@ -36,6 +36,29 @@ class SarvamSTTManager(
         private const val BASE_BACKOFF = 2_000L
         private const val MAX_BACKOFF  = 32_000L
         private const val MAX_RETRIES  = 4
+
+        // ── Cross-script noise suppression ────────────────────────────────────
+        // Max word count threshold below which a different-script result is
+        // treated as noise rather than a genuine language switch.
+        //
+        // WHY 2: Real language switches always carry meaningful content —
+        // a product name, a quantity, a sentence. A 1-2 word result in a
+        // completely different script (e.g. Kannada "ಅವತ್" during a Hindi
+        // session) is almost always background noise, a filler sound, or
+        // a mic artefact that Sarvam misidentified.
+        //
+        // WHY NOT 0: We still want to catch single-word genuine inputs
+        // like "हाँ" or "UPI" — but those will MATCH the session language,
+        // so they pass through fine. Only cross-script single words are blocked.
+        // ─────────────────────────────────────────────────────────────────────
+        private const val NOISE_WORD_THRESHOLD = 2
+
+        // Scripts that are considered "different" from Devanagari-family languages.
+        // If the session is hi-IN/mr-IN and Sarvam returns one of these, it's noise.
+        private val NON_DEVANAGARI_CODES = setOf(
+            "kn-IN", "te-IN", "ta-IN", "ml-IN", "gu-IN", "pa-IN", "bn-IN", "or-IN"
+        )
+        private val DEVANAGARI_CODES = setOf("hi-IN", "mr-IN", "ne-IN", "mai-IN")
     }
 
     private val http        = OkHttpClient()
@@ -175,19 +198,53 @@ class SarvamSTTManager(
                     }
                 }
                 obj.has("transcript") -> {
-                    val t = obj.optString("transcript", "").trim()
-                    // ── Language detection is handled exclusively by MainActivity ──
-                    // Previously SarvamSTTManager called SessionLanguageManager.onDetection()
-                    // here, AND MainActivity called it again with the transcript. This
-                    // double-counted every detection hit, breaking the threshold logic.
-                    //
-                    // Now: SarvamSTTManager just returns the transcript. MainActivity
-                    // calls onDetection(langCode, transcript) with the full transcript
-                    // so word-count-based thresholds work correctly.
-                    //
-                    // The language_code from Sarvam is still logged for debugging.
+                    val t        = obj.optString("transcript", "").trim()
                     val langCode = obj.optString("language_code", "en-IN")
                     Log.d(TAG, "Locked: $langCode")
+
+                    // ── Cross-script noise suppression (Bug 3 fix) ────────────
+                    // Context: SarvamSTT sometimes returns a 1-2 word result in a
+                    // completely different script during an established session.
+                    // Example from logcat: session=hi-IN, Sarvam returns "ಅವತ್"
+                    // (kn-IN, 1 word) — this is background noise misidentified.
+                    //
+                    // Rule: if the session language is locked AND the detected
+                    // language is in a different script family AND the transcript
+                    // is very short (≤ NOISE_WORD_THRESHOLD words) → treat as blank.
+                    //
+                    // We use SessionLanguageManager.sarvamHint as the locked lang
+                    // reference — it's non-null only after the session language is
+                    // confirmed, which is exactly when we want this guard active.
+                    //
+                    // This does NOT block genuine language switches: real switches
+                    // always come with a product name or full phrase (3+ words),
+                    // so they pass through the word count threshold.
+                    // ─────────────────────────────────────────────────────────────
+                    if (t.isNotBlank()) {
+                        val sessionHint = SessionLanguageManager.sarvamHint // e.g. "hi-IN"
+                        if (sessionHint != null && langCode != sessionHint) {
+                            val wordCount = t.trim()
+                                .split("\\s+".toRegex())
+                                .filter { it.isNotEmpty() }
+                                .size
+                            val sessionIsDevanagari = sessionHint in DEVANAGARI_CODES
+                            val detectedIsOtherScript = when {
+                                sessionIsDevanagari -> langCode in NON_DEVANAGARI_CODES
+                                else -> langCode in DEVANAGARI_CODES
+                            }
+                            if (detectedIsOtherScript && wordCount <= NOISE_WORD_THRESHOLD) {
+                                Log.w(TAG, "Cross-script noise suppressed: '$t' " +
+                                        "($langCode) session=$sessionHint wordCount=$wordCount")
+                                return ""   // blank → triggers existing retry logic in MainActivity
+                            }
+                        }
+                    }
+                    // ── End noise suppression ─────────────────────────────────
+
+                    // ── Language detection is handled exclusively by MainActivity ──
+                    // SarvamSTTManager just returns the transcript. MainActivity
+                    // calls onDetection(langCode, transcript) with the full transcript
+                    // so word-count-based thresholds work correctly.
                     if (t.isBlank()) Log.e(TAG, "No transcript found")
                     else             Log.d(TAG, "Transcript: $t")
                     return t

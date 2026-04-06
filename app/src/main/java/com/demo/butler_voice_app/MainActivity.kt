@@ -80,8 +80,8 @@ enum class AssistantState {
     IDLE, CHECKING_AUTH,
     ASKING_IS_NEW_USER, ASKING_NAME, ASKING_EMAIL, ASKING_PHONE, ASKING_PASSWORD,
     LISTENING, ASKING_QUANTITY, ASKING_MORE, CONFIRMING, REORDER_CONFIRM, EDITING_CART,
-    CONFIRMING_ADD_PRODUCT,  // template 3: waiting yes/no after price confirmation
-    ASKING_PRODUCT_TYPE,     // template 2: waiting for basmati/brown/normal
+    CONFIRMING_ADD_PRODUCT,
+    ASKING_PRODUCT_TYPE,
     ASKING_PAYMENT_MODE,
     WAITING_CARD_PAYMENT, WAITING_UPI_PAYMENT, WAITING_QR_PAYMENT,
     CONFIRMING_CARD_PAID, CONFIRMING_UPI_PAID, CONFIRMING_QR_PAID,
@@ -116,18 +116,13 @@ class MainActivity : ComponentActivity() {
     private var sessionLastQty: Int = 0
     private var lastBookingId: String? = null
 
-    // ── Template personalization ──────────────────────────────────────────
-    // Set in proceedAfterIdentification so every BPE call can use {name}
     private var sessionUserName: String = "ji"
 
-    // ── Template 2+3: pending product confirmation fields ─────────────────
-    // Set when user picks a brand; we show price + ask before adding to cart
     private var pendingAddRecs: List<com.demo.butler_voice_app.api.ProductRecommendation> = emptyList()
     private var pendingAddIndex: Int = 0
     private var pendingAddQty: Int = 1
     private var pendingAddItemName: String = ""
 
-    // ── Template 2: product type pending ──────────────────────────────────
     private var pendingProductCategory: String = ""
 
     private var pendingProactiveData: ProactiveData? = null
@@ -187,7 +182,6 @@ class MainActivity : ComponentActivity() {
             "${item.quantity} $n"
         }
         val total = "₹${cart.sumOf { it.product.price * it.quantity }.toInt()}"
-        // Template 6: "Theek hai… bas itna hi hai na {name}? Order place karna hai?"
         return ButlerPersonalityEngine.confirmOrder(sessionUserName, items, total, lang)
     }
 
@@ -287,7 +281,7 @@ class MainActivity : ComponentActivity() {
                                 FamilyProfileManager.ensureCurrentUserRegistered(this@MainActivity, profile)
                                 currentState = AssistantState.LISTENING
                                 val firstName = profile.full_name?.split(" ")?.first() ?: displayName
-                                sessionUserName = firstName  // ← set name for BPE templates
+                                sessionUserName = firstName
                                 speak(IndianLanguageProcessor.getWelcomeGreeting(LanguageManager.getLanguage(), firstName)) { startListening() }
                             },
                             onFailure = { err ->
@@ -317,7 +311,7 @@ class MainActivity : ComponentActivity() {
                             FamilyProfileManager.ensureCurrentUserRegistered(this@MainActivity, profile)
                             currentState = AssistantState.LISTENING
                             val firstName = profile.full_name?.split(" ")?.first() ?: displayName.split(" ").first()
-                            sessionUserName = firstName  // ← set name for BPE templates
+                            sessionUserName = firstName
                             AnalyticsManager.logUserAuth("google", LanguageManager.getLanguage())
                             speak(IndianLanguageProcessor.getWelcomeGreeting(LanguageManager.getLanguage(), firstName)) { startListening() }
                         },
@@ -579,13 +573,6 @@ class MainActivity : ComponentActivity() {
         history: List<com.demo.butler_voice_app.api.PurchaseSummary>,
         lang: String
     ) {
-        // ── FIX Issue 1: Never proactively say "Want the usual Daawat Brown?" ──
-        // User didn't ask to reorder. Butler was guessing and sounding presumptuous.
-        // "Want the usual?" before user has asked for ANYTHING is a bad UX pattern.
-        // Fix: Always greet normally. User can say "same as last time" / "wahi do"
-        // to trigger reorder. SmartReorderManager still available via REORDER_CONFIRM
-        // when user explicitly requests it in handleOrderIntent.
-        // ─────────────────────────────────────────────────────────────────────────
         val lockedCode = when {
             lang.startsWith("hi") -> "hi-IN"
             lang.startsWith("te") -> "te-IN"
@@ -598,9 +585,8 @@ class MainActivity : ComponentActivity() {
             else                  -> "en-IN"
         }
         SessionLanguageManager.forceSet(lockedCode)
-        sessionUserName = name  // ← set for all BPE template {name} calls
+        sessionUserName = name
 
-        // Warm demo cache while greeting plays
         lifecycleScope.launch(Dispatchers.IO) {
             try {
                 productRepo.getTopRecommendations("rice", userLocation)
@@ -690,21 +676,15 @@ class MainActivity : ComponentActivity() {
                             sttRetryCount = 0
                             MoodDetector.reset()
                             val giveUpMsg  = ButlerPersonalityEngine.giveUp(lang, currentMood)
-                            // Give up with EMPATHETIC tone — user has been patient
                             speak(giveUpMsg, ButlerPersonalityEngine.toneForGiveUp()) { startWakeWordListening() }
                             return@runOnUiThread
                         }
 
-                        // ── FIX Issue 2 + 7: Silence ≠ error. User is thinking.
-                        // Old: 2 silent retries then speak → user got "Didn't catch that"
-                        // too quickly after any pause. Caused frustration and looping.
-                        // Fix: 3 silent retries before speaking. More patient, less intrusive.
                         if (sttRetryCount < 3) {
                             startListening()
                         } else {
                             sttRetryCount = 0
                             val retryMsg  = ButlerPersonalityEngine.didntHear(lang, currentMood, totalEmptyRetries)
-                            // Retry with EMPATHETIC tone — never impatient, always gentle
                             speak(retryMsg, ButlerPersonalityEngine.toneForRetry()) { startListening() }
                         }
                         return@runOnUiThread
@@ -775,7 +755,6 @@ class MainActivity : ComponentActivity() {
                     val transcript = text.trim()
                     if (transcript.isBlank()) {
                         val lang = LanguageManager.getLanguage()
-                        // FIX Issue 4: No screen references — voice assistant must work without screen
                         val blankMsg = when {
                             lang.startsWith("hi") -> "Brand ka naam bolein."
                             lang.startsWith("te") -> "Brand peyru cheppandi."
@@ -844,20 +823,20 @@ class MainActivity : ComponentActivity() {
             s.contains("one")    || s.contains("wan")    || s.contains("won")     ||
                     s.contains("first")  || s.contains("pehla")  || s.contains("pehli")   ||
                     s.contains("ek")     || s.contains("एक")     || s.contains("पहला")    ||
-                    s.contains("pehle")  || s.contains("pehli")  || s.contains("number one") ||
+                    s.contains("pehle")  || s.contains("number one") ||
                     s.contains("ఒకటి")   || s.contains("మొదటి") || s.contains("ஒன்று")   ||
                     s.contains("முதல்") || s.contains("ಒಂದು")   || s.contains("ಮೊದಲ")    ||
                     s.contains("ഒന്ന്")  || s.contains("ഒന്നാ") || s.contains("ਇੱਕ")     ||
-                    s.contains("ਪਹਿਲਾ") || s.contains("એક")     || s.contains(" prva")    ||
+                    s.contains("ਪਹਿਲਾ") || s.contains("એક")     ||
                     s.contains("ek no")  || s.contains("option 1") || s.contains("number 1") -> 1
 
             s.contains("two")    || s.contains("too")    || s.contains("to")      ||
                     s.contains("second") || s.contains("doosra") || s.contains("doosri")  ||
                     s.contains("do")     || s.contains("दो")     || s.contains("दूसरा")   ||
                     s.contains("రెండు")  || s.contains("రెండో")  || s.contains("இரண்டு")  ||
-                    s.contains("இரண்டாவது") || s.contains("ಎರಡು") || s.contains("రెండు")  ||
+                    s.contains("இரண்டாவது") || s.contains("ಎರಡು") ||
                     s.contains("രണ്ട്")  || s.contains("ਦੋ")     || s.contains("ਦੂਜਾ")   ||
-                    s.contains("બે")     || s.contains("ਦੋਵੇਂ")  ||
+                    s.contains("બે")     ||
                     s.contains("option 2") || s.contains("number 2") -> 2
 
             s.contains("three")  || s.contains("tree")   || s.contains("third")   ||
@@ -1126,7 +1105,7 @@ class MainActivity : ComponentActivity() {
                                 FamilyProfileManager.ensureCurrentUserRegistered(this@MainActivity, profile)
                                 currentState = AssistantState.LISTENING
                                 val firstName = profile.full_name?.split(" ")?.first() ?: tempName
-                                sessionUserName = firstName  // ← set name for BPE templates
+                                sessionUserName = firstName
                                 AnalyticsManager.logUserAuth("voice_signup", LanguageManager.getLanguage())
                                 speak(IndianLanguageProcessor.getWelcomeGreeting(lang, firstName)) { startListening() }
                             },
@@ -1176,11 +1155,9 @@ class MainActivity : ComponentActivity() {
                     return
                 }
 
-                // ── REORDER_CONFIRM branch ────────────────────────────────────────
                 when {
                     MultilingualMatcher.isYes(cleaned) && !isNoMoreIntent(cleaned) &&
                             IndianLanguageProcessor.detectIntent(cleaned) != "order_new" -> {
-                        // Pure yes with no product name → accept the reorder suggestion
                         lifecycleScope.launch {
                             for (s in pendingReorderSuggestions)
                                 apiClient.searchProduct(s.productName)?.let { cart.add(CartItem(it, s.avgQty)) }
@@ -1196,19 +1173,6 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
-                    // ── FIX Bug 1: "नहीं, मुझे राइस चाहिए।" in ONE turn ─────────
-                    // Previously: isNo() fired → asked "क्या चाहिए?" → user had to
-                    // repeat the product on the next turn.
-                    //
-                    // Fix: strip the leading negation, check if a product remains
-                    // in the same sentence, and route directly to searchAndAskQuantity.
-                    // No extra STT round-trip needed.
-                    //
-                    // Negation prefixes covered (Hindi, English, Telugu, Tamil,
-                    // Kannada, Malayalam, Punjabi, Gujarati):
-                    //   nahi, nahin, nope, no, नहीं, नही, ना, నో, வேண்டாம், ಬೇಡ,
-                    //   വേണ്ട, ਨਹੀਂ, ના
-                    // ─────────────────────────────────────────────────────────────
                     MultilingualMatcher.isNo(cleaned) -> {
                         pendingReorderSuggestions = emptyList()
                         currentState = AssistantState.LISTENING
@@ -1225,15 +1189,12 @@ class MainActivity : ComponentActivity() {
                         val instant = instantGroceryDetect(strippedText.lowercase(), LanguageManager.getLanguage())
                         when {
                             instant != null -> {
-                                // "नहीं, मुझे राइस चाहिए" → instant match → straight to product
                                 searchAndAskQuantity(instant.first, instant.second)
                             }
                             strippedText.isNotBlank() && strippedText.length < text.length -> {
-                                // Something after the negation but not a simple keyword → AIParser
                                 handleOrderIntent(strippedText, strippedText.lowercase())
                             }
                             else -> {
-                                // Pure "नहीं" with no product → ask what they want
                                 val noLang = LanguageManager.getLanguage()
                                 val noMsg = when {
                                     noLang.startsWith("hi") -> "ठीक है! क्या चाहिए?"
@@ -1251,7 +1212,6 @@ class MainActivity : ComponentActivity() {
                     }
 
                     else -> {
-                        // Not yes, not no → treat as a new order intent directly
                         pendingReorderSuggestions = emptyList()
                         currentState = AssistantState.LISTENING
                         handleOrderIntent(text, lower)
@@ -1360,11 +1320,6 @@ class MainActivity : ComponentActivity() {
                 cleaned.contains("q.r")     || cleaned.contains("scan")       || cleaned.contains("क्यूआर")
 
         when {
-            // ── FIX Issue 8: Both UPI and card in utterance → ASK, don't guess ─
-            // "UPI card" = ambiguous. Could be STT mishear OR genuine confusion.
-            // Old code: picked UPI (after previous fix) silently.
-            // New code: ask once clearly. User answers with a single word.
-            // ─────────────────────────────────────────────────────────────────
             hasUPI && hasCard -> {
                 val askMsg = when {
                     lang.startsWith("hi") -> "UPI से doge ya card se?"
@@ -1375,9 +1330,6 @@ class MainActivity : ComponentActivity() {
             }
 
             hasUPI -> {
-                // FIX: Use ₹ symbol ("₹50") not spelled words ("pachaas rupaye")
-                // ElevenLabs reads "₹50" naturally. Words get weird when TranslationManager
-                // translates them ("pachaas rupaye" → unexpected forms in some voices).
                 val amountRs = "₹${pendingOrderTotal.toInt()}"
                 currentState = AssistantState.WAITING_UPI_PAYMENT
                 setUiState(ButlerUiState.WaitingPaymentConfirm("upi", pendingOrderTotal))
@@ -1571,24 +1523,15 @@ class MainActivity : ComponentActivity() {
                                 searchAndAskQuantity(fb)
                             } else {
                                 val clarifyMsg = when {
-                                    lang.startsWith("hi") ->
-                                        "क्या मँगाना है? rice, dal, तेल, या कुछ और?"
-                                    lang.startsWith("te") ->
-                                        "ఏమి కావాలి? rice, dal, oil, లేదా ఇంకేమైనా?"
-                                    lang.startsWith("ta") ->
-                                        "என்ன வேணும்? rice, dal, oil, அல்லது வேற ஏதாவது?"
-                                    lang.startsWith("kn") ->
-                                        "ಏನು ಬೇಕು? rice, dal, oil, ಅಥವಾ ಬೇರೇನಾದರೂ?"
-                                    lang.startsWith("ml") ->
-                                        "എന്ത് വേണം? rice, dal, oil, അല്ലെങ്കിൽ മറ്റെന്തെങ്കിലും?"
-                                    lang.startsWith("pa") ->
-                                        "ਕੀ ਚਾਹੀਦਾ? rice, dal, oil, ਜਾਂ ਕੁਝ ਹੋਰ?"
-                                    lang.startsWith("gu") ->
-                                        "શું જોઈએ? rice, dal, oil, અથવા બીજું કંઈ?"
-                                    lang.startsWith("mr") ->
-                                        "काय हवं? rice, dal, oil, किंवा आणखी काही?"
-                                    else ->
-                                        "What would you like? Say rice, dal, oil, or any grocery item."
+                                    lang.startsWith("hi") -> "क्या मँगाना है? rice, dal, तेल, या कुछ और?"
+                                    lang.startsWith("te") -> "ఏమి కావాలి? rice, dal, oil, లేదా ఇంకేమైనా?"
+                                    lang.startsWith("ta") -> "என்ன வேணும்? rice, dal, oil, அல்லது வேற ஏதாவது?"
+                                    lang.startsWith("kn") -> "ಏನು ಬೇಕು? rice, dal, oil, ಅಥವಾ ಬೇರೇನಾದರೂ?"
+                                    lang.startsWith("ml") -> "എന്ത് വേണം? rice, dal, oil, അല്ലെങ്കിൽ മറ്റെന്തെങ്കിലും?"
+                                    lang.startsWith("pa") -> "ਕੀ ਚਾਹੀਦਾ? rice, dal, oil, ਜਾਂ ਕੁਝ ਹੋਰ?"
+                                    lang.startsWith("gu") -> "શું જોઈએ? rice, dal, oil, અથવા બીજું કંઈ?"
+                                    lang.startsWith("mr") -> "काय हवं? rice, dal, oil, किंवा आणखी काही?"
+                                    else -> "What would you like? Say rice, dal, oil, or any grocery item."
                                 }
                                 speak(clarifyMsg) { startListening() }
                             }
@@ -1606,23 +1549,11 @@ class MainActivity : ComponentActivity() {
     private fun handleAskingMore(cleaned: String, originalText: String) {
         val lang = LanguageManager.getLanguage()
         when {
-            // ── isNoMoreIntent checked FIRST (explicit checkout phrases only) ──
             isNoMoreIntent(cleaned) -> readCartAndConfirm()
 
-            // ── FIX Issue 5 + 7: isYes branch — restore context ──────────────
-            // Old: "हाँ" → re-ask "kuch aur chahiye?" → LOOP.
-            // Why: Butler forgot it had just suggested "दाल भी साथ में दूं?" and
-            // user said yes to it. Context was lost.
-            //
-            // Fix: When user says yes, check in this order:
-            //   1. Did they embed a product name? → search that product directly
-            //   2. Was there an active suggestion? (दाल after rice) → search it
-            //   3. Only if neither → ask what they want
-            // ─────────────────────────────────────────────────────────────────
             MultilingualMatcher.isYes(cleaned) || cleaned.contains("add") || cleaned.contains("more") ||
                     cleaned.contains("और") || cleaned.contains("aur") -> {
 
-                // Priority 1: Product keyword embedded in utterance ("हाँ दाल भी चाहिए")
                 val instant = instantGroceryDetect(cleaned, lang)
                 if (instant != null) {
                     currentState = AssistantState.LISTENING
@@ -1630,8 +1561,6 @@ class MainActivity : ComponentActivity() {
                     return
                 }
 
-                // Priority 2: Active suggestion from last product ("Rice was added →
-                // suggestion was 'दाल'" → user said yes → search dal)
                 val suggestionItem = getSuggestionSearchTerm(sessionLastProduct, lang)
                 if (suggestionItem != null) {
                     currentState = AssistantState.LISTENING
@@ -1639,7 +1568,6 @@ class MainActivity : ComponentActivity() {
                     return
                 }
 
-                // Priority 3: Nothing to infer — ask what they want
                 currentState = AssistantState.LISTENING
                 val prompt = ButlerPersonalityEngine.askMore(sessionUserName, lang, currentMood, cart.size, sessionLastProduct)
                 showCartAndSpeak(prompt) { startListening() }
@@ -1675,10 +1603,8 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // ── Template 2: handle subtype selection (basmati/brown/normal) ──────
     private fun handleAskingProductType(cleaned: String) {
         val lang = LanguageManager.getLanguage()
-        // Map what user said to a refined search term
         val refined = when {
             cleaned.contains("basmati")                                           -> "basmati rice"
             cleaned.contains("brown")                                             -> "brown rice"
@@ -1696,14 +1622,12 @@ class MainActivity : ComponentActivity() {
             cleaned.contains("coconut")|| cleaned.contains("nariyal")           -> "coconut oil"
             cleaned.contains("wheat") || cleaned.contains("gehun")              -> "wheat atta"
             cleaned.contains("multigrain")                                        -> "multigrain atta"
-            else -> pendingProductCategory  // fallback: search original category
+            else -> pendingProductCategory
         }
         currentState = AssistantState.LISTENING
         searchAndAskQuantity(refined)
     }
-    // Mirrors ButlerPersonalityEngine.getRelatedSuggestion but returns
-    // an English search keyword for SmartProductRepository (not Devanagari).
-    // e.g. sessionLastProduct = "Daawat Brown rice" → "rice" → suggestion "dal"
+
     private fun getSuggestionSearchTerm(lastProduct: String?, lang: String): String? {
         if (lastProduct == null) return null
         val p = lastProduct.lowercase()
@@ -1731,9 +1655,6 @@ class MainActivity : ComponentActivity() {
 
         return when {
             lang.startsWith("hi") -> {
-                // ── FIX: "देखो, rice — Brand ₹X। Kaunsa lena hai?" → "Rice mein Brand ₹X, Brand2 ₹Y, Brand3 hai."
-                // No "देखो" filler. No askSelection appended — Butler shows options and
-                // immediately starts listening. If brand not matched, recapMsg asks "Kaunsa X du?"
                 val optionText = recs.joinToString(", ") { r ->
                     "${shortName(r)} ₹${r.priceRs.toInt()}"
                 }
@@ -1754,46 +1675,32 @@ class MainActivity : ComponentActivity() {
                 "$itemDisplay mein $optionText hai."
             }
             lang.startsWith("te") -> {
-                val optionText = recs.joinToString(", ") { r ->
-                    "${shortName(r)} ₹${r.priceRs.toInt()}"
-                }
+                val optionText = recs.joinToString(", ") { r -> "${shortName(r)} ₹${r.priceRs.toInt()}" }
                 val intro = if (cart.isEmpty()) "చూడు," else "మరి చూడు,"
                 "$intro $itemName — $optionText. ${ButlerPersonalityEngine.askSelection("te", currentMood)}"
             }
             lang.startsWith("ta") -> {
-                val optionText = recs.joinToString(", ") { r ->
-                    "${shortName(r)} ₹${r.priceRs.toInt()}"
-                }
+                val optionText = recs.joinToString(", ") { r -> "${shortName(r)} ₹${r.priceRs.toInt()}" }
                 "$itemName — $optionText. எந்த brand வேணும்?"
             }
             lang.startsWith("kn") -> {
-                val optionText = recs.joinToString(", ") { r ->
-                    "${shortName(r)} ₹${r.priceRs.toInt()}"
-                }
+                val optionText = recs.joinToString(", ") { r -> "${shortName(r)} ₹${r.priceRs.toInt()}" }
                 "$itemName — $optionText. ಯಾವ brand ಬೇಕು?"
             }
             lang.startsWith("ml") -> {
-                val optionText = recs.joinToString(", ") { r ->
-                    "${shortName(r)} ₹${r.priceRs.toInt()}"
-                }
+                val optionText = recs.joinToString(", ") { r -> "${shortName(r)} ₹${r.priceRs.toInt()}" }
                 "$itemName — $optionText. ഏത് brand വേണം?"
             }
             lang.startsWith("pa") -> {
-                val optionText = recs.joinToString(", ") { r ->
-                    "${shortName(r)} ₹${r.priceRs.toInt()}"
-                }
+                val optionText = recs.joinToString(", ") { r -> "${shortName(r)} ₹${r.priceRs.toInt()}" }
                 "$itemName — $optionText. ਕਿਹੜਾ ਚਾਹੀਦਾ? ਨਾਮ ਦੱਸੋ।"
             }
             lang.startsWith("gu") -> {
-                val optionText = recs.joinToString(", ") { r ->
-                    "${shortName(r)} ₹${r.priceRs.toInt()}"
-                }
+                val optionText = recs.joinToString(", ") { r -> "${shortName(r)} ₹${r.priceRs.toInt()}" }
                 "$itemName — $optionText. કયું જોઈએ? નામ બોલો."
             }
             else -> {
-                val optionText = recs.joinToString(", ") { r ->
-                    "${shortName(r)} ₹${r.priceRs.toInt()}"
-                }
+                val optionText = recs.joinToString(", ") { r -> "${shortName(r)} ₹${r.priceRs.toInt()}" }
                 "$itemName — $optionText. Which brand do you want?"
             }
         }
@@ -1802,12 +1709,6 @@ class MainActivity : ComponentActivity() {
     private fun searchAndAskQuantity(itemName: String, qty: Int = 0, unit: String? = null) {
         val lang = LanguageManager.getLanguage()
 
-        // ── Template 2: ASK_TYPE — "Which rice — basmati, brown or normal?" ──
-        // If user said a GENERIC category name (rice/dal/oil) with no quantity
-        // specified and no subtype, ask what type before searching.
-        // This makes Butler feel smarter: it thinks about what the user actually
-        // needs instead of dumping brand names immediately.
-        // Only triggers on first call (qty == 0) to avoid infinite re-triggering.
         val genericTerms = setOf(
             "rice", "dal", "daal", "oil", "tel", "atta", "flour",
             "milk", "doodh", "tea", "chai",
@@ -1824,24 +1725,58 @@ class MainActivity : ComponentActivity() {
 
         speakFillerThen {
             lifecycleScope.launch {
-                val recs = productRepo.getTopRecommendations(itemName, userLocation)
-                if (recs.isNotEmpty()) {
-                    runOnUiThread { setUiState(ButlerUiState.ShowingRecommendations(itemName, recs)) }
 
-                    // ── FIX Issue 3: REMOVED single-best-option FRUSTRATED path ──
-                    // Old: mood=FRUSTRATED → "Daawat Brown ₹45 — best option. Want it?"
-                    // Wrong: Butler was skipping user choice entirely.
-                    // "Rice has many types. Butler skipped user choice."
-                    // Fix: ALWAYS show 3 options regardless of mood.
-                    // FRUSTRATED users still get a shorter, direct readout (handled in
-                    // buildProductVoiceReadout format) but they MUST choose the brand.
-                    // ─────────────────────────────────────────────────────────────────
+                // ── BUG 2 FIX: Use searchWithFallback instead of getTopRecommendations ──
+                //
+                // OLD CODE (removed):
+                //   val recs = productRepo.getTopRecommendations(itemName, userLocation)
+                //   if (recs.isNotEmpty()) { ... normal flow ... }
+                //   else {
+                //       val product = apiClient.searchProduct(itemName)  ← silent wrong substitution
+                //       ...
+                //   }
+                //
+                // NEW CODE:
+                //   searchWithFallback() does synonym expansion (arhar→toor), tries RPC,
+                //   if 0 results tries broader category search, and sets isCategoryMismatch=true
+                //   when the fallback result is a different variety (e.g. moong ≠ arhar).
+                //   Butler then ASKS the user before adding — never silently substitutes.
+                // ─────────────────────────────────────────────────────────────────────────
+                val searchResult = productRepo.searchWithFallback(itemName, userLocation)
+                val recs = searchResult.products
+
+                if (recs.isNotEmpty()) {
+
+                    // ── Category mismatch: wrong variety came back — ask user first ──────
+                    // Example: user said "arhar", fallback found "24 Mantra Moong Split"
+                    // Butler says: "Arhar nahi mili Roy. 24 Mantra Moong — ₹89. Chalega?"
+                    // User says haan/nahi → handled by existing CONFIRMING_ADD_PRODUCT state
+                    if (searchResult.isCategoryMismatch) {
+                        runOnUiThread {
+                            pendingAddRecs      = recs
+                            pendingAddIndex     = 0
+                            pendingAddQty       = if (qty > 0) qty else 1
+                            pendingAddItemName  = itemName
+                            currentState        = AssistantState.CONFIRMING_ADD_PRODUCT
+                            speakKeepingRecsVisible(
+                                ButlerPersonalityEngine.productCategoryMismatch(
+                                    requestedName  = searchResult.requestedKeyword,
+                                    substituteName = recs.first().readableName,
+                                    price          = recs.first().priceRs.toInt(),
+                                    lang           = lang,
+                                    name           = sessionUserName
+                                ),
+                                ButlerPersonalityEngine.toneForSubstitute()
+                            ) { startListening() }
+                        }
+                        return@launch
+                    }
+                    // ── End mismatch check ─────────────────────────────────────────────────
+
+                    runOnUiThread { setUiState(ButlerUiState.ShowingRecommendations(itemName, recs)) }
 
                     val readout = buildProductVoiceReadout(recs, itemName, lang)
 
-                    // ── FIX Issue 4: Never mention screen — voice-first ───────────
-                    // "screen पर दिखा नाम बोलें।" breaks voice-first UX.
-                    // Butler must work with eyes closed. Just ask for the brand name.
                     val nameRetryPrompt = when {
                         lang.startsWith("hi") -> "Brand ka naam bolein."
                         lang.startsWith("te") -> "Brand peyru cheppandi."
@@ -1883,28 +1818,12 @@ class MainActivity : ComponentActivity() {
                                     wantsLast     -> handleRecSelectionByIndex(2, recs, qty, itemName)
                                     wantsFirst    -> handleRecSelectionByIndex(0, recs, qty, itemName)
                                     else -> {
-                                        // ── FIX: Cross-script brand matching ─────────────────────────
-                                        // PROBLEM: Sarvam STT returns "दावत" when user says "Daawat".
-                                        // Product names in DB are English: "Daawat Brown Basmati".
-                                        // Old: "दावत".startsWith("daawat") = FALSE → no match → asks again.
-                                        //
-                                        // FIX: 3-pass matching:
-                                        //   Pass 1: Direct English word match (user spoke English)
-                                        //   Pass 2: Normalize Devanagari → English, then match again
-                                        //   Pass 3: Phonetic contains check (loose substring match)
-                                        //   Fallback: Pick the first rec rather than re-asking (user
-                                        //             already confirmed by saying a name — just pick best)
-                                        // ─────────────────────────────────────────────────────────────
-
                                         val normalized = normalizeBrandSpelling(sLow)
                                         val pick = matchBrandFromSpoken(sLow, normalized, recs)
 
                                         if (pick != null) {
                                             handleRecSelectionByIndex(recs.indexOf(pick), recs, qty, itemName)
                                         } else {
-                                            // ── SHORT RECAP: user didn't say a recognized brand ──────────
-                                            // Brands are visible on screen — no need to re-read the list.
-                                            // Just ask "Kaunsa rice du?" — clean, natural, non-repetitive.
                                             val itemDisplay = when {
                                                 itemName.contains("rice")  || itemName.contains("chawal")  -> if (lang.startsWith("hi")) "rice" else "rice"
                                                 itemName.contains("dal")   || itemName.contains("daal")    -> "daal"
@@ -1950,25 +1869,11 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                 } else {
-                    val product = apiClient.searchProduct(itemName)
+                    // ── searchWithFallback already tried synonym expansion + broader category.
+                    // Still 0 results = item genuinely not in the store catalog.
+                    // Tell the user directly. No more silent apiClient.searchProduct fallback.
                     runOnUiThread {
-                        if (product != null) {
-                            tempProduct = product
-                            if (qty > 0) {
-                                cart.add(CartItem(product, qty))
-                                sessionLastProduct = product.name; sessionLastQty = qty
-                                currentState = AssistantState.ASKING_MORE
-                                // Template 4: "Theek hai, {product} cart mein add kar diya… aur kuch chahiye {name}?"
-                                val addedMsg = ButlerPersonalityEngine.itemAdded(
-                                    sessionUserName, product.name, lang, currentMood, cart.size)
-                                showCartAndSpeak(addedMsg) { startListening() }
-                            } else {
-                                currentState = AssistantState.ASKING_QUANTITY
-                                speak(ButlerPersonalityEngine.askQuantity(product.name, lang)) { startListening() }
-                            }
-                        } else {
-                            speak(ButlerPersonalityEngine.productNotFound(itemName, lang)) { startListening() }
-                        }
+                        speak(ButlerPersonalityEngine.productNotFound(itemName, lang)) { startListening() }
                     }
                 }
             }
@@ -1984,17 +1889,12 @@ class MainActivity : ComponentActivity() {
         val pick = recs.getOrNull(index)
         val lang = LanguageManager.getLanguage()
         if (pick != null) {
-            // ── Template 3: CONFIRM_ADD_PRODUCT ────────────────────────────
-            // Don't silently add. Show price and ask: "{product} ₹{price} ka hai…
-            // kya ise cart mein add karna hai {name}?"
-            // User must say yes before item enters cart.
             pendingAddRecs      = recs
             pendingAddIndex     = index
             pendingAddQty       = if (qty > 0) qty else 1
             pendingAddItemName  = itemName
             currentState        = AssistantState.CONFIRMING_ADD_PRODUCT
 
-            // Is this the first item or a subsequent one?
             val msg = if (cart.isEmpty()) {
                 ButlerPersonalityEngine.confirmAddProduct(
                     sessionUserName, pick.productName, pick.priceRs.toInt(), lang)
@@ -2028,7 +1928,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // ── Template 3/5: handle the yes/no after price confirmation ─────────
     private fun handleConfirmingAddProduct(cleaned: String) {
         val lang = LanguageManager.getLanguage()
         val pick = pendingAddRecs.getOrNull(pendingAddIndex)
@@ -2038,7 +1937,6 @@ class MainActivity : ComponentActivity() {
         }
 
         when {
-            // User says YES → add to cart → template 4 (ITEM_ADDED)
             MultilingualMatcher.isYes(cleaned) || cleaned.contains("हाँ") ||
                     cleaned.contains("हां") || cleaned.contains("ha ") ||
                     cleaned.contains("han ") || cleaned.contains("le lo") ||
@@ -2062,13 +1960,11 @@ class MainActivity : ComponentActivity() {
                     "${pick.productName.split(" ").take(2).joinToString(" ")} $categoryWord"
                 else pick.productName.split(" ").take(2).joinToString(" ")
 
-                // Template 4: "Theek hai, {product} cart mein add kar diya… aur kuch chahiye {name}?"
                 val addedMsg = ButlerPersonalityEngine.itemAdded(
                     sessionUserName, displayName, lang, currentMood, cart.size)
                 showCartAndSpeak(addedMsg, ButlerPersonalityEngine.toneForItemAdded()) { startListening() }
             }
 
-            // User says NO → ask which brand they want instead
             MultilingualMatcher.isNo(cleaned) || cleaned.contains("नहीं") ||
                     cleaned.contains("nahi") || cleaned.contains("koi aur") -> {
 
@@ -2096,7 +1992,6 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            // Unclear → ask again politely
             else -> {
                 val askMsg = when {
                     lang.startsWith("hi") -> "हाँ ya नहीं?"
@@ -2187,7 +2082,6 @@ class MainActivity : ComponentActivity() {
             return
         }
         currentState = AssistantState.CONFIRMING
-        // Template 6: use WARM tone — this is the "almost done" moment
         showCartAndSpeak(
             buildShortConfirm(LanguageManager.getLanguage()),
             ButlerPersonalityEngine.toneForConfirmOrder()
@@ -2217,28 +2111,15 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun isNoMoreIntent(s: String): Boolean {
-        // ── FIX Issue 6 CRITICAL: "Nothing" ≠ "Proceed to checkout" ─────────
-        // Old list included: "no","nope","nothing","stop","nahi"
-        // "कुछ नहीं" / "nothing" / "stop" → user means STOP, not "place my order"
-        // This was silently routing to checkout on ambiguous words = WRONG ORDERS.
-        //
-        // Fix: ONLY explicit "I'm done adding, place the order" phrases trigger checkout.
-        // Ambiguous negative words (no, nahi, nothing, stop) → fall through to else branch.
-        // User must use an explicit done/checkout signal to confirm.
-        // ─────────────────────────────────────────────────────────────────────
         if (MultilingualMatcher.isDone(s)) return true
         if (IndianLanguageProcessor.DONE_PHRASES.any { s.contains(it, ignoreCase = true) }) return true
         return listOf(
-            // ✅ EXPLICIT done-with-cart signals only:
             "done","finish","checkout","place order",
             "बस","bas",
             "ऑर्डर करो","order karo","order kar do","order kardo",
             "ऑर्डर कर दो","ऑर्डर कर","place karo","place kar",
             "kar do","bas karo","theek hai ab","ab karo",
             "order kar doon","order de do","confirm"
-            // ❌ REMOVED: "no","nope","nothing","stop","nahi","ho gaya"
-            // These are ambiguous — "nothing" and "nahi" alone mean STOP/CANCEL,
-            // not "proceed to checkout". Do not include them here.
         ).any { s.contains(it, ignoreCase = true) }
     }
 
@@ -2358,7 +2239,7 @@ class MainActivity : ComponentActivity() {
                 runOnUiThread {
                     currentState = AssistantState.LISTENING
                     val firstName   = profile.full_name?.split(" ")?.first() ?: "there"
-                    sessionUserName = firstName  // ← critical: set name for all BPE templates
+                    sessionUserName = firstName
                     val history     = UserSessionManager.purchaseHistory
                     AnalyticsManager.logUserAuth("login", LanguageManager.getLanguage())
                     val lastProduct = history.firstOrNull()?.product_name?.takeIf { it.isNotBlank() && it != "null" }
@@ -2397,68 +2278,42 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // ── Maps Devanagari/phonetic brand name → English for cross-script match ─
-    // PROBLEM: Sarvam STT returns "दावत" when user says "Daawat" in Hindi.
-    // Product names in the DB are English ("Daawat Brown Basmati").
-    // Direct string comparison fails across scripts.
-    // This map covers the most common Indian grocery brands + their Hindi spellings.
     private fun normalizeBrandSpelling(spoken: String): String {
         val brandMap = mapOf(
-            // ── Rice brands ───────────────────────────────────────────────
             "दावत" to "daawat", "दावात" to "daawat", "dawat" to "daawat", "daavat" to "daawat",
             "इंडिया गेट" to "india gate", "इण्डिया गेट" to "india gate",
             "यूनिटी" to "unity", "आर्चीज़" to "archies", "आर्चीस" to "archies",
-            "सोनम" to "sonam", "सोनारी" to "sonari", "दुबार" to "dubar",
-            "कोहिनूर" to "kohinoor", "लाल किला" to "lal qilla",
-            // ── Oil brands ────────────────────────────────────────────────
+            "सोनम" to "sonam", "कोहिनूर" to "kohinoor", "लाल किला" to "lal qilla",
             "फॉर्च्यून" to "fortune", "फार्च्यून" to "fortune", "फर्च्यून" to "fortune",
             "पतंजलि" to "patanjali", "सफोला" to "saffola", "सफ्फोला" to "saffola",
             "फ्रीडम" to "freedom", "गोल्डविनर" to "goldwinner", "विमल" to "vimal",
-            "डाल्डा" to "dalda", "रूचि" to "ruchi", "सनफ्लावर" to "sunflower",
-            "गावर" to "gaurav", "सरसों" to "mustard", "तिल" to "sesame",
-            // ── Atta / Flour brands ───────────────────────────────────────
-            "आशीर्वाद" to "aashirvaad", "आशिर्वाद" to "aashirvaad", "आशीर्वाद" to "aashirvaad",
+            "डाल्डा" to "dalda", "रूचि" to "ruchi",
+            "आशीर्वाद" to "aashirvaad", "आशिर्वाद" to "aashirvaad",
             "अन्नपूर्णा" to "annapurna", "पिलसबरी" to "pillsbury",
-            "शक्ति भोग" to "shakti bhog", "रिलायंस" to "reliance select",
-            // ── Dal brands ────────────────────────────────────────────────
+            "शक्ति भोग" to "shakti bhog",
             "तूर" to "toor", "अरहर" to "arhar", "मूंग" to "moong",
             "मसूर" to "masoor", "उड़द" to "urad", "चना" to "chana",
-            // ── Salt brands ───────────────────────────────────────────────
-            "टाटा" to "tata", "कैप्टन कुक" to "captain cook", "अनपुर्णा" to "annapurna",
-            // ── Milk / Dairy brands ───────────────────────────────────────
+            "टाटा" to "tata", "कैप्टन कुक" to "captain cook",
             "अमूल" to "amul", "नंदिनी" to "nandini", "मदर डेयरी" to "mother dairy",
-            "गोकुल" to "gokul", "सांची" to "sanchi", "परागन" to "parag",
-            // ── Tea brands ────────────────────────────────────────────────
+            "गोकुल" to "gokul", "सांची" to "sanchi",
             "ताज महल" to "taj mahal", "रेड लेबल" to "red label",
             "ब्रुक बॉन्ड" to "brooke bond", "टेटली" to "tetley",
             "वाघ बकरी" to "wagh bakri", "गिरनार" to "girnar",
-            // ── Sugar brands ──────────────────────────────────────────────
-            "धाम्पुर" to "dhampur", "केसरी" to "kesari",
-            // ── Ghee brands ───────────────────────────────────────────────
             "अमूल घी" to "amul ghee", "पतंजलि घी" to "patanjali ghee",
-            "नंदिनी घी" to "nandini ghee", "गोवर्धन" to "gowardhan",
-            // ── Biscuit brands ────────────────────────────────────────────
+            "गोवर्धन" to "gowardhan",
             "पारले" to "parle", "ब्रिटानिया" to "britannia", "सनफीस्ट" to "sunfeast",
-            // ── Telugu/Tamil brand names (common phonetics) ───────────────
             "దావత్" to "daawat", "ఇండియా గేట్" to "india gate",
             "ఫార్చ్యూన్" to "fortune", "పతంజలి" to "patanjali",
-            "அமுல்" to "amul", "பதஞ்சலி" to "patanjali",
+            "అముల్" to "amul", "பதஞ்சலி" to "patanjali",
             "ಅಮೂಲ್" to "amul", "ಪತಂಜಲಿ" to "patanjali"
         )
         var result = spoken
-        // Sort by length descending so longer phrases match before shorter ones
         brandMap.entries.sortedByDescending { it.key.length }.forEach { (script, latin) ->
             if (result.contains(script)) result = result.replace(script, latin)
         }
         return result
     }
 
-    // ── 3-pass brand matcher: handles Latin, Devanagari, and phonetic ─────
-    // Pass 1: Direct word match (Latin → Latin, for English speakers)
-    // Pass 2: Normalized match (Devanagari → Latin, for Hindi speakers)
-    // Pass 3: Phonetic contains check (loose match for any remaining cases)
-    //
-    // Returns the best matching ProductRecommendation or null.
     private fun matchBrandFromSpoken(
         sLow: String,
         normalized: String,
@@ -2473,12 +2328,10 @@ class MainActivity : ComponentActivity() {
 
         fun containsScore(query: String, rec: ProductRecommendation): Int {
             val recLow = rec.productName.lowercase()
-            // Single-word query directly contained in product name (e.g. "daawat" in "daawat brown")
             val queryWords = query.split(" ").filter { it.length >= 3 }
             return queryWords.count { sw -> recLow.contains(sw) }
         }
 
-        // Pass 1 + 2: word boundary matching on original and normalized
         val directPick = recs.maxByOrNull { rec ->
             maxOf(wordScore(sLow, rec), wordScore(normalized, rec))
         }?.takeIf { rec ->
@@ -2486,7 +2339,6 @@ class MainActivity : ComponentActivity() {
         }
         if (directPick != null) return directPick
 
-        // Pass 3: loose contains check on original and normalized
         val containsPick = recs.maxByOrNull { rec ->
             maxOf(containsScore(sLow, rec), containsScore(normalized, rec))
         }?.takeIf { rec ->
@@ -2494,18 +2346,12 @@ class MainActivity : ComponentActivity() {
         }
         if (containsPick != null) return containsPick
 
-        // Pass 4: if the entire spoken text is contained in any product name
-        // (handles short one-word brand names like "amul", "tata")
-        val singleWordPick = recs.firstOrNull { rec ->
+        return recs.firstOrNull { rec ->
             rec.productName.lowercase().contains(sLow) ||
                     rec.productName.lowercase().contains(normalized)
         }
-        return singleWordPick
     }
 
-    // ── Maps itemName search term → spoken category word ─────────────────
-    // Used in handleConfirmingAddProduct to append the product noun to the
-    // brand name in TTS: "Daawat Brown rice" not just "Daawat Brown".
     private fun extractCategoryWord(itemName: String): String {
         val s = itemName.lowercase()
         return when {
@@ -2552,23 +2398,19 @@ class MainActivity : ComponentActivity() {
             "pain", "paining", "hurting", "dying", "help me", "urgent",
             "please help", "not breathing", "collapsed", "seizure",
             "दर्द", "दिल", "सांस", "बेहोश", "खून", "हादसा", "एम्बुलेंस",
-            "दर्द है", "दर्द हो", "दर्द हो रहा", "दिल में दर्द",
-            "मेरे दिल", "सीने में", "सांस नहीं", "गिर गया", "बचाओ",
+            "दर्द है", "दिल में दर्द", "सीने में", "सांस नहीं", "बचाओ",
             "madad", "bachao", "जल्दी", "मदद करो",
-            "dard hai", "dard ho raha", "dil mein dard", "mere dil mein",
-            "seene mein", "sans nahi", "ambulance bulao", "doctor bulao",
-            "help karo", "bachao mujhe", "gir gaya", "behosh",
-            "నొప్పి", "గుండె", "శ్వాస", "అపస్మారం", "రక్తం",
-            "నొప్పిగా", "గుండె నొప్పి", "శ్వాస రావడం లేదు",
-            "అంబులెన్స్", "సహాయం", "పడిపోయాను",
+            "dard hai", "dil mein dard", "seene mein", "sans nahi",
+            "ambulance bulao", "doctor bulao", "bachao mujhe", "behosh",
+            "నొప్పి", "గుండె", "శ్వాస", "అంబులెన్స్", "సహాయం",
             "வலி", "இதயம்", "ನೋವು", "ഹൃദയം", "വേദന"
         )
         if (emergencyWords.any { lower.contains(it) }) return EmotionTone.EMERGENCY
 
         val distressWords = listOf(
             "worried", "scared", "tension", "anxious", "upset", "crying",
-            "lost", "stolen", "problem", "trouble", "issue", "pareshan",
-            "परेशान", "डर", "घबराहट", "चिंता", "problem hai",
+            "lost", "stolen", "problem", "trouble", "pareshan",
+            "परेशान", "डर", "घबराहट", "चिंता",
             "సమస్య", "భయం", "ఆందోళన"
         )
         if (distressWords.any { lower.contains(it) }) return EmotionTone.EMPATHETIC
