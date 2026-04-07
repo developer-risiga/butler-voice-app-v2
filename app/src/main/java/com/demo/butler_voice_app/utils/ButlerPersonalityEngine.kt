@@ -39,7 +39,7 @@ object ButlerPersonalityEngine {
     fun toneForGiveUp()                    = EmotionTone.EMPATHETIC
     fun toneForError()                     = EmotionTone.EMPATHETIC
     fun toneForEmergency()                 = EmotionTone.EMERGENCY
-    fun toneForPaymentDone()               = EmotionTone.WARM
+    fun toneForPaymentDone()               = EmotionTone.EXCITED
     fun toneForSubstitute()                = EmotionTone.NORMAL
     fun toneForAskMore(mood: UserMood)     = if (mood == UserMood.FRUSTRATED) EmotionTone.EMPATHETIC else EmotionTone.WARM
 
