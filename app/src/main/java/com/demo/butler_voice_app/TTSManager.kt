@@ -40,32 +40,51 @@ class TTSManager(
 
         private val RUPEE_REGEX = Regex("₹(\\d+)")
 
+        // ── HINDI_1_TO_99 ─────────────────────────────────────────────────────
+        //
+        // CHANGE: Numbers 42–48 updated from "-alis" to "-aalees" endings.
+        //
+        // "-alis" = short vowels → ElevenLabs reads clipped/unnatural
+        // "-aalees" = long vowels → matches native spoken Hindi cadence
+        //
+        // Standard Hindi:
+        //   42 = बयालीस  = bayaalees    (was "bayalis")
+        //   43 = तैंतालीस = taintaalees  (was "taintalis")
+        //   44 = चौवालीस  = chauvaalees  (was "chawalis")
+        //   45 = पैंतालीस = paintaalees  (was "paintalis")
+        //   46 = छियालीस  = chhiyaalees  (was "chhiyalis")
+        //   47 = सैंतालीस = saintaalees  (was "saintalis")
+        //   48 = अड़तालीस = adtaalees    (was "adtalis")
+        //
+        // Also note: the product list builder already spells 45 as "paintalees"
+        // — after the rupaye fix (Step 2.5) all price reads are consistent.
+        // ─────────────────────────────────────────────────────────────────────
         private val HINDI_1_TO_99 = mapOf(
-            1  to "ek",         2  to "do",         3  to "teen",       4  to "chaar",
-            5  to "paanch",     6  to "chhe",        7  to "saat",       8  to "aath",
-            9  to "nau",        10 to "das",         11 to "gyarah",     12 to "barah",
-            13 to "terah",      14 to "chaudah",     15 to "pandrah",    16 to "solah",
-            17 to "satrah",     18 to "atharah",     19 to "unnees",     20 to "bees",
-            21 to "ikkees",     22 to "baees",       23 to "teis",       24 to "chaubees",
-            25 to "pachees",    26 to "chhabbees",   27 to "sattaees",   28 to "athaais",
-            29 to "unatis",     30 to "tees",        31 to "ikatees",    32 to "battees",
-            33 to "taintees",   34 to "chauntees",   35 to "paintees",   36 to "chhattees",
-            37 to "saintees",   38 to "adtees",      39 to "unchaalis",  40 to "chaalis",
-            41 to "ikataalees", 42 to "bayalis",     43 to "taintalis",  44 to "chawalis",
-            45 to "paintalis",  46 to "chhiyalis",   47 to "saintalis",  48 to "adtalis",
-            49 to "unchaas",    50 to "pachaas",     51 to "ikkaavan",   52 to "baavan",
-            53 to "tirpan",     54 to "chauvan",     55 to "pachpan",    56 to "chhappan",
-            57 to "sattavan",   58 to "atthaavan",   59 to "unsath",     60 to "saath",
-            61 to "iksath",     62 to "baasath",     63 to "tirsath",    64 to "chaunsath",
-            65 to "painsath",   66 to "chhiyasath",  67 to "sadsath",    68 to "adsath",
-            69 to "unattar",    70 to "sattar",      71 to "ikhattar",   72 to "bahattar",
-            73 to "tihattar",   74 to "chauhattar",  75 to "pachattar",  76 to "chhihattar",
-            77 to "satattar",   78 to "atthattar",   79 to "unnasi",     80 to "assi",
-            81 to "ikkyaasi",   82 to "bayasi",      83 to "tirasi",     84 to "chaurasi",
-            85 to "pachasi",    86 to "chhiyasi",    87 to "sattaasi",   88 to "atthasi",
-            89 to "navasi",     90 to "nabbe",       91 to "ikyaanave",  92 to "baanave",
-            93 to "tianave",    94 to "chauranave",  95 to "pachaanave", 96 to "chhiyanave",
-            97 to "satanave",   98 to "atthanave",   99 to "ninyaanave"
+            1  to "ek",          2  to "do",          3  to "teen",        4  to "chaar",
+            5  to "paanch",      6  to "chhe",         7  to "saat",        8  to "aath",
+            9  to "nau",         10 to "das",          11 to "gyarah",      12 to "barah",
+            13 to "terah",       14 to "chaudah",      15 to "pandrah",     16 to "solah",
+            17 to "satrah",      18 to "atharah",      19 to "unnees",      20 to "bees",
+            21 to "ikkees",      22 to "baees",        23 to "teis",        24 to "chaubees",
+            25 to "pachees",     26 to "chhabbees",    27 to "sattaees",    28 to "athaais",
+            29 to "unatis",      30 to "tees",         31 to "ikatees",     32 to "battees",
+            33 to "taintees",    34 to "chauntees",    35 to "paintees",    36 to "chhattees",
+            37 to "saintees",    38 to "adtees",       39 to "unchaalis",   40 to "chaalis",
+            41 to "ikataalees",  42 to "bayaalees",    43 to "taintaalees", 44 to "chauvaalees",
+            45 to "paintaalees", 46 to "chhiyaalees",  47 to "saintaalees", 48 to "adtaalees",
+            49 to "unchaas",     50 to "pachaas",      51 to "ikkaavan",    52 to "baavan",
+            53 to "tirpan",      54 to "chauvan",      55 to "pachpan",     56 to "chhappan",
+            57 to "sattavan",    58 to "atthaavan",    59 to "unsath",      60 to "saath",
+            61 to "iksath",      62 to "baasath",      63 to "tirsath",     64 to "chaunsath",
+            65 to "painsath",    66 to "chhiyasath",   67 to "sadsath",     68 to "adsath",
+            69 to "unattar",     70 to "sattar",       71 to "ikhattar",    72 to "bahattar",
+            73 to "tihattar",    74 to "chauhattar",   75 to "pachattar",   76 to "chhihattar",
+            77 to "satattar",    78 to "atthattar",    79 to "unnasi",      80 to "assi",
+            81 to "ikkyaasi",    82 to "bayasi",       83 to "tirasi",      84 to "chaurasi",
+            85 to "pachasi",     86 to "chhiyasi",     87 to "sattaasi",    88 to "atthasi",
+            89 to "navasi",      90 to "nabbe",        91 to "ikyaanave",   92 to "baanave",
+            93 to "tianave",     94 to "chauranave",   95 to "pachaanave",  96 to "chhiyanave",
+            97 to "satanave",    98 to "atthanave",    99 to "ninyaanave"
         )
 
         private val HINDI_HUNDREDS = mapOf(
@@ -74,66 +93,37 @@ class TTSManager(
             9 to "nau sau"
         )
 
-        // ── CHANGE 1: Extended amountToHindi — now handles up to 99,999 ──────
-        //
-        // Previous version capped at 9,999 and had no hazaar support.
-        // Now correctly handles:
-        //   100–999   → "ek sau paanch"
-        //   1000–9999 → "ek hazaar do sau teen"
-        //   10000–99999 → "das hazaar paanch sau"
-        // Falls back to digit string only for amounts ≥ 1,00,000.
-        // ─────────────────────────────────────────────────────────────────────
+        // ── amountToHindi — handles up to 99,999 ─────────────────────────────
         private fun amountToHindi(n: Int): String {
             if (n <= 0) return n.toString()
-
-            // 1–99 — direct lookup
-            if (n < 100) return HINDI_1_TO_99[n] ?: n.toString()
-
-            // 100–999 — sau
+            if (n < 100)    return HINDI_1_TO_99[n] ?: n.toString()
             if (n < 1000) {
-                val h = n / 100
-                val r = n % 100
+                val h = n / 100; val r = n % 100
                 val hStr = HINDI_HUNDREDS[h] ?: return n.toString()
                 return if (r == 0) hStr else "$hStr ${HINDI_1_TO_99[r] ?: r}"
             }
-
-            // 1,000–99,999 — hazaar
             if (n < 100_000) {
-                val hazaarPart = n / 1000
-                val remainder  = n % 1000
-
-                // hazaar prefix: 1–99 only (covers all realistic grocery prices)
+                val hazaarPart = n / 1000; val remainder = n % 1000
                 val hazaarWord = HINDI_1_TO_99[hazaarPart] ?: hazaarPart.toString()
                 val base       = "$hazaarWord hazaar"
-
                 if (remainder == 0) return base
-
-                // remainder 1–99
-                if (remainder < 100) {
-                    return "$base ${HINDI_1_TO_99[remainder] ?: remainder}"
-                }
-                // remainder 100–999
-                val remH   = remainder / 100
-                val remR   = remainder % 100
+                if (remainder < 100) return "$base ${HINDI_1_TO_99[remainder] ?: remainder}"
+                val remH = remainder / 100; val remR = remainder % 100
                 val remHStr = HINDI_HUNDREDS[remH] ?: return "$base $remainder"
                 return if (remR == 0) "$base $remHStr"
                 else "$base $remHStr ${HINDI_1_TO_99[remR] ?: remR}"
             }
-
-            // ≥ 1,00,000 — fall back to digit string (no lakh support needed for grocery prices)
             return n.toString()
         }
 
-        // ── CHANGE 2: rupeeToSpoken — use Devanagari "रुपये" for Hindi/Marathi ──
-        //
-        // ElevenLabs flash v2.5 natively handles Devanagari and pronounces
-        // "रुपये" correctly. Passing Roman "rupaye" caused mispronunciation.
-        // Devanagari रुपये is intentionally NOT in DEVANAGARI_TO_ROMAN so it
-        // passes through unmapped directly to the ElevenLabs API.
+        // ── rupeeToSpoken ─────────────────────────────────────────────────────
+        // Uses Devanagari "रुपये" for Hindi/Marathi — ElevenLabs pronounces it
+        // natively. Intentionally NOT in DEVANAGARI_TO_ROMAN so it passes
+        // through unmapped directly to ElevenLabs.
         // ─────────────────────────────────────────────────────────────────────
         fun rupeeToSpoken(amount: Int, language: String): String = when {
             language.startsWith("hi") || language.startsWith("mr") ->
-                "${amountToHindi(amount)} रुपये"   // Devanagari — ElevenLabs pronounces correctly
+                "${amountToHindi(amount)} रुपये"
             language.startsWith("gu") || language.startsWith("pa") ->
                 "${amountToHindi(amount)} rupiya"
             language.startsWith("te") -> "$amount rupayalu"
@@ -143,16 +133,12 @@ class TTSManager(
             else -> "$amount rupees"
         }
 
-        // ── Devanagari → Roman map ────────────────────────────────────────────
-        // ORDER: Multi-word phrases BEFORE single words.
-        // NFC normalization runs before this map, so chars are canonical.
-        //
-        // NOTE: "रुपये" and "रुपया" are intentionally REMOVED from this map.
-        //       They must pass through as Devanagari to ElevenLabs for correct
-        //       pronunciation. See rupeeToSpoken() above.
+        // ── DEVANAGARI_TO_ROMAN ───────────────────────────────────────────────
+        // Multi-word phrases BEFORE single words — prevents partial matches.
+        // "रुपये" / "रुपया" intentionally absent — pass through as Devanagari.
         // ─────────────────────────────────────────────────────────────────────
         private val DEVANAGARI_TO_ROMAN = linkedMapOf(
-            // Multi-word phrases first
+            // ── Multi-word phrases first ──────────────────────────────────────
             "घबराइए मत"       to "ghabraiye mat",
             "समझ नहीं आया"    to "samajh nahi aaya",
             "फिर से बोलिए"    to "phir se boliye",
@@ -165,6 +151,8 @@ class TTSManager(
             "ले लिया"         to "le liya",
             "ले लो"           to "le lo",
             "ले लें"          to "le lein",
+            "ले लून"          to "le loon",          // confirmAddProduct "le loon"
+            "ले लूं"          to "le loon",
             "कर दो"           to "kar do",
             "बता दो"          to "bata do",
             "बता दीजिए"       to "bata dijiye",
@@ -189,8 +177,11 @@ class TTSManager(
             "माफ करना"        to "maaf karna",
             "थोड़ी देर"        to "thodi der",
             "थोड़ा जोर"        to "thoda zor",
+            "पहुंच जाएगा"     to "pahunch jaayega",
+            "पहुँच जाएगा"     to "pahunch jaayega",
+            "पहुंच जायेगा"    to "pahunch jaayega",
 
-            // Verbs
+            // ── Verbs ─────────────────────────────────────────────────────────
             "बताइए"           to "bataiye",
             "बोलिए"           to "boliye",
             "बोलें"           to "bolein",
@@ -205,7 +196,10 @@ class TTSManager(
             "करें"            to "karein",
             "करिए"            to "kariye",
             "पहुंचेगा"        to "pahunchega",
+            "पहुँचेगा"        to "pahunchega",       // chandrabindu variant
             "पहुंचेगी"        to "pahunchegi",
+            "पहुँचेगी"        to "pahunchegi",       // chandrabindu variant
+            "पहुंचाएगा"       to "pahunchaayega",
             "आएगा"            to "aayega",
             "आएगी"            to "aayegi",
             "भेज दो"          to "bhej do",
@@ -230,8 +224,11 @@ class TTSManager(
             "बोलो"            to "bolo",
             "बताओ"            to "batao",
             "लाओ"             to "lao",
+            "भेजिए"           to "bhejiye",
+            "रखिए"            to "rakhiye",
+            "दिखाइए"          to "dikhaiye",
 
-            // Adjectives & adverbs
+            // ── Adjectives & adverbs ──────────────────────────────────────────
             "ठीक"             to "theek",
             "अच्छा"           to "achha",
             "अच्छी"           to "achhi",
@@ -256,10 +253,13 @@ class TTSManager(
             "सस्ता"           to "sasta",
             "महंगा"           to "mahanga",
             "ताजा"            to "taaza",
+            "बहुत"            to "bahut",
+            "बहुत अच्छा"      to "bahut achha",
+            "बहुत बढ़िया"     to "bahut badhiya",
+            "शुक्रिया"        to "shukriya",
 
-            // Nouns
-            // NOTE: "रुपये" and "रुपया" deliberately excluded — passed as
-            //       Devanagari to ElevenLabs for correct native pronunciation.
+            // ── Nouns ─────────────────────────────────────────────────────────
+            // "रुपये" and "रुपया" deliberately excluded — Devanagari passthrough.
             "पैसे"            to "paise",
             "मिनट"            to "minute",
             "आवाज़"            to "awaaz",
@@ -280,8 +280,9 @@ class TTSManager(
             "दुकान"           to "dukaan",
             "कीमत"            to "keemat",
             "दाम"             to "daam",
+            "डिलीवरी"         to "delivery",
 
-            // Grocery vocabulary
+            // ── Grocery vocabulary ────────────────────────────────────────────
             "चावल"            to "chawal",
             "दाल"             to "daal",
             "तेल"             to "tel",
@@ -306,7 +307,7 @@ class TTSManager(
             "साबुन"           to "sabun",
             "कॉफी"            to "coffee",
 
-            // Question words
+            // ── Question words ────────────────────────────────────────────────
             "क्या"            to "kya",
             "कौनसा"           to "kaunsa",
             "कौन सा"          to "kaun sa",
@@ -320,7 +321,7 @@ class TTSManager(
             "कोई"             to "koi",
             "कुछ"             to "kuch",
 
-            // Pronouns & connectors
+            // ── Pronouns & connectors ─────────────────────────────────────────
             "मुझे"            to "mujhe",
             "आपको"            to "aapko",
             "आपका"            to "aapka",
@@ -339,17 +340,16 @@ class TTSManager(
             "का"              to "ka",
             "की"              to "ki",
 
-            // Affirmations
+            // ── Affirmations ──────────────────────────────────────────────────
             "हाँ"             to "haan",
             "हां"             to "haan",
             "नहीं"            to "nahi",
             "नही"             to "nahi",
             "बस"              to "bas",
-            "शुक्रिया"        to "shukriya",
             "धन्यवाद"         to "dhanyavaad",
             "घबराइए"          to "ghabraiye",
 
-            // Numbers
+            // ── Numbers ───────────────────────────────────────────────────────
             "एक"              to "ek",
             "दो"              to "do",
             "तीन"             to "teen",
@@ -366,7 +366,7 @@ class TTSManager(
             "चालीस"           to "chaalis",
             "पचास"            to "pachaas",
 
-            // Common short words last (most likely to false-match)
+            // ── Common short words last (highest false-match risk) ────────────
             "हैं"             to "hain",
             "है"              to "hai",
             "तो"              to "to",
@@ -456,10 +456,10 @@ class TTSManager(
         Log.d(TAG, "  stability=${settings.stability} style=${settings.style} speed=${settings.speed}")
 
         // ── Devanagari passthrough check ──────────────────────────────────────
-        // "रुपये" is intentionally allowed through — ElevenLabs handles it.
-        // Any OTHER unmapped Devanagari triggers a warning.
-        val unmappedDevanagari = normalizedText.replace("रुपये", "").replace("रुपया", "")
-        if (DEVANAGARI.containsMatchIn(unmappedDevanagari)) {
+        // "रुपये" is intentionally allowed through (correct pronunciation).
+        // Any other unmapped Devanagari triggers a warning.
+        val unmappedCheck = normalizedText.replace("रुपये", "").replace("रुपया", "")
+        if (DEVANAGARI.containsMatchIn(unmappedCheck)) {
             Log.w(TAG, "⚠️ Unmapped Devanagari in: $normalizedText")
         }
 
@@ -482,23 +482,27 @@ class TTSManager(
 
     // ── normalizeForTTS ───────────────────────────────────────────────────────
     //
-    // Step 0: NFC — canonicalize Devanagari combining characters
-    //   Without this: "और" (aur) stored as base+vowel sign doesn't match
-    //   the map key which stores it as a single composed character.
-    //   NFC collapses both forms to the canonical composed form.
-    //
-    // Step 1: Order IDs     → "BUT-000145" → "order number ek chaar paanch"
-    // Step 2: Currency      → "₹180" → "ek sau assi रुपये" (hi)
-    //                       → "₹1250" → "ek hazaar do sau pachaas रुपये" (hi)
-    // Step 3: Tech terms    → "ऑर्डर" → "order"
-    // Step 4: Devanagari    → "ठीक है" → "theek hai"
-    //                         "रुपये" intentionally NOT mapped — passes through
-    // Step 5: Cleanup       → danda, em-dash, spacing
+    // Step 0: NFC              — canonicalize Devanagari combining chars
+    // Step 1: Order IDs        — "BUT-000145" → "order number ek chaar paanch"
+    // Step 2: Currency symbol  — "₹54" → "chauvan रुपये"
+    //                          — "Rs 54" → "chauvan रुपये"
+    // Step 2.5: Roman rupaye   — "paintalees rupaye" → "paintalees रुपये"
+    //   ↑ KEY FIX: The product list builder emits prices as:
+    //     "Daawat Brown paintalees rupaye, Unity Basmati chauvan rupaye"
+    //     Roman "rupaye" bypassed Step 2 (which only catches ₹ symbols).
+    //     ElevenLabs read "rupaye" with English phonation — flat and foreign.
+    //     Converting to Devanagari "रुपये" gives ElevenLabs the same signal
+    //     as ₹-converted amounts — natural, native Hindi pronunciation.
+    //     Word boundary \b ensures "rupaye" matches whole words only.
+    // Step 3: Tech/UI terms    — "ऑर्डर" → "order"
+    // Step 4: Devanagari→Roman — "ठीक है" → "theek hai"
+    //                            "रुपये" intentionally NOT mapped — passes through
+    // Step 5: Cleanup          — danda, em-dash, spacing, trim
     // ─────────────────────────────────────────────────────────────────────────
     fun normalizeForTTS(text: String, language: String): String {
         var result = text
 
-        // Step 0 — Unicode NFC (must run first)
+        // Step 0 — Unicode NFC
         result = java.text.Normalizer.normalize(result, java.text.Normalizer.Form.NFC)
 
         // Step 1 — Order IDs
@@ -508,7 +512,7 @@ class TTSManager(
             "order number $spoken"
         }
 
-        // Step 2 — Currency
+        // Step 2 — Currency symbol  ₹ → spoken Hindi amount
         result = RUPEE_REGEX.replace(result) { match ->
             val amount = match.groupValues[1].toIntOrNull() ?: return@replace match.value
             rupeeToSpoken(amount, language)
@@ -518,7 +522,18 @@ class TTSManager(
             rupeeToSpoken(amount, language)
         }
 
-        // Step 3 — Tech/UI terms
+        // Step 2.5 — Roman "rupaye" / "rupaya" → Devanagari रुपये
+        // Applies to Hindi and Marathi only.
+        // Catches all price strings from the product list builder and any
+        // other source that emits Roman "rupaye" instead of the ₹ symbol.
+        if (language.startsWith("hi") || language.startsWith("mr")) {
+            result = result.replace(Regex("\\brupaye\\b", RegexOption.IGNORE_CASE), "रुपये")
+            result = result.replace(Regex("\\brupaya\\b", RegexOption.IGNORE_CASE), "रुपये")
+            result = result.replace(Regex("\\brupee\\b",  RegexOption.IGNORE_CASE), "रुपये")
+            result = result.replace(Regex("\\brupees\\b", RegexOption.IGNORE_CASE), "रुपये")
+        }
+
+        // Step 3 — Tech/UI terms (Devanagari branded words → Roman)
         TECH_WORD_MAP.forEach { (source, target) ->
             result = result.replace(source, target, ignoreCase = false)
         }
@@ -547,7 +562,6 @@ class TTSManager(
     }
 
     private fun resolveVoice(text: String, language: String): String {
-        // Devanagari in text is now intentional (रुपये) — don't force VOICE_HI based on it alone
         return when {
             language.startsWith("hi") || language.startsWith("mr") -> VOICE_HI
             else -> VOICE_EN
