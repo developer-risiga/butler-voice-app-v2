@@ -22,7 +22,7 @@ import java.util.Calendar
  *
  * 3. PROFESSIONAL — confident, clear, never robotic or over-formal.
  *    Old: "Payment कैसे करना chahenge Roy — UPI, card ya cash?"
- *    New: "Roy, kaise doge — UPI, card ya cash?"
+ *    New: "Payment kaise krna hai? — UPI, card ya cash?"
  *    Direct, respectful, human.
  *
  * 4. VARIED — no phrase repeats two sessions in a row (handled by pick()).
@@ -448,14 +448,18 @@ object ButlerPersonalityEngine {
     // ══════════════════════════════════════════════════════════════════════
     // CONFIRM ORDER — Template 6
     // Clear summary, warm tone.
+    //
+    // CHANGE 1: Removed {name} from the closing ask.
+    //           "order lagaoon?" / "order karoon?" → "Kya confirm krna hai?"
+    //           Keeps it clean — name was redundant after the summary.
     // ══════════════════════════════════════════════════════════════════════
 
     fun confirmOrder(name: String, items: String, total: String, lang: String): String {
         return when {
             lang.startsWith("hi") -> pick("hi_confirm_order", listOf(
-                "Theek hai $name... $items. Total $total — order karoon?",
-                "Bas itna hi hai na $name? $items, $total — order de doon?",
-                "$items. Total $total. $name, order lagaoon?"
+                "Theek hai... $items. Total $total — Kya confirm krna hai?",
+                "$items. Total $total. Kya confirm krna hai?",
+                "Bas itna hai na? $items, $total — confirm karoon?"
             ))
             lang.startsWith("te") -> pick("te_confirm_order", listOf(
                 "Sare $name... $items. Total $total — order pettanaa?",
@@ -475,14 +479,19 @@ object ButlerPersonalityEngine {
 
     // ══════════════════════════════════════════════════════════════════════
     // PAYMENT ASK
+    //
+    // CHANGE 2: Removed {name} from Hindi variants.
+    //           "Roy, kaise doge — UPI, card ya cash?" →
+    //           "Payment kaise krna hai? — UPI, card ya cash?"
+    //           Name feels redundant right after order confirm.
     // ══════════════════════════════════════════════════════════════════════
 
     fun askPaymentMode(name: String, lang: String): String {
         return when {
             lang.startsWith("hi") -> pick("hi_ask_payment", listOf(
-                "$name, kaise doge — UPI, card ya cash?",
-                "Payment kaise karna hai $name — UPI, card ya cash?",
-                "UPI se doge ya card se $name?"
+                "Payment kaise krna hai? — UPI, card ya cash?",
+                "UPI se doge ya card se?",
+                "Kaise pay karna hai — UPI, card ya cash?"
             ))
             lang.startsWith("te") -> "$name, ela pay chestaru — UPI, card leda cash?"
             lang.startsWith("ta") -> "$name, epdi pay pannuvenga — UPI, card la cash?"
@@ -499,14 +508,19 @@ object ButlerPersonalityEngine {
 
     // ══════════════════════════════════════════════════════════════════════
     // UPI INSTRUCTION
+    //
+    // CHANGE 3: "bata dena" / "batao" → "bata dijiyega" throughout.
+    //           Also updated primary phrase to:
+    //           "UPI se payment complete kre aur done hone par bata dijiyega."
+    //           "dijiyega" is more respectful and consistent with Butler's tone.
     // ══════════════════════════════════════════════════════════════════════
 
     fun upiInstruction(amount: String, lang: String): String {
         return when {
             lang.startsWith("hi") -> pick("hi_upi", listOf(
-                "Theek hai, UPI se payment kar lo... ho jaaye to bata dena.",
-                "$amount UPI se bhej do... ho jaaye to batao.",
-                "UPI se $amount bhejo... done hone par bata dena."
+                "UPI se payment complete kre aur done hone par bata dijiyega.",
+                "$amount UPI se bhej dijiye... ho jaaye to bata dijiyega.",
+                "Theek hai, UPI se $amount bhej dijiye... bata dijiyega."
             ))
             lang.startsWith("te") -> "Sare, UPI lo $amount pampu... ayinaaka cheppandi."
             lang.startsWith("ta") -> "Sari, UPI-la $amount anuppu... aanadhum sollunga."
@@ -523,17 +537,19 @@ object ButlerPersonalityEngine {
 
     // ══════════════════════════════════════════════════════════════════════
     // ORDER PLACED
-    // Warm, celebratory. No order ID by default (sounds robotic).
+    //
+    // CHANGE 5: Removed {name} from Hindi variants. Simplified to:
+    //           "Order confirmed ho gya, {eta} minute mein delivery ho jayegi."
+    //           Cleaner close — no name needed at session end.
     // ══════════════════════════════════════════════════════════════════════
 
     fun orderPlaced(name: String, orderId: String, amount: String, etaMins: Int, lang: String): String {
         val eta = if (etaMins > 0) etaMins else 30
         return when {
             lang.startsWith("hi") -> pick("hi_order_placed", listOf(
-                "Perfect $name... aapka order place ho gaya. Lagbhag $eta minute mein aa jaayega.",
-                "Ho gaya $name! Order confirm — $eta minute mein delivery aa jaayegi.",
-                "Theek hai $name... order place ho gaya. $eta minute mein pahunchega.",
-                "Shandaar $name! Order confirm — $eta minute mein aa jaayega saman."
+                "Order confirmed ho gya, $eta minute mein delivery ho jayegi.",
+                "Theek hai... order place ho gaya. $eta minute mein pahunchega.",
+                "Shandaar! Order confirm — $eta minute mein aa jaayega saman."
             ))
             lang.startsWith("te") -> pick("te_order_placed", listOf(
                 "Baagundi $name... order confirm ayindi. $eta nimishaallo vastundi. Dhanyavaadaalu.",
@@ -596,18 +612,31 @@ object ButlerPersonalityEngine {
 
     // ══════════════════════════════════════════════════════════════════════
     // PAYMENT CONFIRMED
+    //
+    // CHANGE 4: askIfPaid() — added `name: String = ""` parameter.
+    //           Hindi QR/UPI check simplified to "Payment ho gaya $name?"
+    //           Removed redundant price repeat (amount already spoken in
+    //           upiInstruction). Price re-mention felt robotic.
     // ══════════════════════════════════════════════════════════════════════
 
-    fun askIfPaid(lang: String, mode: String, amount: String): String {
+    fun askIfPaid(lang: String, mode: String, amount: String, name: String = ""): String {
         return when {
             lang.startsWith("hi") -> when (mode) {
                 "upi"  -> pick("hi_paid_upi", listOf(
-                    "Payment ho gaya? $amount aa gaye?",
-                    "$amount bhej diya?",
-                    "Payment ho gaya?"
+                    "Payment ho gaya $name?",
+                    "$name, payment complete ho gaya?",
+                    "Ho gaya $name?"
                 ))
-                "card" -> pick("hi_paid_card", listOf("Card se ho gaya?", "Payment complete?", "Card done?"))
-                else   -> pick("hi_paid_qr", listOf("QR scan ho gaya?", "$amount pay hua?", "Ho gaya?"))
+                "card" -> pick("hi_paid_card", listOf(
+                    "Card se ho gaya $name?",
+                    "Payment complete $name?",
+                    "Card done $name?"
+                ))
+                else   -> pick("hi_paid_qr", listOf(
+                    "Payment ho gaya $name?",
+                    "QR scan ho gaya $name?",
+                    "Ho gaya $name?"
+                ))
             }
             lang.startsWith("te") -> "Payment ayindaa?"
             lang.startsWith("ta") -> "Payment aachaa?"

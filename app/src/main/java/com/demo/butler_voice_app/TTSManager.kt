@@ -74,18 +74,66 @@ class TTSManager(
             9 to "nau sau"
         )
 
+        // ── CHANGE 1: Extended amountToHindi — now handles up to 99,999 ──────
+        //
+        // Previous version capped at 9,999 and had no hazaar support.
+        // Now correctly handles:
+        //   100–999   → "ek sau paanch"
+        //   1000–9999 → "ek hazaar do sau teen"
+        //   10000–99999 → "das hazaar paanch sau"
+        // Falls back to digit string only for amounts ≥ 1,00,000.
+        // ─────────────────────────────────────────────────────────────────────
         private fun amountToHindi(n: Int): String {
-            if (n <= 0)   return n.toString()
-            if (n > 9999) return n.toString()
-            if (n < 100)  return HINDI_1_TO_99[n] ?: n.toString()
-            val h = n / 100; val r = n % 100
-            val hStr = HINDI_HUNDREDS[h] ?: return n.toString()
-            return if (r == 0) hStr else "$hStr ${HINDI_1_TO_99[r] ?: r}"
+            if (n <= 0) return n.toString()
+
+            // 1–99 — direct lookup
+            if (n < 100) return HINDI_1_TO_99[n] ?: n.toString()
+
+            // 100–999 — sau
+            if (n < 1000) {
+                val h = n / 100
+                val r = n % 100
+                val hStr = HINDI_HUNDREDS[h] ?: return n.toString()
+                return if (r == 0) hStr else "$hStr ${HINDI_1_TO_99[r] ?: r}"
+            }
+
+            // 1,000–99,999 — hazaar
+            if (n < 100_000) {
+                val hazaarPart = n / 1000
+                val remainder  = n % 1000
+
+                // hazaar prefix: 1–99 only (covers all realistic grocery prices)
+                val hazaarWord = HINDI_1_TO_99[hazaarPart] ?: hazaarPart.toString()
+                val base       = "$hazaarWord hazaar"
+
+                if (remainder == 0) return base
+
+                // remainder 1–99
+                if (remainder < 100) {
+                    return "$base ${HINDI_1_TO_99[remainder] ?: remainder}"
+                }
+                // remainder 100–999
+                val remH   = remainder / 100
+                val remR   = remainder % 100
+                val remHStr = HINDI_HUNDREDS[remH] ?: return "$base $remainder"
+                return if (remR == 0) "$base $remHStr"
+                else "$base $remHStr ${HINDI_1_TO_99[remR] ?: remR}"
+            }
+
+            // ≥ 1,00,000 — fall back to digit string (no lakh support needed for grocery prices)
+            return n.toString()
         }
 
+        // ── CHANGE 2: rupeeToSpoken — use Devanagari "रुपये" for Hindi/Marathi ──
+        //
+        // ElevenLabs flash v2.5 natively handles Devanagari and pronounces
+        // "रुपये" correctly. Passing Roman "rupaye" caused mispronunciation.
+        // Devanagari रुपये is intentionally NOT in DEVANAGARI_TO_ROMAN so it
+        // passes through unmapped directly to the ElevenLabs API.
+        // ─────────────────────────────────────────────────────────────────────
         fun rupeeToSpoken(amount: Int, language: String): String = when {
             language.startsWith("hi") || language.startsWith("mr") ->
-                "${amountToHindi(amount)} rupaye"
+                "${amountToHindi(amount)} रुपये"   // Devanagari — ElevenLabs pronounces correctly
             language.startsWith("gu") || language.startsWith("pa") ->
                 "${amountToHindi(amount)} rupiya"
             language.startsWith("te") -> "$amount rupayalu"
@@ -98,6 +146,11 @@ class TTSManager(
         // ── Devanagari → Roman map ────────────────────────────────────────────
         // ORDER: Multi-word phrases BEFORE single words.
         // NFC normalization runs before this map, so chars are canonical.
+        //
+        // NOTE: "रुपये" and "रुपया" are intentionally REMOVED from this map.
+        //       They must pass through as Devanagari to ElevenLabs for correct
+        //       pronunciation. See rupeeToSpoken() above.
+        // ─────────────────────────────────────────────────────────────────────
         private val DEVANAGARI_TO_ROMAN = linkedMapOf(
             // Multi-word phrases first
             "घबराइए मत"       to "ghabraiye mat",
@@ -205,8 +258,8 @@ class TTSManager(
             "ताजा"            to "taaza",
 
             // Nouns
-            "रुपये"           to "rupaye",
-            "रुपया"           to "rupaya",
+            // NOTE: "रुपये" and "रुपया" deliberately excluded — passed as
+            //       Devanagari to ElevenLabs for correct native pronunciation.
             "पैसे"            to "paise",
             "मिनट"            to "minute",
             "आवाज़"            to "awaaz",
@@ -402,7 +455,11 @@ class TTSManager(
         Log.d(TAG, "ElevenLabs [$language] tone=$tone → \"${normalizedText.take(100)}\"")
         Log.d(TAG, "  stability=${settings.stability} style=${settings.style} speed=${settings.speed}")
 
-        if (DEVANAGARI.containsMatchIn(normalizedText)) {
+        // ── Devanagari passthrough check ──────────────────────────────────────
+        // "रुपये" is intentionally allowed through — ElevenLabs handles it.
+        // Any OTHER unmapped Devanagari triggers a warning.
+        val unmappedDevanagari = normalizedText.replace("रुपये", "").replace("रुपया", "")
+        if (DEVANAGARI.containsMatchIn(unmappedDevanagari)) {
             Log.w(TAG, "⚠️ Unmapped Devanagari in: $normalizedText")
         }
 
@@ -431,9 +488,11 @@ class TTSManager(
     //   NFC collapses both forms to the canonical composed form.
     //
     // Step 1: Order IDs     → "BUT-000145" → "order number ek chaar paanch"
-    // Step 2: Currency      → "₹180" → "ek sau assi rupaye" (hi)
+    // Step 2: Currency      → "₹180" → "ek sau assi रुपये" (hi)
+    //                       → "₹1250" → "ek hazaar do sau pachaas रुपये" (hi)
     // Step 3: Tech terms    → "ऑर्डर" → "order"
     // Step 4: Devanagari    → "ठीक है" → "theek hai"
+    //                         "रुपये" intentionally NOT mapped — passes through
     // Step 5: Cleanup       → danda, em-dash, spacing
     // ─────────────────────────────────────────────────────────────────────────
     fun normalizeForTTS(text: String, language: String): String {
@@ -465,6 +524,7 @@ class TTSManager(
         }
 
         // Step 4 — Devanagari → Roman
+        // "रुपये" / "रुपया" are not in the map — they pass through as Devanagari
         DEVANAGARI_TO_ROMAN.forEach { (devanagari, roman) ->
             result = result.replace(devanagari, roman, ignoreCase = false)
         }
@@ -487,7 +547,7 @@ class TTSManager(
     }
 
     private fun resolveVoice(text: String, language: String): String {
-        if (DEVANAGARI.containsMatchIn(text)) return VOICE_HI
+        // Devanagari in text is now intentional (रुपये) — don't force VOICE_HI based on it alone
         return when {
             language.startsWith("hi") || language.startsWith("mr") -> VOICE_HI
             else -> VOICE_EN
