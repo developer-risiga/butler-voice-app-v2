@@ -164,9 +164,10 @@ object ButlerPersonalityEngine {
                         "Namaste $name... shaam ka kya laana hai?"
                     ))
                     else -> pick("hi_greet_new", listOf(
-                        "Haan $name... batao, kya laana hai?",
-                        "Namaste $name ji... kya chahiye aapko?",
-                        "Haan $name... kya la doon aaj?"
+                        "Namaste $name ji... batao, kya laana hai?",
+                        "Haan $name ji... kya chahiye aapko?",
+                        "Haan $name... kya la doon aaj?",
+                        "Namaste $name... batao, kya mangwaoon?"
                     ))
                 }
             }
@@ -317,9 +318,9 @@ object ButlerPersonalityEngine {
             .joinToString(" ") { it.lowercase().replaceFirstChar { c -> c.uppercase() } }
         return when {
             lang.startsWith("hi") -> pick("hi_confirm_add", listOf(
-                "$short Rs $price ka hai... le loon $name?",
-                "$short Rs $price. Le loon $name?",
-                "$short Rs $price ka hai $name. Lena hai?"
+                "$short Rs $price ka hai $name. Le loon?",
+                "$short Rs $price. Aapke liye le loon $name?",
+                "$short Rs $price ka hai. Le aoon $name?"
             ))
             lang.startsWith("te") -> pick("te_confirm_add", listOf(
                 "$short Rs $price untundi $name... cart lo pettanaa?",
@@ -360,16 +361,16 @@ object ButlerPersonalityEngine {
                 ))
                 else -> when (cartSize) {
                     1 -> pick("hi_added_1", listOf(
-                        "Ho gaya $name, $full le liya. Aur kuch chahiye?",
-                        "Achha $name, $full cart mein aa gaya. Kuch aur?",
-                        "$full le liya $name. Aur kuch laana hai?"
+                        "Ho gaya $name, $full le liya. Kuch aur chahiye aapko?",
+                        "Zaroor $name, $full cart mein aa gaya. Aur kuch?",
+                        "$full le liya $name. Kuch aur laana hai aapke liye?"
                     ))
                     2 -> pick("hi_added_2", listOf(
-                        "$full bhi le liya $name. Aur kuch chahiye?",
-                        "Ho gaya $name, $full bhi aa gaya. Kuch aur?"
+                        "$full bhi le liya $name. Kuch aur chahiye?",
+                        "Ho gaya $name, $full bhi aa gaya. Aur kuch laana hai?"
                     ))
                     else -> pick("hi_added_n", listOf(
-                        "$short bhi le liya. Aur kuch chahiye $name?",
+                        "$short bhi le liya. Kuch aur chahiye aapko $name?",
                         "Ho gaya. Aur kuch chahiye $name?"
                     ))
                 }
@@ -466,8 +467,8 @@ object ButlerPersonalityEngine {
         return when {
             lang.startsWith("hi") -> pick("hi_confirm_order", listOf(
                 "$items, total $total. Order kar doon $name?",
-                "Aapka order hai $items, total $total. Pakka karoon?",
-                "$items, total $total. Lagaoon order $name?"
+                "Aapka order $items, total $total. Pakka karoon $name?",
+                "$items, total $total. Order lagaoon $name?"
             ))
             lang.startsWith("te") -> pick("te_confirm_order", listOf(
                 "Sare $name, $items. Total $total. Order pettanaa?",
@@ -492,9 +493,9 @@ object ButlerPersonalityEngine {
     fun askPaymentMode(name: String, lang: String): String {
         return when {
             lang.startsWith("hi") -> pick("hi_ask_payment", listOf(
-                "Payment kaise karenge $name. UPI, card ya cash?",
-                "UPI se karenge ya card se $name?",
-                "Payment ka tarika batao $name. UPI, card ya cash?"
+                "Payment kaise karenge $name. यू पी आई, card ya cash?",
+                "यू पी आई se karenge ya card se $name?",
+                "Payment ka tarika batao $name. यू पी आई, card ya cash?"
             ))
             lang.startsWith("te") -> "$name, ela pay chestaru. UPI, card leda cash?"
             lang.startsWith("ta") -> "$name, epdi pay pannuvenga. UPI, card la cash?"
@@ -520,9 +521,9 @@ object ButlerPersonalityEngine {
     fun upiInstruction(amount: String, lang: String): String {
         return when {
             lang.startsWith("hi") -> pick("hi_upi", listOf(
-                "UPI se payment complete kar dijiye.. done hone par bata dijiyega.",
-                "UPI se $amount bhej dijiye.. ho jaaye toh zaroor bata dijiyega.",
-                "Payment UPI se kar dijiye $amount.. done hone par bata dijiyega."
+                "यू पी आई se payment complete kar dijiye.. done hone par bata dijiyega.",
+                "यू पी आई se $amount bhej dijiye.. ho jaaye toh zaroor bata dijiyega.",
+                "Payment यू पी आई se kar dijiye $amount.. done hone par bata dijiyega."
             ))
             lang.startsWith("te") -> "Sare, UPI lo $amount pampu. Ayinaaka cheppandi."
             lang.startsWith("ta") -> "Sari, UPI-la $amount anuppu. Aanadhum sollunga."
@@ -544,9 +545,9 @@ object ButlerPersonalityEngine {
     fun paymentDone(lang: String): String {
         return when {
             lang.startsWith("hi") -> pick("hi_paydone", listOf(
-                "Bahut achha. Payment ho gayi.",
-                "Perfect. Payment confirm ho gayi.",
-                "Shukriya. Payment mil gayi."
+                "Bahut achha $name. Payment ho gayi.",
+                "Shukriya $name. Payment confirm ho gayi.",
+                "Perfect $name. Payment mil gayi, shukriya."
             ))
             lang.startsWith("te") -> pick("te_paydone", listOf(
                 "Sare, payment ayindi.",
@@ -572,8 +573,8 @@ object ButlerPersonalityEngine {
         val n = if (name.isNotBlank()) " $name" else ""
         return when {
             lang.startsWith("hi") -> when (mode) {
-                "upi"  -> "Payment ho gayi$n?"
-                "card" -> "Card se ho gaya$n?"
+                "upi"  -> "यू पी आई se payment ho gayi$n?"
+                "card" -> "Card se payment ho gayi$n?"
                 else   -> "Payment ho gayi$n?"
             }
             lang.startsWith("te") -> "Payment ayindaa$n?"
@@ -638,9 +639,9 @@ object ButlerPersonalityEngine {
                     ))
                 } else {
                     pick("hi_more", listOf(
-                        "Aur kuch chahiye $name?",
-                        "Kuch aur laana hai $name?",
-                        "Bas itna $name, ya kuch aur bhi?"
+                        "Kuch aur chahiye $name?",
+                        "Aur kuch laana hai aapke liye $name?",
+                        "$name, kuch aur bhi ho toh bataiye."
                     ))
                 }
             }
@@ -844,13 +845,13 @@ object ButlerPersonalityEngine {
         return when {
             lang.startsWith("hi") -> when (mood) {
                 UserMood.FRUSTRATED, UserMood.RUSHED -> pick("hi_sel_r", listOf(
-                    "Kaun si brand chahiye?", "Brand ka naam bataiye.", "Kaunsa?"
+                    "Kaun sa chahiye? Naam bataiye.", "Brand ka naam bataiye.", "Kaunsa doon?"
                 ))
                 else -> pick("hi_sel", listOf(
-                    "Kaunsa chahiye. Brand ka naam bataiye.",
-                    "Brand ka naam bataiye please.",
-                    "Kaunsa doon?",
-                    "Bataiye, kaunsa chahiye."
+                    "Kaunsa chahiye $name. Brand ka naam bataiye.",
+                    "Brand ka naam bata dijiye $name.",
+                    "Kaunsa doon $name. Naam lenge toh le aata hoon.",
+                    "Bataiye $name, kaunsa chahiye aapko."
                 ))
             }
             lang.startsWith("te") -> "Edi kavali? Peyru cheppandi."
