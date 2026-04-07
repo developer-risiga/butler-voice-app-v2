@@ -39,7 +39,7 @@ object ButlerPersonalityEngine {
     fun toneForGiveUp()                    = EmotionTone.EMPATHETIC
     fun toneForError()                     = EmotionTone.EMPATHETIC
     fun toneForEmergency()                 = EmotionTone.EMERGENCY
-    fun toneForPaymentDone()               = EmotionTone.EXCITED
+    fun toneForPaymentDone()               = EmotionTone.WARM
     fun toneForSubstitute()                = EmotionTone.NORMAL
     fun toneForAskMore(mood: UserMood)     = if (mood == UserMood.FRUSTRATED) EmotionTone.EMPATHETIC else EmotionTone.WARM
 
@@ -508,7 +508,7 @@ object ButlerPersonalityEngine {
             lang.startsWith("hi") -> pick("hi_upi", listOf(
                 "UPI se payment kar dijiye... ho jaaye toh bata dijiyega.",
                 "Bilkul. UPI se $amount bhej dijiye... ho jaaye toh bata dijiyega.",
-                "Bilkul. UPI se payment kar dijiye... bata dijiyega."  // was "Theek hai."
+                "UPI se payment complete kar dijiye.. done hone par bata dijiyega."  // was "Theek hai."
             ))
             lang.startsWith("te") -> "Sare, UPI lo $amount pampu... ayinaaka cheppandi."
             lang.startsWith("ta") -> "Sari, UPI-la $amount anuppu... aanadhum sollunga."
