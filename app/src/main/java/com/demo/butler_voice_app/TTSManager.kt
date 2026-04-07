@@ -552,10 +552,19 @@ class TTSManager(
             .replace("–", ", ")
             .replace(Regex("  +"), " ")
             .replace(Regex("\\.{4,}"), "...")
+            // ── FIX: double period from Butler.kt hardcoded strings ───────────
+            // "complete kar dijiye.. done" → "complete kar dijiye. done"
+            .replace(Regex("\\.{2}(?!\\.)"), ". ")
             .replace(Regex("\\s+\\."), ".")
             .replace(Regex(",\\s*,"), ",")
             .replace(Regex("!{2,}"), "!")
             .replace(Regex("\\?{2,}"), "?")
+            // ── FIX: trailing "kai hai" / "ka hai" / "hai" after product list ─
+            // Product list builder emits "...rupaye ka hai" as final suffix.
+            // After Step 2.5 converts rupaye → रुपये, the suffix " ka hai" or
+            // just " hai" remains at end of string. Sounds like a grammar error.
+            // Example: "Unity Basmati chauvan रुपये hai" → "Unity Basmati chauvan रुपये"
+            .replace(Regex("रुपये\\s+(?:ka\\s+)?hai\\s*$"), "रुपये")
             .trim()
 
         return result
