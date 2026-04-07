@@ -77,8 +77,11 @@ object ButlerPersonalityEngine {
         else                -> EmotionTone.WARM
     }
 
+    @Suppress("UNUSED_PARAMETER")
     fun toneForRetry(mood: UserMood = UserMood.CALM): EmotionTone   = EmotionTone.EMPATHETIC
+    @Suppress("UNUSED_PARAMETER")
     fun toneForGiveUp(mood: UserMood = UserMood.CALM): EmotionTone  = EmotionTone.EMPATHETIC
+    @Suppress("UNUSED_PARAMETER")
     fun toneForError(mood: UserMood = UserMood.CALM): EmotionTone   = EmotionTone.EMPATHETIC
     fun toneForEmergency(): EmotionTone                              = EmotionTone.EMERGENCY
 
@@ -545,9 +548,9 @@ object ButlerPersonalityEngine {
     fun paymentDone(lang: String): String {
         return when {
             lang.startsWith("hi") -> pick("hi_paydone", listOf(
-                "Bahut achha $name. Payment ho gayi.",
-                "Shukriya $name. Payment confirm ho gayi.",
-                "Perfect $name. Payment mil gayi, shukriya."
+                "Bahut achha. Payment ho gayi.",
+                "Shukriya. Payment confirm ho gayi.",
+                "Perfect. Payment mil gayi."
             ))
             lang.startsWith("te") -> pick("te_paydone", listOf(
                 "Sare, payment ayindi.",
@@ -848,10 +851,10 @@ object ButlerPersonalityEngine {
                     "Kaun sa chahiye? Naam bataiye.", "Brand ka naam bataiye.", "Kaunsa doon?"
                 ))
                 else -> pick("hi_sel", listOf(
-                    "Kaunsa chahiye $name. Brand ka naam bataiye.",
-                    "Brand ka naam bata dijiye $name.",
-                    "Kaunsa doon $name. Naam lenge toh le aata hoon.",
-                    "Bataiye $name, kaunsa chahiye aapko."
+                    "Kaunsa chahiye. Brand ka naam bataiye.",
+                    "Brand ka naam bata dijiye please.",
+                    "Kaunsa doon. Naam bataiye.",
+                    "Bataiye, kaunsa chahiye aapko."
                 ))
             }
             lang.startsWith("te") -> "Edi kavali? Peyru cheppandi."
