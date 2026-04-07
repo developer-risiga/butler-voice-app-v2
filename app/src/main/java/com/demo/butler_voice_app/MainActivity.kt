@@ -560,7 +560,7 @@ class MainActivity : ComponentActivity() {
                     if (transcript.isBlank()) {
                         val lang = LanguageManager.getLanguage()
                         val blankMsg = when {
-                            lang.startsWith("hi") -> "Brand ka naam bolein."; lang.startsWith("te") -> "Brand peyru cheppandi."
+                            lang.startsWith("hi") -> "Brand ka naam btaiye."; lang.startsWith("te") -> "Brand peyru cheppandi."
                             lang.startsWith("ta") -> "Brand peyar sollungal."; lang.startsWith("kn") -> "Brand hesaru heli."
                             lang.startsWith("ml") -> "Brand peru parayo."; lang.startsWith("pa") -> "Brand naam dasao."
                             lang.startsWith("gu") -> "Brand naam bolo."; else -> "Say the brand name."
@@ -1169,7 +1169,7 @@ class MainActivity : ComponentActivity() {
                     }
                     runOnUiThread { setUiState(ButlerUiState.ShowingRecommendations(itemName, recs)) }
                     val readout = buildProductVoiceReadout(recs, itemName, lang)
-                    val nameRetryPrompt = when { lang.startsWith("hi") -> "Brand ka naam bolein."; lang.startsWith("te") -> "Brand peyru cheppandi."; lang.startsWith("ta") -> "Brand peyar sollungal."; lang.startsWith("kn") -> "Brand hesaru heli."; lang.startsWith("ml") -> "Brand peru parayo."; lang.startsWith("pa") -> "Brand naam dasao."; lang.startsWith("gu") -> "Brand naam bolo."; else -> "Say the brand name." }
+                    val nameRetryPrompt = when { lang.startsWith("hi") -> "Brand ka naam btaiye."; lang.startsWith("te") -> "Brand peyru cheppandi."; lang.startsWith("ta") -> "Brand peyar sollungal."; lang.startsWith("kn") -> "Brand hesaru heli."; lang.startsWith("ml") -> "Brand peru parayo."; lang.startsWith("pa") -> "Brand naam dasao."; lang.startsWith("gu") -> "Brand naam bolo."; else -> "Say the brand name." }
                     speakKeepingRecsVisible(readout) {
                         startListeningForSelection(
                             onNumber = { num -> handleRecSelectionByIndex(num - 1, recs, qty, itemName) },
@@ -1206,7 +1206,7 @@ class MainActivity : ComponentActivity() {
             val msg = if (cart.isEmpty()) ButlerPersonalityEngine.confirmAddProduct(sessionUserName, pick.productName, pick.priceRs.toInt(), lang) else ButlerPersonalityEngine.confirmAddNext(sessionUserName, pick.productName, pick.priceRs.toInt(), lang)
             speakKeepingRecsVisible(msg, ButlerPersonalityEngine.toneForConfirmAdd()) { startListening() }
         } else {
-            val askMsg = when { lang.startsWith("hi") -> "Brand ka naam bolein."; lang.startsWith("te") -> "Brand peyru cheppandi."; else -> "Say the brand name." }
+            val askMsg = when { lang.startsWith("hi") -> "Brand ka naam btaiye."; lang.startsWith("te") -> "Brand peyru cheppandi."; else -> "Say the brand name." }
             speakKeepingRecsVisible(askMsg) { startListeningForSelection(onNumber = { n -> handleRecSelectionByIndex(n - 1, recs, qty, itemName) }, onOther = { _ -> speak(ButlerPhraseBank.get("ask_item", LanguageManager.getLanguage())) { currentState = AssistantState.LISTENING; startListening() } }) }
         }
     }
@@ -1224,7 +1224,7 @@ class MainActivity : ComponentActivity() {
                 showCartAndSpeak(ButlerPersonalityEngine.itemAdded(sessionUserName, displayName, lang, currentMood, cart.size), ButlerPersonalityEngine.toneForItemAdded()) { startListening() }
             }
             MultilingualMatcher.isNo(cleaned) || cleaned.contains("nahi") || cleaned.contains("koi aur") -> {
-                speakKeepingRecsVisible(if (lang.startsWith("hi")) "Kaunsa chahiye? Brand ka naam bolein." else "Which brand? Say the name.") {
+                speakKeepingRecsVisible(if (lang.startsWith("hi")) "Kaunsa chahiye? Brand ka naam btaiye." else "Which brand? Say the name.") {
                     startListeningForSelection(
                         onNumber = { n -> handleRecSelectionByIndex(n - 1, pendingAddRecs, pendingAddQty, pendingAddItemName) },
                         onOther  = { spoken ->

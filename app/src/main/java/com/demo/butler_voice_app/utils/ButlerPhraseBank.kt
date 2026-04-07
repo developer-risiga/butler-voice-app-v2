@@ -43,7 +43,7 @@ object ButlerPhraseBank {
         "ask_more" to mapOf(
             "en" to listOf("Anything else?", "What else do you need?", "More?", "Shall I add anything else?", "That all?"),
             "hi" to listOf("और कुछ?", "कुछ और चाहिए?", "बस इतना?", "और क्या लेना है?"),
-            "hg" to listOf("Aur kuch?", "Kuch aur chahiye?", "Bas itna?", "Aur kya mangwaaoon?"),
+            "hg" to listOf("Aur kuch?", "Kuch aur lena hai?", "Bas itna?", "Aur kya lena hai?"),
             "te" to listOf("ఇంకా ఏమైనా?", "అంతేనా?", "ఇంకేమైనా కావాలా?", "మరేమైనా?"),
             "ta" to listOf("வேற ஏதாவது?", "அவ்வளவுதானா?", "இன்னும் ஏதாவது?"),
             "kn" to listOf("ಇನ್ನೇನಾದರೂ?", "ಅಷ್ಟೇನಾ?", "ಇನ್ನೂ ಏನಾದರೂ ಬೇಕೇ?"),
@@ -55,8 +55,8 @@ object ButlerPhraseBank {
 
         "added_item" to mapOf(
             "en" to listOf("Done,", "Got it,", "Added,", "Perfect,"),
-            "hi" to listOf("हाँ, जुड़ गया।", "बढ़िया,", "हो गया,"),
-            "hg" to listOf("Theek hai,", "Done,", "Ho gaya,"),
+            "hi" to listOf("Add krdiya।", "Cart mein add ho gaya।", "Ho gaya,"),
+            "hg" to listOf("Add krdiya,", "Done,", "Ho gaya,"),
             "te" to listOf("అయింది,", "జోడించాను,", "సరే,"),
             "ta" to listOf("சேர்த்தாச்சு,", "சரி,", "ஆச்சு,"),
             "kn" to listOf("ಸೇರಿಸಿದೆ,", "ಸರಿ,", "ಆಯ್ತು,"),
@@ -68,8 +68,8 @@ object ButlerPhraseBank {
 
         "confirm_order" to mapOf(
             "en" to listOf("Shall I order?", "Confirm it?", "Place this order?", "Go ahead?"),
-            "hi" to listOf("order करूँ?", "पक्का?", "confirm करूँ?", "लगा दूँ?"),
-            "hg" to listOf("Order karoon?", "Pakka?", "Confirm kar doon?"),
+            "hi" to listOf("Order krna hai?", "Confirm krna hai?", "Order lgaana hai?"),
+            "hg" to listOf("Order krna hai?", "Confirm krna hai?", "Order lgaana hai?"),
             "te" to listOf("ఆర్డర్ చేయనా?", "నిర్ధారించనా?", "పెట్టనా?"),
             "ta" to listOf("ஆர்டர் பண்ணட்டுமா?", "சரிதானா?", "பண்ணட்டுமா?"),
             "kn" to listOf("ಆರ್ಡರ್ ಮಾಡಲೇ?", "ಸರಿ ಮಾಡಲೇ?", "ಆರ್ಡರ್ ಹಾಕಲೇ?"),
@@ -81,8 +81,8 @@ object ButlerPhraseBank {
 
         "order_placed" to mapOf(
             "en" to listOf("Order placed!", "Done, it's on the way!", "Confirmed, coming soon!"),
-            "hi" to listOf("order हो गया!", "बढ़िया, रास्ते में है।", "ऑर्डर लग गया!"),
-            "hg" to listOf("Order ho gaya!", "Badhiya, raste mein hai.", "Perfect!"),
+            "hi" to listOf("Order Place ho gaya!", "Order aap tak pahoch jaayega.", "Order confirm ho gaya!"),
+            "hg" to listOf("Order Place ho gaya!", "Order aap tak pahoch jaayega.", "Order confirm ho gaya!"),
             "te" to listOf("ఆర్డర్ పెట్టాను!", "అయింది! వస్తోంది.", "సరే! దారిలో ఉంది."),
             "ta" to listOf("ஆர்டர் ஆச்சு!", "வருது!", "சரி! வழியில இருக்கு."),
             "kn" to listOf("ಆರ್ಡರ್ ಆಯ್ತು!", "ಬರ್ತಾ ಇದೆ!", "ಸರಿ! ದಾರಿಯಲ್ಲಿ ಇದೆ."),
