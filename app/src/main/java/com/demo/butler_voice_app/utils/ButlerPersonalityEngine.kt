@@ -14,23 +14,32 @@ import java.util.Calendar
  *    normalizeForTTS() converts — to ", " which creates broken output
  *    like "Payment kaise krna hai?, UPI" when — follows a ?.
  *    Use "." for pauses before option lists instead.
- * 3. WARM LIKE A REAL KIRANA ASSISTANT — not a chatbot.
- * 4. VARIED — no phrase repeats two sessions in a row (handled by pick()).
- * 5. TONE-MATCHED — each function has a matching toneFor*() so TTSManager
- *    delivers the right voice weight for every moment.
+ * 3. RESPECTFUL FORM THROUGHOUT:
+ *    "karoge" (informal) → "karenge" (respectful)
+ *    "bolo"   (commanding) → "bataiye" (polite)
+ *    "kre"    (chat slang) → "kar dijiye" (natural spoken)
+ * 4. PAYMENT FLOW IS WARM, NOT NORMAL:
+ *    toneForPaymentAsk and toneForPaymentUPI return WARM so the voice
+ *    is slower (0.80 speed) and never sounds like it's shouting.
+ * 5. WARM LIKE A REAL KIRANA ASSISTANT — not a chatbot.
+ * 6. VARIED — no phrase repeats two sessions in a row (handled by pick()).
  */
 object ButlerPersonalityEngine {
 
     // ══════════════════════════════════════════════════════════════════════
     // TONE RECOMMENDATIONS
+    //
+    // toneForPaymentAsk and toneForPaymentUPI are WARM (not NORMAL).
+    // NORMAL speed = 0.87 — too fast for payment context, sounds forceful.
+    // WARM  speed = 0.80 — calm, unhurried, professional.
     // ══════════════════════════════════════════════════════════════════════
     fun toneForGreeting()                  = EmotionTone.WARM
     fun toneForProductList()               = EmotionTone.NORMAL
     fun toneForConfirmAdd()                = EmotionTone.NORMAL
     fun toneForItemAdded()                 = EmotionTone.WARM
     fun toneForConfirmOrder()              = EmotionTone.WARM
-    fun toneForPaymentAsk()                = EmotionTone.NORMAL
-    fun toneForPaymentUPI()                = EmotionTone.NORMAL
+    fun toneForPaymentAsk()                = EmotionTone.WARM      // was NORMAL — caused "shouting"
+    fun toneForPaymentUPI()                = EmotionTone.WARM      // was NORMAL — caused "shouting"
     fun toneForOrderPlaced()               = EmotionTone.WARM
     fun toneForRetry()                     = EmotionTone.EMPATHETIC
     fun toneForGiveUp()                    = EmotionTone.EMPATHETIC
@@ -210,7 +219,7 @@ object ButlerPersonalityEngine {
 
     // ══════════════════════════════════════════════════════════════════════
     // PRODUCT TYPE QUESTION
-    // "." before option list — clean pause, no "?," artifact
+    // "." before option list — clean pause, no "?," artifact.
     // ══════════════════════════════════════════════════════════════════════
 
     fun askProductType(category: String, name: String, lang: String): String {
@@ -433,15 +442,17 @@ object ButlerPersonalityEngine {
 
     // ══════════════════════════════════════════════════════════════════════
     // CONFIRM ORDER
-    // "." before "Kya confirm karoon?" — clean pause, no artifact.
+    // "Order de doon?" replaces "Confirm karoon?" — "Confirm" is an English
+    // loanword that sounds jarring when Butler speaks otherwise pure Hindi.
+    // "Order de doon?" / "Pakka karoon?" are warm, natural Hindi phrases.
     // ══════════════════════════════════════════════════════════════════════
 
     fun confirmOrder(name: String, items: String, total: String, lang: String): String {
         return when {
             lang.startsWith("hi") -> pick("hi_confirm_order", listOf(
-                "Theek hai... $items. Total $total. Kya confirm karoon?",
-                "$items. Total $total. Confirm karoon?",
-                "Bas itna hai na. $items, total $total. Kya confirm karoon?"
+                "Theek hai... $items. Total $total. Order de doon?",
+                "$items. Total $total. Pakka karoon?",
+                "Bas itna hai na. $items, total $total. Order lagaoon?"
             ))
             lang.startsWith("te") -> pick("te_confirm_order", listOf(
                 "Sare $name... $items. Total $total. Order pettanaa?",
@@ -460,7 +471,9 @@ object ButlerPersonalityEngine {
     }
 
     // ══════════════════════════════════════════════════════════════════════
-    // PAYMENT ASK
+    // PAYMENT ASK — WARM tone (see toneForPaymentAsk above)
+    //
+    // "karoge" (informal, assertive) → "karenge" (respectful, professional)
     // "." before option list — no "?," artifact possible.
     // ══════════════════════════════════════════════════════════════════════
 
@@ -468,7 +481,7 @@ object ButlerPersonalityEngine {
         return when {
             lang.startsWith("hi") -> pick("hi_ask_payment", listOf(
                 "Payment kaise karni hai. UPI, card ya cash?",
-                "UPI se karoge, ya card se?",
+                "UPI se karenge, ya card se?",
                 "Kaise pay karna hai. UPI, card ya cash?"
             ))
             lang.startsWith("te") -> "$name, ela pay chestaru. UPI, card leda cash?"
@@ -485,15 +498,19 @@ object ButlerPersonalityEngine {
     }
 
     // ══════════════════════════════════════════════════════════════════════
-    // UPI INSTRUCTION
+    // UPI INSTRUCTION — WARM tone (see toneForPaymentUPI above)
+    //
+    // "kre" (WhatsApp shorthand, wrong in spoken Hindi) → "kar dijiye"
+    // "done hone par" (awkward mix) → "ho jaaye toh"
+    // Result: natural, respectful, smooth spoken Hindi.
     // ══════════════════════════════════════════════════════════════════════
 
     fun upiInstruction(amount: String, lang: String): String {
         return when {
             lang.startsWith("hi") -> pick("hi_upi", listOf(
-                "UPI se payment complete kre aur done hone par bata dijiyega.",
-                "$amount UPI se bhej dijiye... ho jaaye to bata dijiyega.",
-                "Theek hai, UPI se $amount bhej dijiye... bata dijiyega."
+                "UPI se payment kar dijiye... ho jaaye toh bata dijiyega.",
+                "Screen pe UPI hai. Payment kar dijiye aur bata dijiyega.",
+                "Theek hai. UPI se $amount bhej dijiye... ho jaaye toh zaroor bata dijiyega."
             ))
             lang.startsWith("te") -> "Sare, UPI lo $amount pampu... ayinaaka cheppandi."
             lang.startsWith("ta") -> "Sari, UPI-la $amount anuppu... aanadhum sollunga."
@@ -581,8 +598,8 @@ object ButlerPersonalityEngine {
 
     // ══════════════════════════════════════════════════════════════════════
     // PAYMENT CONFIRMED
-    // Single string per mode. val n guards against blank name —
-    // "Payment ho gaya?" not "Payment ho gaya ?"
+    // Single string per mode. val n guards against blank name:
+    // "Payment ho gaya?" not "Payment ho gaya ?" (trailing space artifact)
     // ══════════════════════════════════════════════════════════════════════
 
     fun askIfPaid(lang: String, mode: String, amount: String, name: String = ""): String {
@@ -709,17 +726,23 @@ object ButlerPersonalityEngine {
 
     // ══════════════════════════════════════════════════════════════════════
     // SELECTION PROMPT
+    //
+    // "Naam bolo." (commanding) → "Naam bataiye." (polite/respectful)
+    // "bolo" = tell me (informal order)
+    // "bataiye" = please tell me (professional respect)
     // ══════════════════════════════════════════════════════════════════════
 
     fun askSelection(lang: String, mood: UserMood): String {
         return when {
             lang.startsWith("hi") -> when (mood) {
-                UserMood.FRUSTRATED, UserMood.RUSHED -> pick("hi_sel_r", listOf("Kaun sa?", "Naam bolo.", "Kaunsa?"))
+                UserMood.FRUSTRATED, UserMood.RUSHED -> pick("hi_sel_r", listOf(
+                    "Kaun si brand chahiye?", "Naam bataiye.", "Kaunsa?"
+                ))
                 else -> pick("hi_sel", listOf(
-                    "Kaunsa chahiye. Brand ka naam bolo.",
-                    "Brand ka naam batao.",
+                    "Kaunsa chahiye. Brand ka naam bataiye.",
+                    "Brand ka naam bataiye.",
                     "Kaunsa doon?",
-                    "Naam bolo."
+                    "Bataiye, kaunsa chahiye."
                 ))
             }
             lang.startsWith("te") -> "Edi kavali? Peyru cheppandi."
