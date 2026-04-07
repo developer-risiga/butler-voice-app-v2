@@ -480,25 +480,7 @@ class TTSManager(
         }.start()
     }
 
-    // ── normalizeForTTS ───────────────────────────────────────────────────────
-    //
-    // Step 0: NFC              — canonicalize Devanagari combining chars
-    // Step 1: Order IDs        — "BUT-000145" → "order number ek chaar paanch"
-    // Step 2: Currency symbol  — "₹54" → "chauvan रुपये"
-    //                          — "Rs 54" → "chauvan रुपये"
-    // Step 2.5: Roman rupaye   — "paintalees rupaye" → "paintalees रुपये"
-    //   ↑ KEY FIX: The product list builder emits prices as:
-    //     "Daawat Brown paintalees rupaye, Unity Basmati chauvan rupaye"
-    //     Roman "rupaye" bypassed Step 2 (which only catches ₹ symbols).
-    //     ElevenLabs read "rupaye" with English phonation — flat and foreign.
-    //     Converting to Devanagari "रुपये" gives ElevenLabs the same signal
-    //     as ₹-converted amounts — natural, native Hindi pronunciation.
-    //     Word boundary \b ensures "rupaye" matches whole words only.
-    // Step 3: Tech/UI terms    — "ऑर्डर" → "order"
-    // Step 4: Devanagari→Roman — "ठीक है" → "theek hai"
-    //                            "रुपये" intentionally NOT mapped — passes through
-    // Step 5: Cleanup          — danda, em-dash, spacing, trim
-    // ─────────────────────────────────────────────────────────────────────────
+
     fun normalizeForTTS(text: String, language: String): String {
         var result = text
 
