@@ -65,6 +65,7 @@ import com.demo.butler_voice_app.ui.CartDisplayItem
 import com.demo.butler_voice_app.utils.ButlerPhraseBank
 import com.demo.butler_voice_app.utils.ButlerPersonalityEngine
 import com.demo.butler_voice_app.utils.HumanFillerManager
+import com.demo.butler_voice_app.utils.VoskWakeWordEngine          // ← ADDED
 import com.demo.butler_voice_app.voice.SarvamSTTManager
 import com.demo.butler_voice_app.workers.ProactiveButlerWorker
 import kotlinx.coroutines.Dispatchers
@@ -114,7 +115,9 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var ttsManager: TTSManager
     private lateinit var sarvamSTT: SarvamSTTManager
-    private lateinit var porcupine: WakeWordManager
+
+    // ── CHANGED: WakeWordManager → VoskWakeWordEngine ─────────────────────
+    private lateinit var wakeWordEngine: VoskWakeWordEngine
 
     private val apiClient = ApiClient()
     private val cart = mutableListOf<CartItem>()
@@ -278,16 +281,59 @@ class MainActivity : ComponentActivity() {
         audioManager.mode = AudioManager.MODE_NORMAL; audioManager.isSpeakerphoneOn = true
         SessionStore.init(this); FamilyProfileManager.load(this); startLocationUpdates()
         sarvamSTT = SarvamSTTManager(this, BuildConfig.SARVAM_API_KEY)
-        porcupine = WakeWordManager(this, BuildConfig.PORCUPINE_ACCESS_KEY) { runOnUiThread { onWakeWordDetected() } }
-        ttsManager = TTSManager(context = this, elevenLabsApiKey = BuildConfig.ELEVENLABS_API_KEY, voiceId = "K2Byg54sHB1oHegvENtI")
-        ttsManager.init { checkMicPermission() }
-        lifecycleScope.launch(Dispatchers.IO) { try { apiClient.prefetchProducts(); Log.d("Butler", "Cache warmed") } catch (_: Exception) {} }
+
+        // ── CHANGED: Replace WakeWordManager with VoskWakeWordEngine ──────
+        // Vosk loads the model async first, THEN inits TTS.
+        // This ensures model is ready before startWakeWordListening() is called.
+        wakeWordEngine = VoskWakeWordEngine(this) { runOnUiThread { onWakeWordDetected() } }
+
+        ttsManager = TTSManager(
+            context          = this,
+            elevenLabsApiKey = BuildConfig.ELEVENLABS_API_KEY,
+            voiceId          = "K2Byg54sHB1oHegvENtI"
+        )
+
+        // Init Vosk first → then TTS → then mic permission check
+        // Vosk model load: ~5-10s first run (copies 36MB), ~200ms after that
+        wakeWordEngine.init(
+            onReady = {
+                // Model loaded — now init TTS → then start listening
+                ttsManager.init { checkMicPermission() }
+            },
+            onError = { e ->
+                Log.e("Butler", "Vosk init failed: ${e.message}")
+                // Fallback: still init TTS even if Vosk failed
+                // App will work but wake word won't detect until model loads
+                ttsManager.init { checkMicPermission() }
+            }
+        )
+        // ── END CHANGED ───────────────────────────────────────────────────
+
+        lifecycleScope.launch(Dispatchers.IO) {
+            try { apiClient.prefetchProducts(); Log.d("Butler", "Cache warmed") } catch (_: Exception) {}
+        }
         ProactiveButlerWorker.schedule(this); checkProactiveLaunch()
     }
 
-    override fun onPause()   { super.onPause();   porcupine.stop(); sarvamSTT.stop() }
-    override fun onDestroy() { super.onDestroy(); porcupine.stop(); sarvamSTT.stop(); ttsManager.shutdown() }
-    override fun onResume()  { super.onResume(); if (currentState == AssistantState.IDLE) { try { startLockTask() } catch (_: Exception) {} } }
+    // ── CHANGED: porcupine → wakeWordEngine ──────────────────────────────
+    override fun onPause() {
+        super.onPause()
+        wakeWordEngine.stop()
+        sarvamSTT.stop()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        wakeWordEngine.destroy()   // destroy() calls stop() + closes model
+        sarvamSTT.stop()
+        ttsManager.shutdown()
+    }
+    // ── END CHANGED ───────────────────────────────────────────────────────
+
+    override fun onResume() {
+        super.onResume()
+        if (currentState == AssistantState.IDLE) { try { startLockTask() } catch (_: Exception) {} }
+    }
 
     private fun checkProactiveLaunch() {
         val fromNotification = intent?.getBooleanExtra("proactive_launch", false) ?: false
@@ -344,12 +390,18 @@ class MainActivity : ComponentActivity() {
         AIParser.resetDebounce(); apiClient.clearProductCache()
         setUiState(ButlerUiState.Idle); sttListenId++
         Log.d("Butler", "Waiting for wake word...")
-        try { porcupine.stop() } catch (_: Exception) {}
-        porcupine.start()
+
+        // ── CHANGED: porcupine → wakeWordEngine ───────────────────────────
+        try { wakeWordEngine.stop() } catch (_: Exception) {}
+        wakeWordEngine.start()
+        // ── END CHANGED ───────────────────────────────────────────────────
     }
 
     private fun onWakeWordDetected() {
-        try { porcupine.stop() } catch (_: Exception) {}
+        // ── CHANGED: porcupine → wakeWordEngine ───────────────────────────
+        try { wakeWordEngine.stop() } catch (_: Exception) {}
+        // ── END CHANGED ───────────────────────────────────────────────────
+
         if (currentState != AssistantState.IDLE) { Log.d("Butler", "⚠️ Wake word ignored — state: $currentState"); return }
         currentState = AssistantState.CHECKING_AUTH
         setUiState(ButlerUiState.Thinking("Checking session…"))
@@ -404,16 +456,12 @@ class MainActivity : ComponentActivity() {
     // ══════════════════════════════════════════════════════════════════════
     // PROCEED AFTER IDENTIFICATION
     // ══════════════════════════════════════════════════════════════════════
-    // PATCH 1: Restore stored language so greeting is in user's language.
-    // Roy spoke Hindi last session → storedLang="hi" → forceSet("hi-IN") → Hindi greeting.
 
     private fun proceedAfterIdentification(name: String, history: List<com.demo.butler_voice_app.api.PurchaseSummary>, lang: String) {
-        // ── PATCH 1 START ──────────────────────────────────────────────
         val uid           = UserSessionManager.currentUserId() ?: ""
         val storedLang    = SessionStore.getUserLanguage(uid)
         val effectiveLang = if (storedLang != "en") storedLang else lang
         Log.d("Butler", "Language restore: stored=$storedLang incoming=$lang effective=$effectiveLang")
-        // ── PATCH 1 END ────────────────────────────────────────────────
 
         val lockedCode = when {
             effectiveLang.startsWith("hi") -> "hi-IN"
@@ -459,8 +507,6 @@ class MainActivity : ComponentActivity() {
     // ══════════════════════════════════════════════════════════════════════
     // STT
     // ══════════════════════════════════════════════════════════════════════
-    // PATCH 2: After language switch detected, save it to SessionStore.
-    // Next session, proceedAfterIdentification reads it back → correct greeting.
 
     private fun startListening() {
         sarvamSTT.stop()
@@ -489,16 +535,12 @@ class MainActivity : ComponentActivity() {
                             val newBase = SessionLanguageManager.ttsLanguage
                             LanguageManager.setLanguage(newBase)
                             Log.d("Butler", "🔄 Language switched to ${SessionLanguageManager.lockedLanguage}")
-                            // ── PATCH 2 START ──────────────────────────────────────────
-                            // Save detected language so next session greeting is correct.
-                            // Skip saving "en" — that's just the fallback default.
                             if (newBase != "en") {
                                 UserSessionManager.currentUserId()?.let { uid ->
                                     SessionStore.saveUserLanguage(uid, newBase)
                                     Log.d("Butler", "Language preference saved: $newBase for $uid")
                                 }
                             }
-                            // ── PATCH 2 END ────────────────────────────────────────────
                         } else {
                             val locked = SessionLanguageManager.ttsLanguage
                             if (LanguageManager.getLanguage() != locked) LanguageManager.setLanguage(locked)

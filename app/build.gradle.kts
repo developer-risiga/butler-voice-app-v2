@@ -47,8 +47,7 @@ android {
             "\"${getEnvOrLocal("OPENAI_API_KEY").ifEmpty { "DUMMY_KEY" }}\"")
         buildConfigField("String", "SARVAM_API_KEY",
             "\"${getEnvOrLocal("SARVAM_API_KEY").ifEmpty { "DUMMY_KEY" }}\"")
-        buildConfigField("String", "PORCUPINE_ACCESS_KEY",
-            "\"${getEnvOrLocal("PORCUPINE_ACCESS_KEY").ifEmpty { "DUMMY_KEY" }}\"")
+
         buildConfigField("String", "ELEVENLABS_API_KEY",
             "\"${getEnvOrLocal("ELEVENLABS_API_KEY").ifEmpty { "DUMMY_KEY" }}\"")
         buildConfigField("String", "ELEVENLABS_VOICE_ID",
@@ -92,6 +91,8 @@ android {
 
 dependencies {
 
+
+    implementation("com.alphacephei:vosk-android:0.3.47")
     // CORE
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.activity:activity-compose:1.9.0")
@@ -105,8 +106,6 @@ dependencies {
     // NETWORK
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
-    // VOICE
-    implementation("ai.picovoice:porcupine-android:4.0.0")
 
     // COROUTINES
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
