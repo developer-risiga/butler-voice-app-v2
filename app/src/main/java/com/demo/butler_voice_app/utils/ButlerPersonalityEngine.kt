@@ -96,6 +96,19 @@ object ButlerPersonalityEngine {
         else                -> EmotionTone.WARM
     }
 
+    // ── First-time greeting tones ─────────────────────────────────────────
+    // Welcome = WARM (slow, personal — first meeting deserves unhurried pace)
+    // Teaser  = NORMAL (brisk, informative — category list at slow speed drags)
+    fun toneForFirstTimeWelcome(): EmotionTone = EmotionTone.WARM
+    fun toneForFirstTimeTeaser():  EmotionTone = EmotionTone.NORMAL
+
+    // ── Show more products tone ───────────────────────────────────────────
+    fun toneForShowMore(mood: UserMood = UserMood.CALM): EmotionTone = when (mood) {
+        UserMood.FRUSTRATED -> EmotionTone.EMPATHETIC
+        UserMood.RUSHED     -> EmotionTone.NORMAL
+        else                -> EmotionTone.NORMAL
+    }
+
     // ── Legacy zero-arg wrappers (backward compat with existing call sites) ─
     fun toneForGreeting()    = toneForGreeting(UserMood.CALM)
     fun toneForProductList() = toneForProductList(UserMood.CALM)
@@ -132,6 +145,196 @@ object ButlerPersonalityEngine {
         in 12..16 -> "afternoon"
         in 17..20 -> "evening"
         else      -> "night"
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // FIRST-TIME USER GREETING
+    //
+    // Call ONLY when isNewUser = true (first session, zero orders).
+    // Returns Pair(welcome, teaser) — speak them sequentially:
+    //
+    //   val (welcome, teaser) = ButlerPersonalityEngine.firstTimeGreeting(name, lang)
+    //   ttsManager.speak(welcome, lang, toneForFirstTimeWelcome()) {
+    //       ttsManager.speak(teaser, lang, toneForFirstTimeTeaser()) {
+    //           startListening()
+    //       }
+    //   }
+    //
+    // WHY TWO CALLS:
+    //   Welcome at WARM speed (0.80) is personal and unhurried.
+    //   Teaser at NORMAL speed (0.87) is brisk — listing 8 categories
+    //   at 0.80 sounds tedious. Natural pause between calls lets the
+    //   user absorb the welcome before the product list begins.
+    // ══════════════════════════════════════════════════════════════════════
+
+    fun firstTimeGreeting(name: String, lang: String): Pair<String, String> {
+        return when {
+            lang.startsWith("hi") -> Pair(
+                // ── Welcome — warm, personal ──────────────────────────────────
+                pick("hi_ft_welcome", listOf(
+                    "Haan $name ji... aapka swagat hai. Main aapka Butler hoon, aapki grocery mein madad karne ke liye.",
+                    "Haan $name ji... bahut accha hua aap aaye. Main Butler hoon, aapki kirana ki zaroorat ke liye.",
+                    "Namaste $name ji. Aapka swagat hai. Main Butler hoon, aapki grocery ki har zaroorat mein saath hoon."
+                )),
+                // ── Category teaser + open question ──────────────────────────
+                pick("hi_ft_teaser", listOf(
+                    "Hamare paas chawal, daal, tel, atta, masale, biscuit, doodh aur bahut kuch hai. Aaj kya laana hai $name?",
+                    "Chawal, daal, tel, atta se lekar masale, biscuit aur doodh tak, sab milta hai. Kya chahiye aaj $name?",
+                    "Hamare paas chawal, daal, tel, atta, chai, masale, doodh aur bahut kuch milega. Batao $name, kya laana hai?"
+                ))
+            )
+            lang.startsWith("te") -> Pair(
+                pick("te_ft_welcome", listOf(
+                    "Namaskaram $name garu. Meeru raavadam chala santosham. Nenu mee Butler ni, mee grocery ki sahaayam cheyyadaaniki.",
+                    "Swagatam $name garu. Nenu Butler ni, mee kirana avasaraalaku."
+                )),
+                pick("te_ft_teaser", listOf(
+                    "Meeru kooda biyyam, pappu, nune, atta, masaalu, biscuit, paalu anni unnayi. Inniki emi kavali $name garu?",
+                    "Biyyam, pappu, nune nunchi masaalu, biscuit, paalu varaku anni unnayi. Emi teestara $name?"
+                ))
+            )
+            lang.startsWith("ta") -> Pair(
+                pick("ta_ft_welcome", listOf(
+                    "Vanakkam $name. Neenga vara kaadha romba santhosham. Naan ungal Butler, ungal grocery thaevaikku.",
+                    "Vanakkam $name. Naan Butler, ungal kirana thaevaikku."
+                )),
+                pick("ta_ft_teaser", listOf(
+                    "Engalukkidam arisi, paruppu, ennai, maavu, masala, biscuit, paal ellaam irukku. Indru enna vendum $name?",
+                    "Arisi, paruppu, ennai, maavu mudhal masala, paal varai ellaam irukku. Enna vendum $name?"
+                ))
+            )
+            lang.startsWith("kn") -> Pair(
+                pick("kn_ft_welcome", listOf(
+                    "Swagata $name. Neevu banda santhoshavaaythu. Naanu nimma Butler, nimma grocery ge sahaaya maadalu.",
+                    "Namaskara $name. Naanu Butler, nimma kirana avasharakaagi."
+                )),
+                pick("kn_ft_teaser", listOf(
+                    "Naavu akki, bele, enne, atta, masala, biscuit, haalu ellavu idabekaagide. Indhu enu beku $name?",
+                    "Akki, bele, enne, atta ninda masala, haalu varegu sab ide. Enu beku $name?"
+                ))
+            )
+            lang.startsWith("ml") -> Pair(
+                pick("ml_ft_welcome", listOf(
+                    "Swagatam $name. Ningal vannathu valare santhosham. Ente peyar Butler, ningalude grocery avasharangal kai kaaryam cheyyaan.",
+                    "Namaskaram $name. Njan Butler aanu, ningalude kirana avasharangalkku."
+                )),
+                pick("ml_ft_teaser", listOf(
+                    "Njangalude pakkal ari, parippu, enna, atta, masala, biscuit, paal ellam und. Innu enthu veno $name?",
+                    "Ari, parippu, enna, atta muthal masala, paal vare ellam und. Enthu venam $name?"
+                ))
+            )
+            lang.startsWith("pa") -> Pair(
+                pick("pa_ft_welcome", listOf(
+                    "Sat sri akal $name ji. Aapda aana bahut changaa lagga. Main aapda Butler haan, aapdi grocery vich madad layi.",
+                    "Swagatam $name ji. Main Butler haan, aapdi kirana di zaroorat layi."
+                )),
+                pick("pa_ft_teaser", listOf(
+                    "Saade paas chawal, daal, tel, atta, masale, biscuit, doodh aur bahut kuch hai. Aaj ki chahida $name ji?",
+                    "Chawal, daal, tel, atta to masale, biscuit, doodh tak sab milega. Ki mangwaoge $name?"
+                ))
+            )
+            lang.startsWith("gu") -> Pair(
+                pick("gu_ft_welcome", listOf(
+                    "Jai shri Krishna $name. Tame aavyaa e khub saru thayu. Hun tamaro Butler chhu, tamari grocery ni zaroorat mate.",
+                    "Swagatam $name. Hu Butler chhu, tamari kirana ni zaroorat mate."
+                )),
+                pick("gu_ft_teaser", listOf(
+                    "Amari paase chawal, dal, tel, atta, masala, biscuit, doodh ane ghanu badhu che. Aaj shu joiye $name?",
+                    "Chawal, dal, tel, atta thi masala, biscuit, doodh sudhi badhu maḷashe. Shu mangaavun $name?"
+                ))
+            )
+            else -> Pair(
+                // ── English welcome ───────────────────────────────────────────
+                pick("en_ft_welcome", listOf(
+                    "Hello $name, welcome! I'm Butler, your grocery assistant. Really glad to have you here.",
+                    "Hi $name, welcome! I'm Butler. I'm here to help with all your grocery needs.",
+                    "Namaste $name! Welcome. I'm Butler, your personal kirana assistant."
+                )),
+                // ── English teaser ────────────────────────────────────────────
+                pick("en_ft_teaser", listOf(
+                    "We carry everything you need. Rice, dal, oil, flour, spices, biscuits, milk and a whole lot more. What would you like to order today $name?",
+                    "From rice, dal and oil to spices, biscuits and milk, we have it all. What can I get for you today $name?",
+                    "Rice, dal, oil, flour, spices, milk, biscuits and much more, all available. What would you like $name?"
+                ))
+            )
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // SHOW MORE PRODUCTS
+    //
+    // Called when user asks to see more options in a general way:
+    //   "aur kya hai?", "what else do you have?", "show me more",
+    //   "kya kya milta hai?", "tell me what you sell"
+    //
+    // This is NOT the same as the first-time category teaser.
+    // Here the user already knows Butler — they want to explore.
+    // Response = conversational category overview, grouped naturally,
+    // ending with an open question to keep the flow going.
+    //
+    // HOW TO DETECT in Butler.kt:
+    //   AIParser returns intent = "show_catalog" or "what_available"
+    //   or you can check for keywords: "aur kya", "kya milta", "what else",
+    //   "show more", "sab kya hai", "kya kya hai"
+    //
+    // HOW TO CALL:
+    //   val text = ButlerPersonalityEngine.showMoreProducts(name, lang, mood)
+    //   ttsManager.speak(text, lang, toneForShowMore(mood)) { startListening() }
+    // ══════════════════════════════════════════════════════════════════════
+
+    fun showMoreProducts(name: String, lang: String, mood: UserMood = UserMood.CALM): String {
+        return when {
+            lang.startsWith("hi") -> when (mood) {
+                UserMood.RUSHED -> pick("hi_more_cat_rush", listOf(
+                    // Short, efficient — no fluff for rushed users
+                    "Chawal, daal, tel, atta, masale, biscuit, doodh, sabzi, ghee, chai. Kya chahiye $name?",
+                    "Grocery sab hai. Kya laana hai $name?"
+                ))
+                else -> pick("hi_more_cat", listOf(
+                    // Group 1: staples. Group 2: snacks+beverages. Group 3: open question.
+                    // Grouping makes a long list sound like a conversation, not a robot reading.
+                    "Hamare paas staples mein chawal, daal, tel, aur atta hai. Snacks mein biscuit, namkeen, aur chips. Dairy mein doodh, dahi, aur makhan. Aur bhi bahut kuch hai $name. Kya laana hai?",
+                    "Chawal, daal, tel, atta, ghee. Aur chai, biscuit, namkeen, doodh, dahi bhi milta hai. Iske alawa masale, sabzi, cleaning ka saman bhi hai. Kya chahiye $name?",
+                    "Hamare paas kirana ka pura saman hai. Anaj mein chawal, daal, atta. Tel mein sarson, sunflower, coconut. Dairy mein doodh, dahi, paneer. Snacks bhi bahut hain. Kya laana hai $name?"
+                ))
+            }
+            lang.startsWith("te") -> pick("te_more_cat", listOf(
+                "Meeru kooda biyyam, pappu, nune, atta, masaalu, biscuit, paalu, perugu, ghee, kooralu anni unnayi. Emi kavali $name garu?",
+                "Biyyam, pappu, nune nunchi biscuit, paalu, perugu varaku anni milatayi. Emi teestara $name?"
+            ))
+            lang.startsWith("ta") -> pick("ta_more_cat", listOf(
+                "Engalukkidam arisi, paruppu, ennai, maavu, masala, biscuit, paal, thayir, ghee ellaam irukku. Enna vendum $name?",
+                "Arisi, paruppu, ennai, maavu mudhal biscuit, paal, thayir varai ellaam kidaikum. Enna vendum $name?"
+            ))
+            lang.startsWith("kn") -> pick("kn_more_cat", listOf(
+                "Naavu akki, bele, enne, atta, masala, biscuit, haalu, mosaru, ghee ellavu idabekaagide. Enu beku $name?",
+                "Akki, bele, enne ninda biscuit, haalu, mosaru varegu sab ide. Enu beku $name?"
+            ))
+            lang.startsWith("ml") -> pick("ml_more_cat", listOf(
+                "Njangalude pakkal ari, parippu, enna, atta, masala, biscuit, paal, thayir, ghee ellam und. Enthu veno $name?",
+                "Ari, parippu, enna muthal biscuit, paal, thayir vare ellam und. Enthu venam $name?"
+            ))
+            lang.startsWith("pa") -> pick("pa_more_cat", listOf(
+                "Saade paas chawal, daal, tel, atta, masale, biscuit, doodh, dahi, ghee sab hai. Ki chahida $name ji?",
+                "Chawal, daal, tel, atta to biscuit, doodh, dahi tak sab milega. Ki mangwaoge $name?"
+            ))
+            lang.startsWith("gu") -> pick("gu_more_cat", listOf(
+                "Amari paase chawal, dal, tel, atta, masala, biscuit, doodh, dahi, ghee badhu che. Shu joiye $name?",
+                "Chawal, dal, tel, atta thi biscuit, doodh, dahi sudhi badhu maḷashe. Shu mangaavun $name?"
+            ))
+            else -> when (mood) {
+                UserMood.RUSHED -> pick("en_more_cat_rush", listOf(
+                    "We carry rice, dal, oil, flour, spices, biscuits, milk, dairy, snacks and more. What do you need $name?",
+                    "Full grocery range available $name. What would you like?"
+                ))
+                else -> pick("en_more_cat", listOf(
+                    // Grouped naturally — staples, snacks, dairy, open question
+                    "We carry staples like rice, dal, oil and flour. Snacks like biscuits, namkeen and chips. Dairy items like milk, curd and butter. And a lot more besides $name. What would you like?",
+                    "We have grains and pulses, cooking oils, flour, spices, biscuits, dairy products, and cleaning supplies too. What can I get for you $name?",
+                    "From rice, dal and oil to biscuits, milk, curd, spices and snacks, we have it all $name. What are you looking for?"
+                ))
+            }
+        }
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -511,10 +714,6 @@ object ButlerPersonalityEngine {
 
     // ══════════════════════════════════════════════════════════════════════
     // UPI INSTRUCTION
-    //
-    // FIX: "Bilkul. UPI se..." → clean imperative.
-    // "Bilkul." as sentence prefix causes hard prosody break before "UPI"
-    // in ElevenLabs — unnatural pronunciation of following word.
     // ══════════════════════════════════════════════════════════════════════
 
     fun upiInstruction(amount: String, lang: String): String {
@@ -538,7 +737,7 @@ object ButlerPersonalityEngine {
     }
 
     // ══════════════════════════════════════════════════════════════════════
-    // PAYMENT DONE — pairs with WARM tone (EXCITED removed)
+    // PAYMENT DONE
     // ══════════════════════════════════════════════════════════════════════
 
     fun paymentDone(lang: String): String {
